@@ -1,0 +1,11 @@
+[build]
+target = "thumbv6m-none-eabi"
+
+[target.thumbv6m-none-eabi]
+# Flash + run over SWD (J2 header) with probe-rs; alternatively hold BOOTSEL
+# (BOOT0) while plugging USB and use `dfu-util` — see README.md.
+runner = "probe-rs run --chip STM32F072CBTx"
+rustflags = ["-C", "link-arg=-Tlink.x"]
+
+[env]
+DEFMT_LOG = "info"

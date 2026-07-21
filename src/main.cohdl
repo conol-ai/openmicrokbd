@@ -1,0 +1,297 @@
+// OpenMicro — an open-source STM32F072 clone of the OpenAI Codex Micro
+// macropad (13 keys, rotary dial, analog joystick, cap-touch, per-key RGB).
+// Wired USB-C. Every footprint datasheet-verified (see openmicro_parts).
+
+design OpenMicro {
+    // ---- major devices ----
+    inst mcu: MCU_STM32F072
+    inst usbc: USB_C_HRO_TYPE_C_31_M_12
+    inst esd: ESD_USBLC6
+    inst ldo: LDO_AP2112K_3V3
+    inst enc: ENC_EC11
+    inst joy: JOY_RKJXV
+    inst touch: TOUCH_PAD
+    inst rst: SW_RESET
+    inst swd: J_SWD
+
+    // ---- 13 key switches + matrix diodes ----
+    inst sw: [SW_KEY; 13]
+    inst d: [D_1N4148W; 13]
+    // ---- 13 per-key RGB LEDs (SK6812MINI-E reverse-mount, one under each key,
+    // at the switch's north LED window; one WS2812 chain) ----
+    inst key_leds: [RGB_SK6812; 13]
+    // ---- 16 perimeter underglow RGB LEDs (SK6812MINI-E up-firing into the
+    // frosted PC frame; a SEPARATE WS2812 chain, 4 per side) ----
+    inst ambient_leds: [RGB_SK6812; 16]
+
+    // ---- 4 M2 mounting holes (corners; plated barrels -> GND) ----
+    inst mh: [MH_M2; 4]
+
+    // ---- passives ----
+    inst rcc1: R_5K1
+    inst rcc2: R_5K1
+    inst rboot: R_10K
+    #[crystal_oscillator(mcu, PF0, PF1)]
+    inst xtal: XTAL_8M
+    // c_x1/c_x2 are the crystal's LOAD capacitors (oscillator tank, set CL) —
+    // deliberately NOT #[bypass]: that attribute means supply decoupling, and
+    // the oscillator region is already declared by #[crystal_oscillator] above.
+    inst c_x1: C_15p
+    inst c_x2: C_15p
+    #[bypass(ldo.VIN, 4.7uF)]
+    inst c_bulk: C_4u7
+    #[bypass(mcu.VDDA, 1uF)]
+    inst c_vdda: C_1u
+
+    // ---- power in: USB-C VBUS (5V) -> ESD -> LDO -> 3V3; all 29 RGB LEDs run
+    // off the 5V VBUS rail ----
+    #[high_current(500mA)]
+    net VBUS [5V]: usbc.VBUS, esd.VBUS, ldo.VIN, ldo.EN, c_bulk.A, key_leds[0..=12].VDD,
+                   ambient_leds[0..=15].VDD
+    #[intent("AP2112K enable tied to VIN — always on when USB is present")]
+    #[high_current(500mA)]
+    net V3V3 [3.3V]: ldo.VOUT, mcu.VDD, mcu.VDDA, mcu.VBAT, mcu.VDDIO2, swd.V3V3, joy.X_END_B,
+                     joy.Y_END_B, c_vdda.A
+    #[ground(primary)]
+    net GND [gnd]: usbc.GND, usbc.SHIELD, esd.GND, ldo.GND, mcu.VSS, mcu.VSSA, xtal.GND, c_x1.B,
+                   c_x2.B, c_bulk.B, c_vdda.B, rcc1.B, rcc2.B, rboot.B, swd.GND, enc.C, enc.SW2,
+                   enc.MNT, joy.X_END_A, joy.Y_END_A, joy.SW_B, rst.B, mh[0..=3].PAD,
+                   key_leds[0..=12].GND, ambient_leds[0..=15].GND
+
+    // ---- USB 2.0 through the ESD array (I/O1 = D+, I/O2 = D-) ----
+    net USBC_DP: usbc.DP, esd.IO1_A
+    net USB_DP: esd.IO1_B, mcu.USB_DP
+    net USBC_DM: usbc.DN, esd.IO2_A
+    net USB_DM: esd.IO2_B, mcu.USB_DM
+    // USB-C CC pulldowns (5.1k Rd — advertise a UFP/device sink)
+    net CC1: usbc.CC1, rcc1.A
+    net CC2: usbc.CC2, rcc2.A
+
+    // ---- reset + boot ----
+    net NRST: mcu.NRST, rst.A
+    net BOOT0: mcu.BOOT0, rboot.A
+
+    // ---- 8MHz HSE crystal (PF0/PF1), 15pF load caps (AN2867, CL=10pF) ----
+    net HSE_IN: mcu.PF0, xtal.XIN, c_x1.A
+    net HSE_OUT: mcu.PF1, xtal.XOUT, c_x2.A
+
+    // ---- SWD debug ----
+    net SWDIO: mcu.SWDIO, swd.SWDIO
+    net SWCLK: mcu.SWCLK, swd.SWCLK
+
+    // ---- keyboard matrix (COL2ROW: ROW -> switch -> diode -> COL) ----
+    net KEY1: sw[0].B, d[0].Anode
+    net KEY2: sw[1].B, d[1].Anode
+    net KEY3: sw[2].B, d[2].Anode
+    net KEY4: sw[3].B, d[3].Anode
+    net KEY5: sw[4].B, d[4].Anode
+    net KEY6: sw[5].B, d[5].Anode
+    net KEY7: sw[6].B, d[6].Anode
+    net KEY8: sw[7].B, d[7].Anode
+    net KEY9: sw[8].B, d[8].Anode
+    net KEY10: sw[9].B, d[9].Anode
+    net KEY11: sw[10].B, d[10].Anode
+    net KEY12: sw[11].B, d[11].Anode
+    net KEY13: sw[12].B, d[12].Anode
+    // Matrix nets regrouped by PHYSICAL row/column so each ROW is a short
+    // horizontal run and each COL a short vertical run (position-aware — cuts
+    // the crossings the old index-order grouping created). Every key keeps a
+    // unique (row, col) scan position.
+    //   phys rows (by y):   r0={sw0,sw1}          r1={sw2,sw3,sw4,sw5}
+    //                       r2={sw6,sw7,sw8,sw9}  r3={sw10,sw11,sw12}
+    //   phys cols (by x):   c0={sw2,sw6}          c1={sw0,sw3,sw7,sw10}
+    //                       c2={sw1,sw4,sw8,sw11} c3={sw5,sw9,sw12}
+    net ROW0: mcu.ROW0, sw[0, 1].A
+    net ROW1: mcu.ROW1, sw[2..=5].A
+    net ROW2: mcu.ROW2, sw[6..=9].A
+    net ROW3: mcu.ROW3, sw[10..=12].A
+    net COL0: mcu.COL0, d[2, 6].Cathode
+    net COL1: mcu.COL1, d[0, 3, 7, 10].Cathode
+    net COL2: mcu.COL2, d[1, 4, 8, 11].Cathode
+    net COL3: mcu.COL3, d[5, 9, 12].Cathode
+
+    // ---- rotary encoder + push ----
+    net ENC_A: mcu.ENC_A, enc.A
+    net ENC_B: mcu.ENC_B, enc.B
+    net ENC_SW: mcu.ENC_SW, enc.SW1
+
+    // ---- analog joystick (X/Y wipers to ADC) + push ----
+    net JOY_X: mcu.JOY_X, joy.X_WIPER
+    net JOY_Y: mcu.JOY_Y, joy.Y_WIPER
+    net JOY_SW: mcu.JOY_SW, joy.SW_A
+
+    // ---- capacitive touch ----
+    net TOUCH: mcu.TOUCH, touch.PAD
+
+    // ---- addressable RGB (5V; two independent WS2812 chains) ----
+    // ---- per-key RGB chain (key_leds[0]..key_leds[12] on LED_DATA_KEY) ----
+    net LED_D0: mcu.LED_DATA_KEY, key_leds[0].DIN
+    net LED_D1: key_leds[0].DOUT, key_leds[1].DIN
+    net LED_D2: key_leds[1].DOUT, key_leds[2].DIN
+    net LED_D3: key_leds[2].DOUT, key_leds[3].DIN
+    net LED_D4: key_leds[3].DOUT, key_leds[4].DIN
+    net LED_D5: key_leds[4].DOUT, key_leds[5].DIN
+    net LED_D6: key_leds[5].DOUT, key_leds[6].DIN
+    net LED_D7: key_leds[6].DOUT, key_leds[7].DIN
+    net LED_D8: key_leds[7].DOUT, key_leds[8].DIN
+    net LED_D9: key_leds[8].DOUT, key_leds[9].DIN
+    net LED_D10: key_leds[9].DOUT, key_leds[10].DIN
+    net LED_D11: key_leds[10].DOUT, key_leds[11].DIN
+    net LED_D12: key_leds[11].DOUT, key_leds[12].DIN
+    // ---- perimeter underglow chain (ambient_leds[0]..ambient_leds[15] on LED_DATA_UG) ----
+    net UG_D0: mcu.LED_DATA_UG, ambient_leds[0].DIN
+    net UG_D1: ambient_leds[0].DOUT, ambient_leds[1].DIN
+    net UG_D2: ambient_leds[1].DOUT, ambient_leds[2].DIN
+    net UG_D3: ambient_leds[2].DOUT, ambient_leds[3].DIN
+    net UG_D4: ambient_leds[3].DOUT, ambient_leds[4].DIN
+    net UG_D5: ambient_leds[4].DOUT, ambient_leds[5].DIN
+    net UG_D6: ambient_leds[5].DOUT, ambient_leds[6].DIN
+    net UG_D7: ambient_leds[6].DOUT, ambient_leds[7].DIN
+    net UG_D8: ambient_leds[7].DOUT, ambient_leds[8].DIN
+    net UG_D9: ambient_leds[8].DOUT, ambient_leds[9].DIN
+    net UG_D10: ambient_leds[9].DOUT, ambient_leds[10].DIN
+    net UG_D11: ambient_leds[10].DOUT, ambient_leds[11].DIN
+    net UG_D12: ambient_leds[11].DOUT, ambient_leds[12].DIN
+    net UG_D13: ambient_leds[12].DOUT, ambient_leds[13].DIN
+    net UG_D14: ambient_leds[13].DOUT, ambient_leds[14].DIN
+    net UG_D15: ambient_leds[14].DOUT, ambient_leds[15].DIN
+
+    // ---- decoupling (100nF per VDD pin) + unused pins ----
+    decouple(mcu.VDD, mcu.VSS)
+    decouple(mcu.VDD, mcu.VSS)
+    decouple(mcu.VDDA, mcu.VSSA)
+    decouple(usbc.VBUS, usbc.GND)
+    // per-key LEDs: one 100nF each; underglow LEDs: one per two (shared rail cap)
+    decouple(key_leds[0].VDD, key_leds[0].GND)
+    decouple(key_leds[1].VDD, key_leds[1].GND)
+    decouple(key_leds[2].VDD, key_leds[2].GND)
+    decouple(key_leds[3].VDD, key_leds[3].GND)
+    decouple(key_leds[4].VDD, key_leds[4].GND)
+    decouple(key_leds[5].VDD, key_leds[5].GND)
+    decouple(key_leds[6].VDD, key_leds[6].GND)
+    decouple(key_leds[7].VDD, key_leds[7].GND)
+    decouple(key_leds[8].VDD, key_leds[8].GND)
+    decouple(key_leds[9].VDD, key_leds[9].GND)
+    decouple(key_leds[10].VDD, key_leds[10].GND)
+    decouple(key_leds[11].VDD, key_leds[11].GND)
+    decouple(key_leds[12].VDD, key_leds[12].GND)
+    decouple(ambient_leds[0].VDD, ambient_leds[0].GND)
+    decouple(ambient_leds[2].VDD, ambient_leds[2].GND)
+    decouple(ambient_leds[4].VDD, ambient_leds[4].GND)
+    decouple(ambient_leds[6].VDD, ambient_leds[6].GND)
+    decouple(ambient_leds[8].VDD, ambient_leds[8].GND)
+    decouple(ambient_leds[10].VDD, ambient_leds[10].GND)
+    decouple(ambient_leds[12].VDD, ambient_leds[12].GND)
+    decouple(ambient_leds[14].VDD, ambient_leds[14].GND)
+    // chain ends float (last DOUT of each chain); SBU unused
+    nc: usbc.SBU1, usbc.SBU2, key_leds[12].DOUT, ambient_leds[15].DOUT
+    nc: mcu.PA1, mcu.PA2, mcu.PA3, mcu.PA4, mcu.PA5, mcu.PA6, mcu.PA7, mcu.PB2, mcu.PB10, mcu.PB11,
+        mcu.PB12, mcu.PB13, mcu.PB14, mcu.PB15
+
+    // ---- layout: fixed user-facing parts placed; MCU + passives staged ----
+    // Physical arrangement transcribed from the Work Louder Creator Micro 2 /
+    // Codex Micro layout diagram: a SQUARE macropad, 4x4 cells on a 19.05mm grid
+    // (columns/rows at -28.575, -9.525, +9.525, +28.575). Corners of the top row
+    // hold the ROTARY ENCODER (top-LEFT) and the PLANAR JOYSTICK (top-RIGHT); the
+    // bottom-left cell holds the cap-TOUCH sensor. The 13 mechanical switches are
+    // k1..k13: k1/k2 fill the top-row middle, k3..k10 the two middle rows, and
+    // the bottom row is k11+k12 (two switches under a single 2U keycap, spanning
+    // the middle two columns) plus k13 at the right. joy/enc origins are
+    // back-offset by their footprint courtyard centers so the stick/knob land on
+    // the corner cells.
+    layout {
+        diff_pair(USBC_DP,
+                  USBC_DM) [differential_impedance: 100ohm, single_ended_impedance: 50ohm, frequency: 1GHz]
+        diff_pair(USB_DP,
+                  USB_DM) [differential_impedance: 100ohm, single_ended_impedance: 50ohm, frequency: 1GHz]
+        board_outline: "mechanical/openmicro-outline.dxf"
+        // MCU on the BACK (RFC-026 side bottom), top-left — the clear spot
+        // nearest the USB-C/ESD (the board's only high-speed pair): the
+        // interior is walled off by the switch through-holes and the top edge
+        // is congested by the connector, ESD and top LEDs, so this is as close
+        // to the USB endpoint as a 9.4mm part fits (USB FS pair ~21mm, well
+        // within spec). Unrotated (side bottom) already faces the fixed
+        // USB pins (PA11/12) toward the ESD; every other signal's GPIO is
+        // mapped position-aware in openmicro_parts.cohdl.
+        place mcu at (-18mm, -41mm) side bottom
+        // top row: encoder (TL corner), k1, k2, joystick (TR corner)
+        place enc at (-35.575mm, -31.075mm)
+        place sw[0] at (-9.525mm, -28.575mm)
+        place sw[1] at (9.525mm, -28.575mm)
+        place joy at (27.325mm, -28.575mm)
+        // middle two rows: k3..k6, k7..k10
+        place sw[2] at (-28.575mm, -9.525mm)
+        place sw[3] at (-9.525mm, -9.525mm)
+        place sw[4] at (9.525mm, -9.525mm)
+        place sw[5] at (28.575mm, -9.525mm)
+        place sw[6] at (-28.575mm, 9.525mm)
+        place sw[7] at (-9.525mm, 9.525mm)
+        place sw[8] at (9.525mm, 9.525mm)
+        place sw[9] at (28.575mm, 9.525mm)
+        // bottom row: touch (BL corner), k11+k12 under the 2U cap, k13
+        place touch at (-28.575mm, 28.575mm)
+        place sw[10] at (-9.525mm, 28.575mm)
+        place sw[11] at (9.525mm, 28.575mm)
+        place sw[12] at (28.575mm, 28.575mm)
+        // matrix diodes: back side, one south of each key, vertical, aligned
+        // under the switch's B-contact column (RFC-026 side bottom)
+        place d[0] at (-4.525mm, -19.825mm) rotate 90 side bottom
+        place d[1] at (14.525mm, -19.825mm) rotate 90 side bottom
+        place d[2] at (-23.575mm, -0.775mm) rotate 90 side bottom
+        place d[3] at (-4.525mm, -0.775mm) rotate 90 side bottom
+        place d[4] at (14.525mm, -0.775mm) rotate 90 side bottom
+        place d[5] at (33.575mm, -0.775mm) rotate 90 side bottom
+        place d[6] at (-23.575mm, 18.275mm) rotate 90 side bottom
+        place d[7] at (-4.525mm, 18.275mm) rotate 90 side bottom
+        place d[8] at (14.525mm, 18.275mm) rotate 90 side bottom
+        place d[9] at (33.575mm, 18.275mm) rotate 90 side bottom
+        place d[10] at (-4.525mm, 37.325mm) rotate 90 side bottom
+        place d[11] at (14.525mm, 37.325mm) rotate 90 side bottom
+        place d[12] at (33.575mm, 37.325mm) rotate 90 side bottom
+        // USB-C centered on the top edge (mouth rotated to face off the -y edge)
+        // HRO datasheet: PCB EDGE is 1.86mm from the footprint origin on the
+        // mouth side (shell front overhangs ~1.8mm). Top edge at y=-47.5 ->
+        // origin at -47.5 + 1.86 = -45.64.
+        place usbc at (0mm, -45.64mm) rotate 180
+        // ESD array tight to the receptacle, on the USB2 path to the MCU
+        place esd at (7mm, -38.5mm)
+        // per-key RGB LEDs: reverse-mount in the SOUTH LED window, +4.7mm y and
+        // +1.5mm x from each switch stem so the LED clears the contacts, the
+        // central box hole, and the mounting peg.
+        place key_leds[0] at (-9.53mm, -23.64mm)
+        place key_leds[1] at (9.53mm, -23.64mm)
+        place key_leds[2] at (-28.57mm, -4.6mm)
+        place key_leds[3] at (-9.53mm, -4.6mm)
+        place key_leds[4] at (9.53mm, -4.6mm)
+        place key_leds[5] at (28.57mm, -4.6mm)
+        place key_leds[6] at (-28.57mm, 14.46mm)
+        place key_leds[7] at (-9.53mm, 14.46mm)
+        place key_leds[8] at (9.53mm, 14.46mm)
+        place key_leds[9] at (28.57mm, 14.46mm)
+        place key_leds[10] at (-9.53mm, 33.5mm)
+        place key_leds[11] at (9.53mm, 33.5mm)
+        place key_leds[12] at (28.57mm, 33.5mm)
+        // perimeter underglow ring (16 LEDs, 4 per side, ~5.5mm inset)
+        place ambient_leds[0] at (-33mm, -42mm)
+        place ambient_leds[1] at (-11mm, -42mm)
+        place ambient_leds[2] at (11mm, -42mm)
+        place ambient_leds[3] at (33mm, -42mm)
+        place ambient_leds[4] at (42mm, -33mm) rotate 90
+        place ambient_leds[5] at (42mm, -11mm) rotate 90
+        place ambient_leds[6] at (42mm, 11mm) rotate 90
+        place ambient_leds[7] at (42mm, 33mm) rotate 90
+        place ambient_leds[8] at (33mm, 42mm)
+        place ambient_leds[9] at (11mm, 42mm)
+        place ambient_leds[10] at (-11mm, 42mm)
+        place ambient_leds[11] at (-33mm, 42mm)
+        place ambient_leds[12] at (-42mm, 33mm) rotate 90
+        place ambient_leds[13] at (-42mm, 11mm) rotate 90
+        place ambient_leds[14] at (-42mm, -11mm) rotate 90
+        place ambient_leds[15] at (-42mm, -33mm) rotate 90
+        // M2 mounting holes at the four corners (5mm edge inset)
+        place mh[0] at (-42.5mm, -42.5mm)
+        place mh[1] at (42.5mm, -42.5mm)
+        place mh[2] at (42.5mm, 42.5mm)
+        place mh[3] at (-42.5mm, 42.5mm)
+    }
+}

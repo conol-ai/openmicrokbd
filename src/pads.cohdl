@@ -1,0 +1,122 @@
+// OpenMicro pad library — one padstack per land-pattern role, dimensions from
+// the KiCad official footprint named in each comment (datasheet-derived land
+// patterns). Edits here propagate to every footprint that references the pad.
+
+// LQFP-48 0.5mm lead, left/right sides (KiCad Package_QFP:LQFP-48_7x7mm_P0.5mm).
+pub pad P_LQFP48_Lead_H {
+    shape: rect
+    size: (1.475mm, 0.3mm)
+    layer: top_copper
+    plating: smd
+}
+
+// LQFP-48 0.5mm lead, top/bottom sides.
+pub pad P_LQFP48_Lead_V {
+    shape: rect
+    size: (0.3mm, 1.475mm)
+    layer: top_copper
+    plating: smd
+}
+
+// Kailh Choc V2 (PG1353) low-profile switch electrical contact — MX-compatible
+// cross stem (takes MX keycaps at 19.05mm). 1.2mm plated hole, 2.2mm pad
+// (KiCad-official Switch_Keyboard_Kailh SW_Kailh_Choc_V2; pins unchanged from V1).
+pub pad P_Choc_Contact {
+    shape: circle
+    size: (2.2mm)
+    layer: through_all
+    plating: plated_through_hole
+    drill: 1.2mm
+}
+
+// 1N4148W small-signal diode terminal, SOD-123 (KiCad Diode_SMD:D_SOD-123).
+pub pad P_SOD123_Term {
+    shape: rect
+    size: (0.9mm, 1.2mm)
+    layer: top_copper
+    plating: smd
+}
+
+// SOT-23-6 lead (KiCad Package_TO_SOT_SMD:SOT-23-6) — USBLC6-2SC6 ESD array.
+pub pad P_SOT23_6_Lead {
+    shape: rect
+    size: (1.325mm, 0.6mm)
+    layer: top_copper
+    plating: smd
+}
+
+// SK6812MINI-E reverse-mount RGB LED pad (KiCad
+// LED_SMD:LED_SK6812MINI-E_3.2x2.8mm_P1.5mm_ReverseMount).
+pub pad P_SK6812_Pad {
+    shape: rect
+    size: (1.35mm, 0.82mm)
+    layer: top_copper
+    plating: smd
+}
+
+// Alps EC11E rotary-encoder signal terminal (KiCad
+// Rotary_Encoder:RotaryEncoder_Alps_EC11E-Switch_Vertical) — plated 1mm hole.
+pub pad P_EC11_Pin {
+    shape: circle
+    size: (2mm)
+    layer: through_all
+    plating: plated_through_hole
+    drill: 1mm
+}
+
+// EC11 mounting post — a plated slot in the real part (2.8x1.5mm oval). CoHDL
+// drills are round, so approximated by the 2.8mm LONG axis: the ~2.8mm-wide
+// flat boss leg must clear the hole, so the round drill takes the long axis,
+// not the 1.5mm short axis (a 1.5mm hole would block insertion). 3.2mm pad.
+pub pad P_EC11_MP {
+    shape: circle
+    size: (3.2mm)
+    layer: through_all
+    plating: plated_through_hole
+    drill: 2.8mm
+}
+
+// Panasonic EVQ-P7A side-actuated SMD light-touch switch terminal (datasheet
+// ATK0000CE20 — land 1.4x1.05mm, 3.6mm column / 1.44mm row pitch).
+pub pad P_ResetSw {
+    shape: rect
+    size: (1.4mm, 1.05mm)
+    layer: top_copper
+    plating: smd
+}
+
+// 2.54mm 1x4 pin-header hole (SWD debug) — plated 1.0mm hole, 1.7mm pad.
+pub pad P_Header254 {
+    shape: circle
+    size: (1.7mm)
+    layer: through_all
+    plating: plated_through_hole
+    drill: 1mm
+}
+
+// Capacitive-touch sense pad — a plain ROUND SMD copper area (no component;
+// the STM32 senses it directly). One terminal, 9mm diameter.
+pub pad P_TouchPad {
+    shape: circle
+    size: (9mm)
+    layer: top_copper
+    plating: smd
+}
+
+// M2 mounting hole — 2.2mm plated through-hole under a 4.0mm annular pad
+// (RFC-018 has no non-plated; a plated barrel is tied to GND for shield bonding).
+pub pad P_MountHole_M2 {
+    shape: circle
+    size: (4mm)
+    layer: through_all
+    plating: plated_through_hole
+    drill: 2.2mm
+}
+
+// 3225 4-pad crystal terminal (ABM8-class).
+pub pad P_XTAL_3225 {
+    shape: rect
+    size: (1.4mm, 1.2mm)
+    layer: top_copper
+    plating: smd
+}

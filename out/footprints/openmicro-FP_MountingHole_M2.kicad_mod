@@ -1,0 +1,8 @@
+(footprint "openmicro::FP_MountingHole_M2"
+  (version 20240108)
+  (generator "cohdl")
+  (layer "F.Cu")
+  (attr through_hole)
+  (fp_rect (start -2.2 -2.2) (end 2.2 2.2) (layer "F.CrtYd") (stroke (width 0.05) (type solid)) (fill none))
+  (pad "1" thru_hole circle (at 0 0) (size 4 4) (drill 2.2) (layers "*.Cu" "*.Mask"))
+)

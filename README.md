@@ -1,0 +1,56 @@
+# OpenMicroKbd
+
+An open-source hardware recreation of OpenAI's **Codex Micro** macropad — 13 low-profile keys, a rotary encoder, an analog joystick, a capacitive touch pad, and per-key + underglow RGB on a wired USB-C board built around an STM32F072.
+
+**The PCB is written, not drawn.** The entire schematic is source code in **CoHDL**, a new AI-native hardware description language (see below). The compiler type-checks the design — units, pin-connection obligations, power integrity — and emits the netlist, BOM, footprints and layout constraints you can inspect under [`out/`](out/).
+
+🌐 **https://openmicrokbd.org** · License: [MIT](LICENSE)
+
+## Designed in CoHDL
+
+This board was designed in **CoHDL**, a hardware description language newly developed by [Tony Huang](https://github.com/conol-ai) that makes schematic (PCB) design AI-native: a board is a program — typed, checked, and compiled. In CoHDL, the design in [`src/`](src/) *is* the schematic; the compiler is the oracle that grades it.
+
+**The CoHDL language and compiler will be open sourced soon.** Until then, this repository ships the complete compiler outputs under `out/`, so the design is fully inspectable and the firmware and app are buildable today.
+
+## What's inside
+
+| Path | Contents |
+|---|---|
+| [`src/`](src/) | The PCB as CoHDL source: `main.cohdl` (top-level design), `openmicro_parts.cohdl` (datasheet-verified part bindings), `footprints.cohdl`, `pads.cohdl` |
+| [`out/`](out/) | Checked-in compiler output: KiCad netlist (`openmicro.net`), BOM (`openmicro-bom.csv`), SMT placement (`openmicro-smt.csv`), `.kicad_mod` footprints, layout constraints (`openmicro-layout.json`) |
+| [`fw/`](fw/) | Firmware — Rust + [embassy](https://embassy.dev) on STM32F072CB: key matrix, twin WS2812 chains, USB HID + vendor interface, DFU reboot. See [`fw/README.md`](fw/README.md) |
+| [`app/`](app/) | Companion desktop app — Rust + [makepad](https://makepad.dev): device dashboard, live connection state, and button-free firmware updates over USB. See [`app/README.md`](app/README.md) |
+| [`mechanical/`](mechanical/) | Board outline (DXF) |
+
+## Hardware
+
+- **MCU:** STM32F072CBT6 (Cortex-M0), 8 MHz HSE crystal, SWD header
+- **Keys:** 13× Kailh Choc V2 low-profile switches on a 19.05 mm grid (square 4×4-cell frame, matching the Codex Micro layout), 1N4148W per-key matrix diodes
+- **Inputs:** EC11 rotary encoder, RKJXV analog joystick, capacitive touch pad
+- **Lighting:** 13× per-key SK6812MINI-E (reverse-mount, one WS2812 chain) + 16× perimeter underglow SK6812MINI-E (second chain)
+- **USB:** Type-C wired, USBLC6 ESD protection, AP2112 3.3 V LDO
+- PCB laid out from the CoHDL-generated constraints; manufacturing handoff via IPC-2581
+
+## Building
+
+```sh
+# Firmware (thumbv6m target; flash over SWD or USB DFU — see fw/README.md)
+cd fw && cargo build --release
+
+# Companion app
+cd app && cargo run --release
+```
+
+Rebuilding the PCB from `src/` requires the CoHDL compiler, which is being prepared for open source — the generated netlist/BOM/footprints are checked in under `out/` in the meantime.
+
+## Production files
+
+Manufacturing-ready files (Gerbers, drill, pick-and-place, the final laid-out board) will be published here shortly.
+
+## License
+
+[MIT](LICENSE) © 2026 Tony Huang. Build your own — attribution appreciated.
+
+---
+
+*OpenMicroKbd is an independent open-source project and is not affiliated with, endorsed by, or sponsored by OpenAI. "Codex Micro" refers to OpenAI's product; all trademarks belong to their respective owners.*

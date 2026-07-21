@@ -1,0 +1,5 @@
+[package]
+name = "openmicro"
+
+[design]
+top = "OpenMicro"

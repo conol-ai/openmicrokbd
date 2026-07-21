@@ -1,0 +1,10 @@
+(footprint "std::CHIP_0402"
+  (version 20240108)
+  (generator "cohdl")
+  (layer "F.Cu")
+  (attr smd)
+  (fp_text reference "REF**" (at 0 -1.17) (layer "F.SilkS"))
+  (fp_rect (start -1.03 -0.57) (end 1.03 0.57) (layer "F.CrtYd") (stroke (width 0.05) (type solid)) (fill none))
+  (pad "1" smd rect (at -0.51 0) (size 0.54 0.64) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "2" smd rect (at 0.51 0) (size 0.54 0.64) (layers "F.Cu" "F.Paste" "F.Mask"))
+)

@@ -1,0 +1,40 @@
+[package]
+name = "openmicro-fw"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "OpenMicro macropad firmware (STM32F072CBT6, embassy)"
+
+[dependencies]
+embassy-stm32 = { version = "0.2", features = [
+    "stm32f072cb",
+    "time-driver-any",
+    "memory-x",
+    "exti",
+] }
+embassy-executor = { version = "0.7", features = [
+    "arch-cortex-m",
+    "executor-thread",
+] }
+embassy-time = { version = "0.4" }
+embassy-usb = { version = "0.4" }
+embassy-sync = { version = "0.6" }
+embassy-futures = { version = "0.1" }
+
+usbd-hid = "0.8"
+
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+panic-halt = "1.0"
+static_cell = "2"
+portable-atomic = { version = "1", features = ["critical-section"] }
+critical-section = "1"
+
+[profile.release]
+debug = true
+lto = true
+opt-level = "s"
+codegen-units = 1
+
+[profile.dev]
+opt-level = 1

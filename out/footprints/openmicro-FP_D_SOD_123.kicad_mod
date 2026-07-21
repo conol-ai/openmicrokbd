@@ -1,0 +1,10 @@
+(footprint "openmicro::FP_D_SOD_123"
+  (version 20240108)
+  (generator "cohdl")
+  (layer "F.Cu")
+  (attr smd)
+  (fp_text reference "REF**" (at 0 -1.3) (layer "F.SilkS"))
+  (fp_rect (start -2.1 -0.8) (end 2.1 0.8) (layer "F.CrtYd") (stroke (width 0.05) (type solid)) (fill none))
+  (pad "1" smd rect (at -1.65 0) (size 0.9 1.2) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "2" smd rect (at 1.65 0) (size 0.9 1.2) (layers "F.Cu" "F.Paste" "F.Mask"))
+)

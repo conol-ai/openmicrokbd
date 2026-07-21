@@ -1,0 +1,284 @@
+// OpenMicro — board-specific devices and part bindings (STM32F072 macropad).
+// Pinouts datasheet-verified (ST DM00090510 / Alps / SK6812 / USBLC6 —
+// see docs/compliance-report.md). Reuses std passives + traits.
+
+// ---- designator-prefix traits not in std ----
+pub trait Switch {
+    designator_prefix: "SW"
+}
+pub trait Encoder {
+    designator_prefix: "SW"
+}
+pub trait Led_Addressable {
+    designator_prefix: "LED"
+}
+pub trait TestPad {
+    designator_prefix: "TP"
+}
+
+pub trait Crystal {
+    designator_prefix: "Y"
+}
+
+// 8MHz HSE crystal, 3225 4-pad. The F072 can run USB crystal-less (HSI48+CRS,
+// incl. the DFU bootloader) — the crystal is fitted belt-and-braces per direct
+// review: HSE/PLL clocking with HSI48+CRS still available as fallback.
+pub device Crystal8MHz {
+    pins {
+        required XIN: 1 [passive]
+        required XOUT: 3 [passive]
+        required GND: 2, 4 [passive]
+    }
+}
+impl Crystal for Crystal8MHz {}
+// 10pF-load crystal; AN2867: C_load = 2*(CL - Cstray) = 2*(10 - 2.5) = 15pF.
+pub part XTAL_8M: Crystal8MHz {
+    primary { mfr: "Abracon", mpn: "ABM8-8.000MHZ-10-1-U-T", footprint: FP_Crystal_3225 }
+}
+
+// ---- STM32F072CBT6: the MCU (LQFP-48). All 48 pads declared; PA8-PA15
+// (incl. USB PA11/PA12 and SWD PA13/PA14) are VDDIO2-powered (pin 36 tied
+// to VDD). HSE crystal on PF0/PF1; crystal-less HSI48+CRS remains a
+// fallback. ----
+pub device STM32F072CBT6 {
+    pins {
+        required VDD: 24, 48 [power_in]
+        required VSS: 23, 35, 47 [power_in]
+        required VDDA: 9 [power_in]
+        required VSSA: 8 [power_in]
+        required VBAT: 1 [power_in]
+        required VDDIO2: 36 [power_in] // powers PA8-PA15 (USB + SWD)
+        required NRST: 7 [input]
+        // HSE crystal (fixed oscillator pins)
+        required PF0: 5 [bidirectional] // OSC_IN
+        required PF1: 6 [bidirectional] // OSC_OUT
+        required BOOT0: 44 [input]
+        // USB FS + SWD (VDDIO2 domain) — fixed peripheral pins
+        required USB_DM: 32 [bidirectional] // PA11
+        required USB_DP: 33 [bidirectional] // PA12
+        required SWDIO: 34 [bidirectional] // PA13
+        required SWCLK: 37 [input] // PA14
+        // position-aware GPIO (physical matrix + feature pins facing their targets)
+        required ROW0: 30 [bidirectional] // PA9
+        required ROW1: 39 [bidirectional] // PB3
+        required ROW2: 42 [bidirectional] // PB6
+        required ROW3: 41 [bidirectional] // PB5
+        required COL0: 45 [bidirectional] // PB8
+        required COL1: 43 [bidirectional] // PB7
+        required COL2: 38 [bidirectional] // PA15
+        required COL3: 31 [bidirectional] // PA10
+        required ENC_A: 2 [bidirectional] // PC13
+        required ENC_B: 3 [bidirectional] // PC14
+        required ENC_SW: 4 [bidirectional] // PC15
+        required JOY_X: 19 [input] // PB1 / ADC_IN9
+        required JOY_Y: 18 [input] // PB0 / ADC_IN8
+        required JOY_SW: 29 [bidirectional] // PA8
+        required TOUCH: 46 [bidirectional] // PB9
+        required LED_DATA_KEY: 40 [output] // PB4 — per-key RGB chain
+        required LED_DATA_UG: 10 [output] // PA0 — perimeter underglow chain
+        // unused GPIO (declared to cover all 48 pads; left NC)
+        optional PA1: 11 [bidirectional]
+        optional PA2: 12 [bidirectional]
+        optional PA3: 13 [bidirectional]
+        optional PA4: 14 [bidirectional]
+        optional PA5: 15 [bidirectional]
+        optional PA6: 16 [bidirectional]
+        optional PA7: 17 [bidirectional]
+        optional PB2: 20 [bidirectional]
+        optional PB10: 21 [bidirectional]
+        optional PB11: 22 [bidirectional]
+        optional PB12: 25 [bidirectional]
+        optional PB13: 26 [bidirectional]
+        optional PB14: 27 [bidirectional]
+        optional PB15: 28 [bidirectional]
+    }
+}
+impl IC for STM32F072CBT6 {}
+pub part MCU_STM32F072: STM32F072CBT6 {
+    primary { mfr: "STMicroelectronics", mpn: "STM32F072CBT6", footprint: QFP50P900X900X160_48N }
+}
+
+// ---- USBLC6-2SC6: USB ESD protection (SOT-23-6). I/O1 = pins 1,6;
+// I/O2 = pins 3,4; each data line passes through a pin pair. ----
+pub device USBLC6 {
+    pins {
+        required IO1_A: 1 [bidirectional]
+        required GND: 2 [power_in]
+        required IO2_A: 3 [bidirectional]
+        required IO2_B: 4 [bidirectional]
+        required VBUS: 5 [power_in]
+        required IO1_B: 6 [bidirectional]
+    }
+}
+impl IC for USBLC6 {}
+pub part ESD_USBLC6: USBLC6 {
+    primary { mfr: "STMicroelectronics", mpn: "USBLC6-2SC6", footprint: FP_SOT_23_6 }
+}
+
+// ---- SK6812MINI-E: addressable RGB (5V). 1=VDD 2=DOUT 3=GND 4=DIN;
+// DOUT -> next DIN. ----
+pub device SK6812 {
+    pins {
+        required VDD: 1 [power_in]
+        required DOUT: 2 [output]
+        required GND: 3 [power_in]
+        required DIN: 4 [input]
+    }
+}
+impl Led_Addressable for SK6812 {}
+pub part RGB_SK6812: SK6812 {
+    primary { mfr: "Opsco", mpn: "SK6812MINI-E", footprint: FP_LED_SK6812MINI_E }
+}
+
+// ---- Kailh Choc V2 low-profile keyswitch (MX cross stem): 2 non-polar
+// electrical contacts. The central box-stem hole and MX mounting peg are
+// RFC-022 mount_holes in the footprint (mechanical, no device pin). ----
+pub device KeySwitch {
+    pins {
+        required A: 1 [passive]
+        required B: 2 [passive]
+    }
+}
+impl Switch for KeySwitch {}
+pub part SW_KEY: KeySwitch {
+    primary { mfr: "Work Louder", mpn: "WL-LP-SW-55G", footprint: FP_SW_Choc_V2 }
+}
+
+// ---- 1N4148W matrix diode, SOD-123. Pad 1 = cathode. ----
+pub device Diode_1N4148 {
+    pins {
+        required Cathode: 1 [passive]
+        required Anode: 2 [passive]
+    }
+}
+impl Polarized for Diode_1N4148 {
+    pins {
+        Anode: Anode
+        Cathode: Cathode
+    }
+}
+impl Diode for Diode_1N4148 {}
+pub part D_1N4148W: Diode_1N4148 {
+    primary { mfr: "Diodes Inc", mpn: "1N4148W-7-F", footprint: FP_D_SOD_123 }
+}
+
+// ---- Alps EC11 rotary encoder + push. A/B quadrature, C = common/GND;
+// SW1/SW2 = push switch; MNT = mechanical mounting posts. ----
+pub device RotaryEC11 {
+    pins {
+        required A: 1 [output]
+        required C: 2 [passive]
+        required B: 3 [output]
+        required SW1: 4 [passive]
+        required SW2: 5 [passive]
+        required MNT: 6, 7 [passive]
+    }
+}
+impl Encoder for RotaryEC11 {}
+pub part ENC_EC11: RotaryEC11 {
+    primary { mfr: "Alps Alpine", mpn: "EC11E15244A5", footprint: FP_Encoder_EC11 }
+}
+
+// ---- Alps RKJXV122400R ThumbPointer (2 pots + push). X/Y wipers to ADC. ----
+pub device ThumbPointer {
+    pins {
+        required X_END_A: 1 [passive]
+        required X_WIPER: 2 [output]
+        required X_END_B: 3 [passive]
+        required Y_END_A: 4 [passive]
+        required Y_WIPER: 5 [output]
+        required Y_END_B: 6 [passive]
+        required SW_A: 7 [passive]
+        required SW_B: 8 [passive]
+    }
+}
+impl Connector for ThumbPointer {}
+pub part JOY_RKJXV: ThumbPointer {
+    primary { mfr: "Alps Alpine", mpn: "RKJXV122400R", footprint: FP_Joystick_RKJXV }
+}
+
+// ---- reset tactile switch (2 terminals). ----
+pub device ResetSwitch {
+    pins {
+        required A: 1, 2 [passive]
+        required B: 3, 4 [passive]
+    }
+}
+impl Switch for ResetSwitch {}
+pub part SW_RESET: ResetSwitch {
+    primary { mfr: "Panasonic", mpn: "EVQ-P7A01P", footprint: FP_SW_Reset }
+}
+
+// ---- SWD 1x4 debug header (SWDIO/SWCLK/GND/3V3). ----
+pub device SWD_Header {
+    pins {
+        required SWDIO: 1 [passive]
+        required SWCLK: 2 [passive]
+        required GND: 3 [passive]
+        required V3V3: 4 [passive]
+    }
+}
+impl Connector for SWD_Header {}
+pub part J_SWD: SWD_Header {
+    primary { mfr: "Generic", mpn: "HDR-1x4-2.54", footprint: FP_Header_1x4 }
+}
+
+// ---- capacitive-touch sense pad (bare copper, sensed by the STM32). ----
+pub device CapTouchPad {
+    pins {
+        required PAD: 1 [passive]
+    }
+}
+impl TestPad for CapTouchPad {}
+pub part TOUCH_PAD: CapTouchPad {
+    primary { mfr: "n/a", mpn: "COPPER-TOUCH-9MM", footprint: FP_TouchPad }
+}
+
+// ---- M2 mounting hole (plated barrel tied to GND for chassis bonding to the
+// aluminum standoffs). One pad = the plated hole. ----
+pub trait MountHole {
+    designator_prefix: "H"
+}
+pub device MountingHole {
+    pins {
+        required PAD: 1 [passive]
+    }
+}
+impl MountHole for MountingHole {}
+pub part MH_M2: MountingHole {
+    primary { mfr: "n/a", mpn: "MOUNT-M2-PLATED-2.2MM", footprint: FP_MountingHole_M2 }
+}
+
+// ---- passive part bindings (std ChipResistor / MLCC) ----
+pub part R_5K1: ChipResistor<5.1kohm, 1%> {
+    primary { mfr: "Yageo", mpn: "RC0402FR-075K1L", footprint: CHIP_0402 }
+}
+pub part R_10K: ChipResistor<10kohm, 1%> {
+    primary { mfr: "Yageo", mpn: "RC0402FR-0710KL", footprint: CHIP_0402 }
+}
+pub part R_1K: ChipResistor<1kohm, 1%> {
+    primary { mfr: "Yageo", mpn: "RC0402FR-071KL", footprint: CHIP_0402 }
+}
+pub part C_100n: MLCC<100nF, 16V, 10%>[C0402] {
+    primary { mfr: "Samsung", mpn: "CL05B104KO5NNNC", footprint: CHIP_0402 }
+}
+pub part C_1u: MLCC<1uF, 10V, 10%>[C0402] {
+    primary { mfr: "Murata", mpn: "GRM155R61A105KE15D", footprint: CHIP_0402 }
+}
+pub part C_4u7: MLCC<4.7uF, 10V, 20%>[C0603] {
+    primary { mfr: "Samsung", mpn: "CL10A475KP8NNNC", footprint: CHIP_0603 }
+}
+pub part C_15p: MLCC<15pF, 50V, 5%>[C0402] {
+    primary { mfr: "Murata", mpn: "GRM1555C1H150JA01D", footprint: CHIP_0402 }
+}
+
+// reusable decoupling sub-circuit
+pub fn decouple(vdd: Pin, gnd: Pin) {
+    // RFC-028: ONE attribute here annotates every call site's capacitor —
+    // each expansion resolves `vdd` to that call's real (instance, pin), one
+    // bypass_capacitors.csv row per pad of the bypassed pin.
+    #[bypass(vdd, 100nF)]
+    inst c: C_100n
+    net _: vdd, c.A
+    net _: gnd, c.B
+}

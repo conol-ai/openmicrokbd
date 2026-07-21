@@ -1,0 +1,26 @@
+[package]
+name = "openmicro-app"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "OpenMicro companion app: firmware updates + key actions (makepad GUI)"
+
+[dependencies]
+makepad-widgets = "1.0"
+
+# device access: vendor HID interface (updater protocol) + DFU (ROM bootloader)
+hidapi = "2.6"
+rusb = { version = "0.9", features = ["vendored"] }
+
+# key actions
+global-hotkey = "0.8"
+open = "5"
+
+# config + dialogs
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+rfd = "0.17"
+
+[profile.release]
+opt-level = 2

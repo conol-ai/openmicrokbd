@@ -1,0 +1,8 @@
+(footprint "openmicro::FP_TouchPad"
+  (version 20240108)
+  (generator "cohdl")
+  (layer "F.Cu")
+  (attr smd)
+  (fp_rect (start -4.7 -4.7) (end 4.7 4.7) (layer "F.CrtYd") (stroke (width 0.05) (type solid)) (fill none))
+  (pad "1" smd circle (at 0 0) (size 9 9) (layers "F.Cu" "F.Paste" "F.Mask"))
+)

@@ -1,0 +1,3 @@
+net_name,max_current,use_power_pour
+VBUS,500,false
+V3V3,500,false
