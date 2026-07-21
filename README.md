@@ -20,6 +20,8 @@ This board was designed in **CoHDL**, a hardware description language newly deve
 | [`out/`](out/) | Checked-in compiler output: KiCad netlist (`openmicro.net`), BOM (`openmicro-bom.csv`), SMT placement (`openmicro-smt.csv`), `.kicad_mod` footprints, layout constraints (`openmicro-layout.json`) |
 | [`fw/`](fw/) | Firmware — Rust + [embassy](https://embassy.dev) on STM32F072CB: key matrix, twin WS2812 chains, USB HID + vendor interface, DFU reboot. See [`fw/README.md`](fw/README.md) |
 | [`app/`](app/) | Companion desktop app — Rust + [makepad](https://makepad.dev): device dashboard, live connection state, and button-free firmware updates over USB. See [`app/README.md`](app/README.md) |
+| [`pcb/`](pcb/) | The routed board — `openmicro.kicad_pcb` + KiCad project (design rules) |
+| [`fab/`](fab/) | Manufacturing package: Gerber/drill zip, assembly BOM, SMT placement CSV — see [`fab/README.md`](fab/README.md) |
 | [`mechanical/`](mechanical/) | Board outline (DXF) |
 
 ## Hardware
@@ -45,7 +47,7 @@ Rebuilding the PCB from `src/` requires the CoHDL compiler, which is being prepa
 
 ## Production files
 
-Manufacturing-ready files (Gerbers, drill, pick-and-place, the final laid-out board) will be published here shortly.
+The final routed board lives in [`pcb/`](pcb/) (`openmicro.kicad_pcb`, opens in KiCad 9+). The manufacturing package — Gerber/drill zip, assembly BOM, and SMT pick-and-place CSV, ready to upload to a fab such as JLCPCB — is in [`fab/`](fab/), with DRC status and ordering notes in [`fab/README.md`](fab/README.md).
 
 ## License
 

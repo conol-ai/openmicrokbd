@@ -6,3 +6,7 @@ Cargo.lock.orig
 
 # OS junk
 .DS_Store
+
+# KiCad per-user state
+*.kicad_prl
+*-backups/
