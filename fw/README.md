@@ -3,8 +3,9 @@
 Rust/[embassy](https://embassy.dev) firmware for the OpenMicro macropad
 (STM32F072CBT6). Async, no RTOS, no unsafe outside the vendored HAL.
 
-Build stats (release, LTO, `opt-level = "s"`): ~22 KiB flash of 128 KiB,
-~5 KiB static RAM of 16 KiB.
+Build stats (release, LTO, `opt-level = "s"`): 34.5 KiB flash of 128 KiB with
+bring-up logging compiled in, 23.5 KiB with `DEFMT_LOG=off`; ~5 KiB static RAM
+of 16 KiB.
 
 ## Pin map — where it comes from
 
@@ -36,8 +37,18 @@ control):
 
 - **13 keys → F13…F24** — 1 kHz matrix scan, 5 ms debounce, COL2ROW diodes.
   The two switches under the 2U keycap (sw10/sw11) both send F23.
-- **Encoder → volume** up/down, push → mute.
-- **Touch pad → play/pause.**
+- **Encoder → volume** up/down, push → mute. A/B are decoded from a full
+  quadrature transition table on their own EXTI-driven task: polling them
+  from the 1 kHz scan aliased away transitions during a fast spin, and the
+  WS2812 critical section (below) blanks interrupts long enough to lose
+  states outright. EXTI latches its pending bit, so nothing is dropped.
+- **Touch pad → play/pause.** The RC rise on `PB9` is only ~20 CPU cycles, so
+  the sense loop configures PUPDR/ODR once and flips *only* MODER via raw
+  register writes (`unstable-pac`) — going through `Flex::set_as_input()` per
+  cycle costs longer than the rise being measured, and reads a constant zero.
+  Each tick sums 64 charge cycles for SNR: on hardware that puts an untouched
+  pad at exactly 192 with no jitter, a finger at 242–1015, and the trigger at
+  25% over a self-calibrating baseline.
 - **Joystick → arrow keys** (ADC thresholds), push → Enter.
 - **LEDs**: pressed keys light white over an idle rainbow; the underglow
   ring rotates hue. Brightness is capped in `ws2812.rs` (`scaled(n/64)`)
@@ -52,6 +63,26 @@ cargo build --release
 
 The workspace/CI at the repo root does not build this crate (it needs the
 thumb target); it lives here as part of the example board's deliverables.
+
+## Logging (bring-up)
+
+`defmt` over RTT, carried by the same SWD probe used for flashing, with panics
+printed on the channel via `panic-probe`. `cargo run --release` flashes and
+then streams:
+
+```
+[INFO ] OpenMicro fw v0.1.0: clocks up (HSI48 -> 48 MHz core, CRS synced from USB SOF)
+[INFO ] matrix r2 c1 DOWN kc=0x6f
+[INFO ] encoder CW -> vol+
+[DEBUG] touch charge t=48 baseline=48
+```
+
+The level is set by `DEFMT_LOG` in `.cargo/config.toml`, defaulting to
+`info,openmicro_fw=debug` — this crate's per-tick diagnostics (joystick raw
+counts, touch charge time, executor heartbeat) at `debug`, embassy at `info`.
+Filtering is compile-time, so **`DEFMT_LOG=off` strips logging out entirely**
+and is what production builds should use; it also drops the flash footprint
+from 34.5 KiB back to 23.5 KiB.
 
 ## Flashing and field updates
 

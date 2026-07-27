@@ -32,6 +32,7 @@ mod ws2812;
 use embassy_executor::Spawner;
 use embassy_futures::join::join3;
 use embassy_stm32::adc::Adc;
+use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{Flex, Input, Level, Output, Pull, Speed};
 use embassy_stm32::rcc::{Hsi48Config, Sysclk};
 use embassy_stm32::usb::Driver;
@@ -40,7 +41,11 @@ use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Ticker, Timer};
 use embassy_usb::class::hid::{HidReaderWriter, State};
-use panic_halt as _;
+// Bring-up logging over the SWD probe (RTT) + panic messages on the same
+// channel. `DEFMT_LOG=off` compiles every log statement out.
+use defmt::{debug, info, warn};
+use defmt_rtt as _;
+use panic_probe as _;
 use static_cell::StaticCell;
 use usbd_hid::descriptor::{KeyboardReport, MediaKeyboardReport, SerializedDescriptor};
 
@@ -142,6 +147,10 @@ async fn main(spawner: Spawner) {
     // the USB peripheral both assume it); USBSW defaults to HSI48 on F0.
     config.rcc.sys = Sysclk::HSI48;
     let p = embassy_stm32::init(config);
+    info!(
+        "OpenMicro fw v{}: clocks up (HSI48 -> 48 MHz core, CRS synced from USB SOF)",
+        FW_VERSION
+    );
 
     // ---- USB HID: a boot keyboard + a consumer-control interface ----
     let driver = Driver::new(p.USB, Irqs, p.PA12, p.PA11);
@@ -219,8 +228,12 @@ async fn main(spawner: Spawner) {
     ];
 
     // ---- encoder + buttons ----
-    let enc_a = Input::new(p.PC13, Pull::Up);
-    let enc_b = Input::new(p.PC14, Pull::Up);
+    // A/B are EXTI-driven rather than polled: at speed a 1 kHz scan aliases
+    // transitions away, and the LED bit-bang blanks interrupts for ~870 us
+    // every 33 ms. EXTI latches its pending bit, so an edge landing in that
+    // window is still serviced once interrupts return.
+    let enc_a = ExtiInput::new(p.PC13, p.EXTI13, Pull::Up);
+    let enc_b = ExtiInput::new(p.PC14, p.EXTI14, Pull::Up);
     let enc_sw = Input::new(p.PC15, Pull::Up);
     let joy_sw = Input::new(p.PA8, Pull::Up);
 
@@ -236,10 +249,12 @@ async fn main(spawner: Spawner) {
     let led_key = Output::new(p.PB4, Level::Low, Speed::VeryHigh);
     let led_ug = Output::new(p.PA0, Level::Low, Speed::VeryHigh);
 
-    spawner.must_spawn(scan_task(rows, cols, enc_a, enc_b, enc_sw, joy_sw));
+    spawner.must_spawn(scan_task(rows, cols, enc_sw, joy_sw));
+    spawner.must_spawn(encoder_task(enc_a, enc_b));
     spawner.must_spawn(adc_task(adc, joy_x, joy_y));
     spawner.must_spawn(touch_task(touch));
     spawner.must_spawn(led_task(led_key, led_ug));
+    info!("tasks spawned (scan/encoder/adc/touch/led); starting USB device");
 
     // USB device + report pumps + updater channel run forever on this task.
     let usb_fut = usb_dev.run();
@@ -258,11 +273,17 @@ async fn main(spawner: Spawner) {
     let updater = async {
         let mut buf = [0u8; 32];
         loop {
+            // `read` fails *immediately* while the endpoint is disabled — i.e.
+            // any time the host has not configured us yet. A bare `continue`
+            // here never awaits, so this future would never return Pending and
+            // would starve every other task on the executor. Back off instead.
             let Ok(_) = raw_reader.read(&mut buf).await else {
+                Timer::after_millis(100).await;
                 continue;
             };
             match buf[0] {
                 CMD_VERSION => {
+                    info!("updater: version query -> {}", FW_VERSION);
                     let mut reply = [0u8; 32];
                     reply[0] = CMD_VERSION;
                     reply[1] = FW_VERSION.len() as u8;
@@ -270,6 +291,7 @@ async fn main(spawner: Spawner) {
                     let _ = raw_writer.write(&reply).await;
                 }
                 CMD_ENTER_DFU if &buf[1..5] == ENTER_DFU_KEY => {
+                    warn!("updater: DFU reboot requested -> ROM bootloader");
                     let mut reply = [0u8; 32];
                     reply[0] = CMD_ENTER_DFU;
                     reply[1] = 0x01;
@@ -278,7 +300,7 @@ async fn main(spawner: Spawner) {
                     Timer::after_millis(50).await;
                     dfu::reboot_into_bootloader();
                 }
-                _ => {}
+                other => debug!("updater: unknown cmd 0x{=u8:02x}", other),
             }
         }
     };
@@ -286,16 +308,34 @@ async fn main(spawner: Spawner) {
 }
 
 /// 1 kHz matrix scan with 5 ms debounce + encoder quadrature + buttons.
+/// Quadrature transition table. A state is `(A << 1) | B`; the lookup index is
+/// `(prev << 2) | now`. ±1 mark a valid step either way; 0 covers "no change"
+/// and the illegal two-bit jumps that contact bounce produces.
+///
+/// A bare "did A change?" test cannot decode direction: in Gray code exactly
+/// one of A/B moves per step, so "A changed" always implies "B did not" — which
+/// is why the previous version could only ever emit one direction.
+#[rustfmt::skip]
+const QUAD_LUT: [i8; 16] = [
+     0,  1, -1,  0,
+    -1,  0,  0,  1,
+     1,  0,  0, -1,
+     0, -1,  1,  0,
+];
+
+/// Quadrature counts per detent — one full 4-state cycle on this EC11.
+const ENC_COUNTS_PER_DETENT: i8 = 4;
+
 #[embassy_executor::task]
 async fn scan_task(
     mut rows: [Output<'static>; 4],
     cols: [Input<'static>; 4],
-    enc_a: Input<'static>,
-    enc_b: Input<'static>,
     enc_sw: Input<'static>,
     joy_sw: Input<'static>,
 ) {
+    info!("scan_task: entered");
     let mut ticker = Ticker::every(Duration::from_millis(1));
+    let mut n: u32 = 0;
     let mut debounce = [[0u8; 4]; 4];
     let mut pressed = [[false; 4]; 4];
     let mut last_report = KeyboardReport {
@@ -304,7 +344,6 @@ async fn scan_task(
         leds: 0,
         keycodes: [0; 6],
     };
-    let mut enc_last = (enc_a.is_high(), enc_b.is_high());
     let mut enc_sw_last = enc_sw.is_high();
     let mut joy_sw_last = joy_sw.is_high();
 
@@ -328,6 +367,13 @@ async fn scan_task(
                         pressed[ri][ci] = raw;
                         debounce[ri][ci] = 0;
                         changed = true;
+                        info!(
+                            "matrix r{=usize} c{=usize} {} kc=0x{=u8:02x}",
+                            ri,
+                            ci,
+                            if raw { "DOWN" } else { "UP" },
+                            KEYMAP[ri][ci]
+                        );
                     }
                 }
             }
@@ -364,21 +410,11 @@ async fn scan_task(
             }
         }
 
-        // -- encoder (quadrature, one detent per full cycle) --
-        let now = (enc_a.is_high(), enc_b.is_high());
-        if now.0 != enc_last.0 && now.0 == now.1 {
-            let usage = if now.1 != enc_last.1 {
-                USAGE_VOL_UP
-            } else {
-                USAGE_VOL_DOWN
-            };
-            let _ = CONSUMER_CH.try_send(MediaKeyboardReport { usage_id: usage });
-            let _ = CONSUMER_CH.try_send(MediaKeyboardReport { usage_id: 0 });
-        }
-        enc_last = now;
-
         // -- encoder push -> mute, joystick push -> enter --
         let e = enc_sw.is_high();
+        if e != enc_sw_last {
+            info!("encoder switch {}", if e { "UP" } else { "DOWN" });
+        }
         if !e && enc_sw_last {
             let _ = CONSUMER_CH.try_send(MediaKeyboardReport {
                 usage_id: USAGE_MUTE,
@@ -389,6 +425,7 @@ async fn scan_task(
 
         let j = joy_sw.is_high();
         if j != joy_sw_last {
+            info!("joystick switch {}", if j { "UP" } else { "DOWN" });
             let mut r = last_report;
             if !j {
                 if let Some(slot) = r.keycodes.iter_mut().find(|k| **k == 0) {
@@ -398,6 +435,68 @@ async fn scan_task(
             let _ = KBD_CH.try_send(r);
         }
         joy_sw_last = j;
+
+        // ~1 s heartbeat of the raw levels. The four pins above only log on
+        // change, so this is what makes a stuck (or floating) line visible
+        // without anyone having to press anything.
+        n = n.wrapping_add(1);
+        if n % 1000 == 0 {
+            debug!(
+                "inputs: enc_sw={} joy_sw={} | cols={} {} {} {}",
+                e,
+                j,
+                cols[0].is_high(),
+                cols[1].is_high(),
+                cols[2].is_high(),
+                cols[3].is_high()
+            );
+        }
+    }
+}
+
+/// Rotary encoder, edge-driven. Every A/B transition raises EXTI, so nothing is
+/// lost to scan aliasing at speed or to the LED bit-bang's critical section.
+/// Contact bounce needs no filtering here: a bounce between two adjacent states
+/// yields +1 then -1, which the accumulator cancels on its own, and the illegal
+/// two-bit jumps map to 0 in the table.
+#[embassy_executor::task]
+async fn encoder_task(mut enc_a: ExtiInput<'static>, mut enc_b: ExtiInput<'static>) {
+    info!("encoder_task: entered");
+    let mut state = ((enc_a.is_high() as u8) << 1) | (enc_b.is_high() as u8);
+    let mut accum: i8 = 0;
+    loop {
+        embassy_futures::select::select(enc_a.wait_for_any_edge(), enc_b.wait_for_any_edge()).await;
+
+        let s = ((enc_a.is_high() as u8) << 1) | (enc_b.is_high() as u8);
+        if s == state {
+            continue;
+        }
+        // Negated: the board's ENC_A/ENC_B pin ordering runs opposite the
+        // table's sense, so without this a clockwise turn counts negative.
+        let delta = -QUAD_LUT[((state << 2) | s) as usize];
+        debug!(
+            "enc state {=u8} -> {=u8} delta={=i8} accum={=i8}",
+            state, s, delta, accum
+        );
+        state = s;
+        accum += delta;
+
+        while accum >= ENC_COUNTS_PER_DETENT {
+            accum -= ENC_COUNTS_PER_DETENT;
+            info!("encoder CW -> vol+");
+            let _ = CONSUMER_CH.try_send(MediaKeyboardReport {
+                usage_id: USAGE_VOL_UP,
+            });
+            let _ = CONSUMER_CH.try_send(MediaKeyboardReport { usage_id: 0 });
+        }
+        while accum <= -ENC_COUNTS_PER_DETENT {
+            accum += ENC_COUNTS_PER_DETENT;
+            info!("encoder CCW -> vol-");
+            let _ = CONSUMER_CH.try_send(MediaKeyboardReport {
+                usage_id: USAGE_VOL_DOWN,
+            });
+            let _ = CONSUMER_CH.try_send(MediaKeyboardReport { usage_id: 0 });
+        }
     }
 }
 
@@ -408,12 +507,20 @@ async fn adc_task(
     mut joy_x: peripherals::PB1,
     mut joy_y: peripherals::PB0,
 ) {
+    info!("adc_task: entered");
     let mut ticker = Ticker::every(Duration::from_millis(20));
     let mut last: u8 = 0;
+    let mut n: u32 = 0;
     loop {
         ticker.next().await;
         let x = adc.read(&mut joy_x).await;
         let y = adc.read(&mut joy_y).await;
+        // Once a second, so the raw swing can be eyeballed while the stick is
+        // moved — these are the numbers the thresholds below are judged against.
+        n = n.wrapping_add(1);
+        if n % 50 == 0 {
+            debug!("joystick raw x={=u16} y={=u16}", x, y);
+        }
         // 12-bit, centre ~2048, generous dead zone.
         let mut dir = 0u8;
         if x < 1024 {
@@ -426,6 +533,7 @@ async fn adc_task(
             dir = KC_DOWN;
         }
         if dir != last {
+            info!("joystick dir kc=0x{=u8:02x} (x={=u16} y={=u16})", dir, x, y);
             let report = KeyboardReport {
                 modifier: 0,
                 reserved: 0,
@@ -438,35 +546,100 @@ async fn adc_task(
     }
 }
 
-/// Cap-touch on PB9 by RC charge time: discharge the pad, release with the
-/// internal pull-up, count how long the input takes to read high. A finger
-/// adds capacitance -> longer rise. Self-calibrates a floating baseline.
+/// Cap-touch on PB9 by RC charge time: discharge the pad, release it to the
+/// internal pull-up, and count polls until the input reads high. A finger adds
+/// capacitance -> longer rise. Self-calibrates a floating baseline.
+///
+/// The rise is only ~20 CPU cycles at 48 MHz (~40 kOhm pull-up into ~15 pF), so
+/// the sense loop has to start essentially immediately after the pad is
+/// released. `Flex::set_as_input(Pull::Up)` rewrites PUPDR *and* MODER every
+/// call, which costs longer than the rise itself — the pad was always already
+/// high by the first sample, so `t` could only ever read 0 and the trigger
+/// (`t > baseline + baseline/2 + 8`) reduced to `0 > 8`, i.e. never.
+///
+/// So PUPDR and ODR are configured once up front and the loop flips *only*
+/// MODER, via a value computed before the critical section. Each tick sums
+/// several charge cycles: one cycle separates touched from untouched by just a
+/// handful of counts, and accumulating trades a little time for the SNR that
+/// makes the threshold meaningful.
 #[embassy_executor::task]
 async fn touch_task(mut pad: Flex<'static>) {
+    use embassy_stm32::pac;
+    use embassy_stm32::pac::gpio::regs::Moder;
+    use embassy_stm32::pac::gpio::vals::Idr;
+
+    /// PB9 — bit position within GPIOB's registers.
+    const PIN: usize = 9;
+    /// Charge cycles summed per tick. Each cycle only resolves ~3 counts, so
+    /// the sum is what gives the threshold something to bite on.
+    const SAMPLES: u32 = 64;
+    /// Cycles held low to fully drain the pad before each measurement.
+    const DISCHARGE_CYCLES: u32 = 48 * 20; // ~20 us
+    /// Escape hatch so a shorted or floating pad cannot wedge the loop.
+    const MAX_COUNT: u32 = 2_000;
+
+    info!("touch_task: entered");
+
+    // One-time setup: pull-up selected in PUPDR, ODR low so that flipping
+    // MODER to OUTPUT sinks the pad without touching any other register.
+    pad.set_as_input(Pull::Up);
+    let gpio = pac::GPIOB;
+    gpio.bsrr().write(|w| w.set_br(PIN, true));
+
     let mut ticker = Ticker::every(Duration::from_millis(30));
     let mut baseline: u32 = 0;
     let mut armed = true;
+    let mut n: u32 = 0;
+    let mut last_t: u32 = 0;
     loop {
         ticker.next().await;
-        // discharge
-        pad.set_as_output(Speed::Low);
-        pad.set_low();
-        Timer::after_micros(50).await;
-        // charge through the internal pull-up, count polls until high
-        pad.set_as_input(Pull::Up);
+
+        // Re-read MODER each tick so a pin reconfigured elsewhere is picked
+        // up; inside the critical section nothing else can change it, so the
+        // two cached values stay valid for the whole burst.
+        let base = gpio.moder().read().0 & !(0b11 << (PIN * 2));
+        let moder_input = Moder(base);
+        let moder_output = Moder(base | (0b01 << (PIN * 2)));
+
         let mut t: u32 = 0;
-        while pad.is_low() && t < 10_000 {
-            t += 1;
-        }
+        critical_section::with(|_| {
+            for _ in 0..SAMPLES {
+                gpio.moder().write_value(moder_output); // drive low, drain pad
+                cortex_m::asm::delay(DISCHARGE_CYCLES);
+                gpio.moder().write_value(moder_input); // release; poll at once
+                let mut c: u32 = 0;
+                while gpio.idr().read().idr(PIN) == Idr::LOW && c < MAX_COUNT {
+                    c += 1;
+                }
+                t += c;
+            }
+        });
+
         // exponential baseline of the untouched pad
         if baseline == 0 {
             baseline = t;
         }
-        let touched = t > baseline + baseline / 2 + 8;
+        // ~1 s cadence: the gap between `t` and `baseline` is what decides a
+        // touch, so both numbers are needed to tune the threshold below.
+        // Log on change as well as once a second: the untouched reading is
+        // dead stable, so any movement at all is the signal worth seeing.
+        n = n.wrapping_add(1);
+        if t != last_t || n % 33 == 0 {
+            debug!("touch charge t={=u32} baseline={=u32}", t, baseline);
+        }
+        last_t = t;
+        // 25% over baseline. Measured on hardware: untouched sits at exactly
+        // 192 with zero jitter over long runs, a finger reads 242..1015, and
+        // a hovering hand tops out around 218 — so this sits clear of both.
+        let touched = t > baseline + baseline / 4;
         if !touched {
             baseline = (baseline * 15 + t) / 16;
         }
         if touched && armed {
+            info!(
+                "touch DOWN (t={=u32} baseline={=u32}) -> play/pause",
+                t, baseline
+            );
             armed = false;
             let _ = CONSUMER_CH.try_send(MediaKeyboardReport {
                 usage_id: USAGE_PLAY_PAUSE,
@@ -483,12 +656,17 @@ async fn touch_task(mut pad: Flex<'static>) {
 /// inside the 500 mA VBUS budget.
 #[embassy_executor::task]
 async fn led_task(mut led_key: Output<'static>, mut led_ug: Output<'static>) {
+    info!("led_task: entered");
     let mut ticker = Ticker::every(Duration::from_millis(33));
     let mut phase: u8 = 0;
     loop {
         ticker.next().await;
         phase = phase.wrapping_add(1);
         let state = KEYSTATE.load(core::sync::atomic::Ordering::Relaxed);
+        // ~8.5 s heartbeat — cheap proof the executor is still scheduling.
+        if phase == 0 {
+            debug!("led: alive, keystate=0x{=u16:04x}", state);
+        }
 
         let mut keys = [ws2812::Grb::default(); 13];
         for (i, px) in keys.iter_mut().enumerate() {
