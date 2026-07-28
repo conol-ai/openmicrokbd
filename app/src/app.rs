@@ -455,6 +455,38 @@ live_design! {
         mr_del = <ButtonGhost> {text: "✕", padding: {left: 6, right: 6}}
     }
 
+    // One cell of the icon picker: a Lucide glyph as a button face.
+    IconBtn = <Button> {
+        width: 40, height: 40,
+        padding: 0, margin: 0,
+        align: {x: 0.5, y: 0.5},
+        draw_bg: {
+            color_dither: 0.0,
+            border_size: 1.0,
+            border_radius: 8.0,
+            color: (OM_RAIL),
+            color_hover: (OM_SURFACE_2),
+            color_down: (OM_HOVER),
+            color_focus: (OM_RAIL),
+            color_disabled: (OM_RAIL),
+            border_color_1: (OM_LINE_SOFT), border_color_2: (OM_LINE_SOFT),
+            border_color_1_hover: #3a3a43, border_color_2_hover: #3a3a43,
+            border_color_1_down: (OM_ACCENT), border_color_2_down: (OM_ACCENT),
+            border_color_1_focus: (OM_LINE_SOFT), border_color_2_focus: (OM_LINE_SOFT),
+            border_color_1_disabled: (OM_LINE_SOFT), border_color_2_disabled: (OM_LINE_SOFT),
+        }
+        draw_text: {
+            text_style: {
+                font_family: {latin = font("crate://self/resources/lucide.ttf", 0.0, 0.0)},
+                font_size: 15.0
+            },
+            color: (OM_TEXT_2),
+            color_hover: (OM_TEXT),
+            color_down: (OM_TEXT),
+            color_focus: (OM_TEXT_2),
+        }
+    }
+
     Banner = <RoundedView> {
         width: Fill, height: Fit,
         visible: false,
@@ -735,8 +767,9 @@ live_design! {
                                         width: Fill, height: Fit,
                                         flow: Right, spacing: 10, align: {y: 0.5},
                                         label_input = <Field> {width: 120, empty_text: "label"}
-                                        icon_input = <Field> {width: 190, empty_text: "lucide icon name"}
                                         icon_preview = <IconLabel> {}
+                                        icon_name = <Small> {text: "no icon"}
+                                        icon_pick_btn = <ButtonSecondary> {text: "Choose icon…"}
                                     }
                                     icon_note = <Small> {width: Fill, text: ""}
 
@@ -958,6 +991,59 @@ live_design! {
                             }
                         }
                     }
+
+                    icon_sheet = <Sheet> {
+                        <SheetCard> {
+                            width: 470,
+                            <View> {
+                                width: Fill, height: Fit, flow: Right, align: {y: 0.5},
+                                icon_sheet_title = <Title> {text: "Icon"}
+                                <Filler> {}
+                                icon_none_btn = <ButtonGhost> {text: "No icon"}
+                                icon_cancel = <ButtonGhost> {text: "Cancel"}
+                            }
+                            icon_search = <Field> {empty_text: "search the Lucide set — e.g. mic, git, arrow"}
+                            <View> {
+                                width: Fit, height: Fit, flow: Down, spacing: 6,
+                                <View> {
+                                    width: Fit, height: Fit, flow: Right, spacing: 6,
+                                    ic_0 = <IconBtn> {} ic_1 = <IconBtn> {} ic_2 = <IconBtn> {} ic_3 = <IconBtn> {}
+                                    ic_4 = <IconBtn> {} ic_5 = <IconBtn> {} ic_6 = <IconBtn> {} ic_7 = <IconBtn> {}
+                                }
+                                <View> {
+                                    width: Fit, height: Fit, flow: Right, spacing: 6,
+                                    ic_8 = <IconBtn> {} ic_9 = <IconBtn> {} ic_10 = <IconBtn> {} ic_11 = <IconBtn> {}
+                                    ic_12 = <IconBtn> {} ic_13 = <IconBtn> {} ic_14 = <IconBtn> {} ic_15 = <IconBtn> {}
+                                }
+                                <View> {
+                                    width: Fit, height: Fit, flow: Right, spacing: 6,
+                                    ic_16 = <IconBtn> {} ic_17 = <IconBtn> {} ic_18 = <IconBtn> {} ic_19 = <IconBtn> {}
+                                    ic_20 = <IconBtn> {} ic_21 = <IconBtn> {} ic_22 = <IconBtn> {} ic_23 = <IconBtn> {}
+                                }
+                                <View> {
+                                    width: Fit, height: Fit, flow: Right, spacing: 6,
+                                    ic_24 = <IconBtn> {} ic_25 = <IconBtn> {} ic_26 = <IconBtn> {} ic_27 = <IconBtn> {}
+                                    ic_28 = <IconBtn> {} ic_29 = <IconBtn> {} ic_30 = <IconBtn> {} ic_31 = <IconBtn> {}
+                                }
+                                <View> {
+                                    width: Fit, height: Fit, flow: Right, spacing: 6,
+                                    ic_32 = <IconBtn> {} ic_33 = <IconBtn> {} ic_34 = <IconBtn> {} ic_35 = <IconBtn> {}
+                                    ic_36 = <IconBtn> {} ic_37 = <IconBtn> {} ic_38 = <IconBtn> {} ic_39 = <IconBtn> {}
+                                }
+                                <View> {
+                                    width: Fit, height: Fit, flow: Right, spacing: 6,
+                                    ic_40 = <IconBtn> {} ic_41 = <IconBtn> {} ic_42 = <IconBtn> {} ic_43 = <IconBtn> {}
+                                    ic_44 = <IconBtn> {} ic_45 = <IconBtn> {} ic_46 = <IconBtn> {} ic_47 = <IconBtn> {}
+                                }
+                            }
+                            <View> {
+                                width: Fill, height: Fit, flow: Right, spacing: 8, align: {y: 0.5},
+                                icon_prev = <ButtonGhost> {text: "‹", padding: {left: 9, right: 9}}
+                                icon_next = <ButtonGhost> {text: "›", padding: {left: 9, right: 9}}
+                                icon_page_label = <Small> {width: Fill, text: ""}
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -974,6 +1060,14 @@ enum SheetKind {
     Settings,
     Macro,
     Firmware,
+    Icon,
+}
+
+/// Icon-picker page size (the 8×6 grid of pre-declared cells).
+const ICON_GRID: usize = 48;
+
+fn ic_id(i: usize) -> LiveId {
+    LiveId::from_str(&format!("ic_{i}"))
 }
 
 /// Where a recorded shortcut lands.
@@ -1020,6 +1114,11 @@ struct AppState {
     recording: RecordTarget,
     /// Scratch macro being edited in the sheet.
     macro_draft: Vec<MacroStepEntry>,
+    /// Icon picker: current search text, page, and the names behind the
+    /// visible grid cells (index-aligned with ic_0..ic_47).
+    icon_query: String,
+    icon_page: usize,
+    icon_page_names: Vec<&'static str>,
     /// Keyboard-usage list backing key_dd, index-aligned with its labels.
     kbd_usages: Vec<u16>,
     /// Consumer-usage list backing media_dd / action_media_dd.
@@ -1602,14 +1701,19 @@ impl App {
         // LABEL
         if set_inputs {
             self.ui.text_input(id!(label_input)).set_text(cx, &input.label);
-            self.ui.text_input(id!(icon_input)).set_text(cx, &input.icon);
         }
-        let (preview, icon_note) = match lucide::icon_char(&input.icon) {
-            Some(c) => (String::from(c), String::new()),
-            None if input.icon.is_empty() => (String::new(), String::new()),
-            None => (String::new(), format!("no Lucide icon named \"{}\"", input.icon)),
+        let (preview, name, icon_note) = match lucide::icon_char(&input.icon) {
+            Some(c) => (String::from(c), input.icon.clone(), String::new()),
+            None if input.icon.is_empty() => (String::new(), "no icon".into(), String::new()),
+            // Imported configs can carry names the bundled set lacks.
+            None => (
+                String::new(),
+                input.icon.clone(),
+                format!("no Lucide icon named \"{}\" in the bundled set", input.icon),
+            ),
         };
         self.ui.label(id!(icon_preview)).set_text(cx, &preview);
+        self.ui.label(id!(icon_name)).set_text(cx, &name);
         self.ui.label(id!(icon_note)).set_text(cx, &icon_note);
 
         // Joystick tuning, only where it applies.
@@ -1648,12 +1752,81 @@ impl App {
         self.ui
             .view(id!(fw_sheet))
             .set_visible(cx, kind == SheetKind::Firmware);
+        self.ui
+            .view(id!(icon_sheet))
+            .set_visible(cx, kind == SheetKind::Icon);
         if kind == SheetKind::Settings {
             self.refresh_settings(cx);
         }
         if kind == SheetKind::Macro {
             self.refresh_macro_sheet(cx);
         }
+        if kind == SheetKind::Icon {
+            self.refresh_icon_sheet(cx, true);
+        }
+        self.ui.redraw(cx);
+    }
+
+    /// Rebuild the icon grid from the current query + page. `set_input`
+    /// guards the search field (same caret rule as everywhere else).
+    fn refresh_icon_sheet(&mut self, cx: &mut Cx, set_input: bool) {
+        if set_input {
+            let q = self.state.icon_query.clone();
+            self.ui.text_input(id!(icon_search)).set_text(cx, &q);
+        }
+        let q = self.state.icon_query.trim().to_lowercase();
+        let matches: Vec<(&'static str, u32)> = lucide::ICONS
+            .iter()
+            .filter(|(name, _)| q.is_empty() || name.contains(q.as_str()))
+            .copied()
+            .collect();
+        let pages = matches.len().div_ceil(ICON_GRID).max(1);
+        self.state.icon_page = self.state.icon_page.min(pages - 1);
+        let start = self.state.icon_page * ICON_GRID;
+        let page: Vec<(&'static str, u32)> = matches
+            .iter()
+            .skip(start)
+            .take(ICON_GRID)
+            .copied()
+            .collect();
+        self.state.icon_page_names = page.iter().map(|(n, _)| *n).collect();
+        for i in 0..ICON_GRID {
+            let btn = self.ui.button(&[ic_id(i)]);
+            match page.get(i) {
+                Some(&(_, cp)) => {
+                    btn.set_visible(cx, true);
+                    btn.set_text(
+                        cx,
+                        &char::from_u32(cp).map(String::from).unwrap_or_default(),
+                    );
+                }
+                None => btn.set_visible(cx, false),
+            }
+        }
+        let label = if matches.is_empty() {
+            "no icons match".to_string()
+        } else {
+            format!(
+                "{} icon{} · page {}/{}",
+                matches.len(),
+                if matches.len() == 1 { "" } else { "s" },
+                self.state.icon_page + 1,
+                pages
+            )
+        };
+        self.ui.label(id!(icon_page_label)).set_text(cx, &label);
+        self.ui.button(id!(icon_prev)).set_enabled(cx, self.state.icon_page > 0);
+        self.ui
+            .button(id!(icon_next))
+            .set_enabled(cx, self.state.icon_page + 1 < pages);
+        let slot_label = self
+            .state
+            .selected
+            .map(|s| SLOT_NAMES[s])
+            .unwrap_or("input");
+        self.ui
+            .label(id!(icon_sheet_title))
+            .set_text(cx, &format!("Icon — {slot_label}"));
         self.ui.redraw(cx);
     }
 
@@ -1829,6 +2002,46 @@ impl App {
     /// Widget handling for whichever sheet is open — the only live
     /// surface while one is (handle_actions returns early).
     fn handle_sheet_actions(&mut self, cx: &mut Cx, actions: &Actions) {
+        // ---- icon picker ----
+        if self.ui.button(id!(icon_cancel)).clicked(actions) {
+            self.open_sheet(cx, SheetKind::None);
+        }
+        if self.ui.button(id!(icon_none_btn)).clicked(actions) {
+            if let Some(slot) = self.state.selected {
+                self.input_mut(slot).icon = String::new();
+                self.persist(cx);
+                self.refresh_editor(cx, false);
+            }
+            self.open_sheet(cx, SheetKind::None);
+        }
+        if let Some(q) = self.ui.text_input(id!(icon_search)).changed(actions) {
+            self.state.icon_query = q;
+            self.state.icon_page = 0;
+            self.refresh_icon_sheet(cx, false);
+        }
+        if self.ui.button(id!(icon_prev)).clicked(actions) {
+            self.state.icon_page = self.state.icon_page.saturating_sub(1);
+            self.refresh_icon_sheet(cx, false);
+        }
+        if self.ui.button(id!(icon_next)).clicked(actions) {
+            self.state.icon_page += 1;
+            self.refresh_icon_sheet(cx, false);
+        }
+        if self.state.sheet == SheetKind::Icon {
+            for i in 0..ICON_GRID.min(self.state.icon_page_names.len()) {
+                if self.ui.button(&[ic_id(i)]).clicked(actions) {
+                    let name = self.state.icon_page_names[i];
+                    if let Some(slot) = self.state.selected {
+                        self.input_mut(slot).icon = name.to_string();
+                        self.persist(cx);
+                        self.refresh_editor(cx, false);
+                    }
+                    self.open_sheet(cx, SheetKind::None);
+                    break;
+                }
+            }
+        }
+
         // ---- settings sheet ----
         if self.ui.button(id!(settings_close)).clicked(actions) {
             self.state.confirm_reset = false;
@@ -2554,10 +2767,10 @@ impl MatchEvent for App {
                 self.persist(cx);
                 self.refresh_editor(cx, false);
             }
-            if let Some(text) = self.ui.text_input(id!(icon_input)).changed(actions) {
-                self.input_mut(slot).icon = text;
-                self.persist(cx);
-                self.refresh_editor(cx, false);
+            if self.ui.button(id!(icon_pick_btn)).clicked(actions) {
+                self.state.icon_query.clear();
+                self.state.icon_page = 0;
+                self.open_sheet(cx, SheetKind::Icon);
             }
             if let Some(v) = self.ui.slider(id!(thr_slider)).slided(actions) {
                 let a = self.state.config.active_profile;
