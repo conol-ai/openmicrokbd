@@ -493,8 +493,19 @@ live_design! {
                             flow: Right, spacing: 6,
                             align: {x: 0.5, y: 0.5},
                             prof_prev = <ButtonGhost> {text: "‹", padding: {left: 9, right: 9}}
-                            profile_dd = <DropDown> {width: 190}
+                            // The switcher and the rename field share the
+                            // slot; the pen toggles which one is live.
+                            prof_dd_wrap = <View> {
+                                width: Fit, height: Fit,
+                                profile_dd = <DropDown> {width: 190}
+                            }
+                            prof_rename_wrap = <View> {
+                                width: Fit, height: Fit,
+                                visible: false,
+                                prof_rename = <Field> {width: 190, empty_text: "profile name"}
+                            }
                             prof_next = <ButtonGhost> {text: "›", padding: {left: 9, right: 9}}
+                            prof_edit = <ButtonGhost> {text: "✎", padding: {left: 8, right: 8}}
                             prof_new = <ButtonGhost> {text: "＋", padding: {left: 8, right: 8}}
                             prof_del = <ButtonGhost> {text: "−", padding: {left: 9, right: 9}}
                         }
@@ -789,13 +800,6 @@ live_design! {
                                 menubar_cb = <CheckBox> {text: "Show menubar icon"}
                             }
                             <Rule> {}
-                            <Eyebrow> {text: "ACTIVE PROFILE"}
-                            <View> {
-                                width: Fill, height: Fit, flow: Right, spacing: 10, align: {y: 0.5},
-                                profile_name_input = <Field> {width: 220}
-                                <Small> {text: "rename the active profile"}
-                            }
-                            <Rule> {}
                             <Eyebrow> {text: "CONFIG"}
                             <View> {
                                 width: Fill, height: Fit, flow: Right, spacing: 10, align: {y: 0.5},
@@ -1026,6 +1030,9 @@ struct AppState {
     /// Per-cell press-flash timers (encoder rotation, touch taps).
     flash_timers: Vec<(usize, Timer)>,
     fw_banner_dismissed: bool,
+    /// The strip's pen toggled into rename mode (the dropdown swaps for a
+    /// text field until Enter/pen commits or Escape cancels).
+    renaming_profile: bool,
     /// Two-step confirms (disarmed by their timers, not by other clicks —
     /// a button's own press action must not cancel its confirmation).
     confirm_delete: bool,
@@ -1176,9 +1183,20 @@ impl App {
         let dd = self.ui.drop_down(id!(profile_dd));
         dd.set_labels(cx, names.clone());
         dd.set_selected_item(cx, self.state.config.active_profile);
+        let renaming = self.state.renaming_profile;
+        self.ui.view(id!(prof_dd_wrap)).set_visible(cx, !renaming);
+        self.ui.view(id!(prof_rename_wrap)).set_visible(cx, renaming);
+        self.ui
+            .button(id!(prof_edit))
+            .set_text(cx, if renaming { "✓" } else { "✎" });
+        // Switching, creating or deleting mid-rename would rename the wrong
+        // profile; those controls sleep until the rename resolves.
+        self.ui.button(id!(prof_prev)).set_enabled(cx, !renaming);
+        self.ui.button(id!(prof_next)).set_enabled(cx, !renaming);
+        self.ui.button(id!(prof_new)).set_enabled(cx, !renaming);
         self.ui
             .button(id!(prof_del))
-            .set_enabled(cx, self.state.config.profiles.len() > 1);
+            .set_enabled(cx, !renaming && self.state.config.profiles.len() > 1);
         if let Some(menubar) = &mut self.state.menubar {
             let (v, s) = self
                 .state
@@ -1646,10 +1664,6 @@ impl App {
         self.ui
             .check_box(id!(menubar_cb))
             .set_active(cx, self.state.config.show_menubar);
-        let name = self.active_profile().name.clone();
-        self.ui
-            .text_input(id!(profile_name_input))
-            .set_text(cx, &name);
         let trusted = actions::accessibility_trusted();
         self.ui.label(id!(perm_status)).set_text(
             cx,
@@ -1765,7 +1779,38 @@ impl App {
     }
 
     // ------------------------------------------------------------ profiles
+    /// Enter/leave rename mode on the strip. `commit` applies the field's
+    /// text (trimmed, non-empty) to the active profile.
+    fn end_rename(&mut self, cx: &mut Cx, commit: bool) {
+        if !self.state.renaming_profile {
+            return;
+        }
+        self.state.renaming_profile = false;
+        if commit {
+            let name = self.ui.text_input(id!(prof_rename)).text().trim().to_string();
+            if !name.is_empty() {
+                let a = self.state.config.active_profile;
+                self.state.config.profiles[a].name = name;
+                self.persist(cx);
+            }
+        }
+        self.refresh_profile_strip(cx);
+    }
+
+    fn begin_rename(&mut self, cx: &mut Cx) {
+        self.state.renaming_profile = true;
+        let name = self.active_profile().name.clone();
+        let input = self.ui.text_input(id!(prof_rename));
+        input.set_text(cx, &name);
+        self.refresh_profile_strip(cx);
+        input.set_key_focus(cx);
+    }
+
     fn switch_profile(&mut self, cx: &mut Cx, idx: usize) {
+        // A switch arriving mid-rename (menubar click) drops the edit —
+        // committing it against the newly active profile would rename the
+        // wrong one.
+        self.end_rename(cx, false);
         if idx >= self.state.config.profiles.len() {
             return;
         }
@@ -1805,12 +1850,6 @@ impl App {
                 menubar.set_visible(on);
             }
             self.persist(cx);
-        }
-        if let Some(text) = self.ui.text_input(id!(profile_name_input)).changed(actions) {
-            let a = self.state.config.active_profile;
-            self.state.config.profiles[a].name = text;
-            self.persist(cx);
-            self.refresh_profile_strip(cx);
         }
         if self.ui.button(id!(export_btn)).clicked(actions) {
             if let Some(path) = rfd::FileDialog::new()
@@ -2253,6 +2292,19 @@ impl MatchEvent for App {
             let n = self.state.config.profiles.len();
             let idx = (self.state.config.active_profile + 1) % n;
             self.switch_profile(cx, idx);
+        }
+        if self.ui.button(id!(prof_edit)).clicked(actions) {
+            if self.state.renaming_profile {
+                self.end_rename(cx, true);
+            } else {
+                self.begin_rename(cx);
+            }
+        }
+        if let Some(_done) = self.ui.text_input(id!(prof_rename)).returned(actions) {
+            self.end_rename(cx, true);
+        }
+        if self.ui.text_input(id!(prof_rename)).escaped(actions) {
+            self.end_rename(cx, false);
         }
         if self.ui.button(id!(prof_new)).clicked(actions) {
             let n = self.state.config.profiles.len() + 1;
