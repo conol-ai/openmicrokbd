@@ -10,15 +10,15 @@ cargo run --release
 
 ## The shape of it
 
-A single surface, not tabs: **the pad is the home screen** and the only
-permanent view. A slim profile strip on top, the grid drawn true to life in
-the middle — encoder and joystick as dials, the touch pad as a disc, and all
-**13 keys as independent 1U cells** — and a status line at the bottom
-(connection dot, firmware + serial when connected, settings gear). Selecting
-any input opens its editor beside the grid; macros, settings and firmware
-updates are sheets over the pad; a menubar item carries profile switching and
-connection status. Disconnected, the grid ghosts and a card explains —
-profiles live in the app, so everything stays editable.
+A single surface, not tabs: a product header keeps the active profile,
+connection state, and settings close; beneath it, a board-like hardware map
+and a structured input inspector share the workspace. The map is drawn true
+to life — encoder and joystick as dials, the touch pad as a disc, and all
+**13 keys as independent 1U cells**. Selecting any input opens its editor
+beside the grid; macros, settings and firmware updates are focused sheets over
+the pad; a menubar item carries profile switching and connection status.
+Disconnected, the board remains fully legible and an offline-editing callout
+explains that the active profile will sync when the pad returns.
 
 ## How an input does something
 

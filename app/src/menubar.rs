@@ -40,7 +40,10 @@ fn tray_icon() -> Option<Icon> {
     };
     let plate = [30, 30, 34, 255];
     let pip = [160, 160, 170, 255];
-    let lit = [16, 163, 127, 255];
+    // The tray icon is static across platforms, so use the app's amber
+    // signature rather than a green pip that would falsely imply a live
+    // device connection while the pad is offline.
+    let lit = [242, 170, 76, 255];
     for y in 0..S {
         for x in 0..S {
             // Rounded-square coverage test on the plate.

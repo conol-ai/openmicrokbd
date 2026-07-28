@@ -1,11 +1,12 @@
 //! The OpenMicro companion app (makepad GUI) — PRD single-surface redesign.
 //!
-//! One surface, no tabs: the pad is the home screen and the only permanent
-//! view. A slim profile strip on top, the true-to-life grid in the middle
-//! (encoder and joystick as dials, touch pad as a disc, all 13 keys
-//! independent 1U cells), a status line at the bottom. Selecting any input
-//! opens its editor beside the grid; macros, settings and firmware updates
-//! are sheets over the pad. A menubar item mirrors profiles and connection.
+//! One surface, no tabs: a product header keeps profiles and connection
+//! state close; a board-like hardware map and a structured input inspector
+//! share the workspace. The map shows the encoder and joystick as dials, the
+//! touch pad as a disc, and all 13 keys as independent 1U cells. Selecting
+//! any input opens its editor beside the grid; macros, settings and firmware
+//! updates are focused sheets over the pad. A menubar item mirrors profiles
+//! and connection.
 //!
 //! Two layers make a key "do" something (see the PRD's architecture):
 //!   1. the pad EMITS a configurable HID code (stored in device flash,
@@ -44,58 +45,86 @@ live_design! {
     use link::widgets::*;
 
     // ---------------------------------------------------------------- palette
-    // PRD design language: dark neutral surfaces, ONE warm amber accent
-    // (the hardware's LED character), signal green strictly for
-    // connected/configured, red strictly for errors.
-    OM_BG          = #0c0c0e
-    OM_RAIL        = #0a0a0c
-    OM_SURFACE     = #151518
-    OM_SURFACE_2   = #1c1c20
-    OM_HOVER       = #232328
-    OM_LINE        = #2a2a31
-    OM_LINE_SOFT   = #1f1f25
-    OM_TEXT        = #f4f4f5
-    OM_TEXT_2      = #a3a3ad
-    OM_TEXT_3      = #70707c
-    OM_ACCENT      = #e2a44b
-    OM_OK          = #10a37f
-    OM_DANGER      = #f0555c
-    OM_WHITE       = #fafafa
-    OM_INK         = #0b0b0d
+    // Deep graphite surfaces with a warm hardware-inspired amber. Green is
+    // reserved for healthy device state and red for errors/destructive acts.
+    OM_BG          = #080a0e
+    OM_RAIL        = #0c0f14
+    OM_SURFACE     = #11151c
+    OM_SURFACE_2   = #171c25
+    OM_SURFACE_3   = #1e2530
+    OM_HOVER       = #242c38
+    OM_BOARD       = #0d1217
+    OM_LINE        = #2a3340
+    OM_LINE_SOFT   = #1c232d
+    OM_LINE_BRIGHT = #3a4656
+    OM_TEXT        = #f4f1ea
+    OM_TEXT_2      = #b9b5ad
+    OM_TEXT_3      = #9297a0
+    OM_ACCENT      = #f2aa4c
+    OM_ACCENT_HI   = #ffc36b
+    OM_ACCENT_SOFT = #3a2917
+    OM_OK          = #44d19d
+    OM_OK_SOFT     = #123127
+    OM_DANGER      = #ff6d75
+    OM_DANGER_SOFT = #361a20
+    OM_WHITE       = #fffaf1
+    OM_INK         = #15100a
     OM_CLEAR       = #0000
 
     // ------------------------------------------------------------ typography
+    Display = <Label> {
+        width: Fit,
+        padding: 0,
+        draw_text: {
+            text_style: <THEME_FONT_BOLD> {font_size: 18.0},
+            color: (OM_TEXT)
+        }
+    }
+    Heading = <Label> {
+        width: Fit,
+        padding: 0,
+        draw_text: {
+            text_style: <THEME_FONT_BOLD> {font_size: 14.0},
+            color: (OM_TEXT)
+        }
+    }
     Title = <Label> {
         width: Fit,
-        draw_text: {text_style: <THEME_FONT_BOLD> {font_size: 12.0}, color: (OM_TEXT)}
+        padding: 0,
+        draw_text: {text_style: <THEME_FONT_BOLD> {font_size: 13.0}, color: (OM_TEXT)}
     }
     Body = <Label> {
         width: Fill,
+        padding: 0,
         draw_text: {
-            text_style: <THEME_FONT_REGULAR> {font_size: 11.0, line_spacing: 1.5},
+            text_style: <THEME_FONT_REGULAR> {font_size: 11.5, line_spacing: 1.45},
             color: (OM_TEXT_2)
         }
     }
     Small = <Label> {
         width: Fit,
-        draw_text: {text_style: <THEME_FONT_REGULAR> {font_size: 10.0}, color: (OM_TEXT_3)}
+        padding: 0,
+        draw_text: {text_style: <THEME_FONT_REGULAR> {font_size: 10.5}, color: (OM_TEXT_3)}
     }
     Eyebrow = <Label> {
         width: Fit,
-        draw_text: {text_style: <THEME_FONT_BOLD> {font_size: 9.0}, color: (OM_TEXT_3)}
+        padding: 0,
+        draw_text: {text_style: <THEME_FONT_BOLD> {font_size: 9.5}, color: (OM_TEXT_3)}
     }
     Mono = <Label> {
         width: Fit,
-        draw_text: {text_style: <THEME_FONT_CODE> {font_size: 9.5}, color: (OM_TEXT_3)}
+        padding: 0,
+        draw_text: {text_style: <THEME_FONT_CODE> {font_size: 10.0}, color: (OM_TEXT_3)}
     }
     // The Lucide icon font: text is a single glyph picked by codepoint
     // (lucide.rs maps names -> chars). Ships the full 2000-icon set.
     IconLabel = <Label> {
         width: Fit,
+        padding: 0,
         draw_text: {
             text_style: {
                 font_family: {latin = font("crate://self/resources/lucide.ttf", 0.0, 0.0)},
-                font_size: 15.0
+                font_size: 17.0
             },
             color: (OM_TEXT)
         }
@@ -104,10 +133,33 @@ live_design! {
     // ------------------------------------------------------------ primitives
     Card = <RoundedView> {
         width: Fill, height: Fit,
-        flow: Down, spacing: 14, padding: 20,
+        flow: Down, spacing: 16, padding: 20,
         draw_bg: {
             color: (OM_SURFACE),
-            border_radius: 12.0,
+            border_radius: 14.0,
+            border_size: 1.0,
+            border_color: (OM_LINE_SOFT)
+        }
+    }
+
+    SectionCard = <RoundedView> {
+        width: Fill, height: Fit,
+        flow: Down, spacing: 9,
+        padding: {left: 16, right: 16, top: 13, bottom: 14},
+        draw_bg: {
+            color: (OM_CLEAR),
+            border_radius: 0.0,
+            border_size: 0.0,
+            border_color: (OM_CLEAR)
+        }
+    }
+
+    Inset = <RoundedView> {
+        width: Fill, height: Fit,
+        flow: Down, spacing: 6, padding: 8,
+        draw_bg: {
+            color: (OM_RAIL),
+            border_radius: 8.0,
             border_size: 1.0,
             border_color: (OM_LINE_SOFT)
         }
@@ -133,17 +185,61 @@ live_design! {
         }
     }
 
+    AppMark = <View> {
+        width: 42, height: 42,
+        show_bg: true,
+        draw_bg: {
+            color: (OM_CLEAR)
+            uniform plate: (OM_SURFACE_2)
+            uniform edge: (OM_LINE_BRIGHT)
+            uniform key: (OM_TEXT_3)
+            uniform lit: (OM_ACCENT)
+            fn pixel(self) -> vec4 {
+                let sdf = Sdf2d::viewport(self.pos * self.rect_size);
+                let unit = self.rect_size.x / 32.0;
+                sdf.box(1.0, 1.0, self.rect_size.x - 2.0, self.rect_size.y - 2.0, 9.0 * unit);
+                sdf.fill_keep(self.plate);
+                sdf.stroke(self.edge, 1.0);
+                sdf.box(7.0 * unit, 7.0 * unit, 6.0 * unit, 6.0 * unit, 1.6 * unit); sdf.fill(self.key);
+                sdf.box(19.0 * unit, 7.0 * unit, 6.0 * unit, 6.0 * unit, 1.6 * unit); sdf.fill(self.key);
+                sdf.box(7.0 * unit, 19.0 * unit, 6.0 * unit, 6.0 * unit, 1.6 * unit); sdf.fill(self.key);
+                sdf.box(19.0 * unit, 19.0 * unit, 6.0 * unit, 6.0 * unit, 1.6 * unit); sdf.fill(self.lit);
+                return sdf.result;
+            }
+        }
+    }
+
+    SectionNumber = <RoundedView> {
+        width: 22, height: 22,
+        align: {x: 0.5, y: 0.5},
+        draw_bg: {
+            color: (OM_ACCENT_SOFT),
+            border_radius: 11.0,
+            border_size: 1.0,
+            border_color: #6b4a26
+        }
+        section_number = <Label> {
+            padding: 0,
+            draw_text: {
+                text_style: <THEME_FONT_BOLD> {font_size: 10.0},
+                color: (OM_ACCENT_HI)
+            }
+        }
+    }
+
     Pill = <RoundedView> {
         width: Fit, height: Fit,
-        padding: {left: 10, right: 10, top: 5, bottom: 5},
+        flow: Right, spacing: 7, align: {y: 0.5},
+        padding: {left: 9, right: 9, top: 5, bottom: 5},
         draw_bg: {
             color: (OM_SURFACE_2),
-            border_radius: 10.0,
+            border_radius: 13.0,
             border_size: 1.0,
             border_color: (OM_LINE)
         }
         pill_label = <Label> {
-            draw_text: {text_style: <THEME_FONT_REGULAR> {font_size: 9.5}, color: (OM_TEXT_2)}
+            padding: 0,
+            draw_text: {text_style: <THEME_FONT_BOLD> {font_size: 9.5}, color: (OM_TEXT_2)}
         }
     }
 
@@ -157,6 +253,7 @@ live_design! {
             border_color: (OM_LINE)
         }
         chip_label = <Label> {
+            padding: 0,
             draw_text: {text_style: <THEME_FONT_CODE> {font_size: 9.5}, color: (OM_TEXT_2)}
         }
     }
@@ -164,17 +261,17 @@ live_design! {
     // --------------------------------------------------------------- buttons
     ButtonPrimary = <Button> {
         height: 34,
-        padding: {left: 17, right: 17, top: 0, bottom: 0},
+        padding: {left: 15, right: 15, top: 0, bottom: 0},
         margin: 0,
         align: {x: 0.5, y: 0.5},
         draw_bg: {
             color_dither: 0.0,
             border_size: 0.0,
             border_radius: 8.0,
-            color: (OM_WHITE),
-            color_hover: #e6e6e8,
-            color_down: #cfcfd4,
-            color_focus: (OM_WHITE),
+            color: (OM_ACCENT),
+            color_hover: (OM_ACCENT_HI),
+            color_down: #d78d36,
+            color_focus: (OM_ACCENT),
             color_disabled: (OM_SURFACE_2),
             border_color_1: (OM_CLEAR), border_color_2: (OM_CLEAR),
             border_color_1_hover: (OM_CLEAR), border_color_2_hover: (OM_CLEAR),
@@ -183,7 +280,7 @@ live_design! {
             border_color_1_disabled: (OM_CLEAR), border_color_2_disabled: (OM_CLEAR),
         }
         draw_text: {
-            text_style: <THEME_FONT_BOLD> {font_size: 11.0},
+            text_style: <THEME_FONT_BOLD> {font_size: 11.5},
             color: (OM_INK),
             color_hover: (OM_INK),
             color_down: (OM_INK),
@@ -197,17 +294,17 @@ live_design! {
             border_size: 1.0,
             color: (OM_SURFACE_2),
             color_hover: (OM_HOVER),
-            color_down: #292930,
+            color_down: (OM_SURFACE_3),
             color_focus: (OM_SURFACE_2),
             color_disabled: (OM_SURFACE),
             border_color_1: (OM_LINE), border_color_2: (OM_LINE),
-            border_color_1_hover: #3a3a43, border_color_2_hover: #3a3a43,
-            border_color_1_down: #3a3a43, border_color_2_down: #3a3a43,
+            border_color_1_hover: (OM_LINE_BRIGHT), border_color_2_hover: (OM_LINE_BRIGHT),
+            border_color_1_down: (OM_LINE_BRIGHT), border_color_2_down: (OM_LINE_BRIGHT),
             border_color_1_focus: (OM_LINE), border_color_2_focus: (OM_LINE),
             border_color_1_disabled: (OM_LINE_SOFT), border_color_2_disabled: (OM_LINE_SOFT),
         }
         draw_text: {
-            text_style: <THEME_FONT_REGULAR> {font_size: 11.0},
+            text_style: <THEME_FONT_BOLD> {font_size: 11.0},
             color: (OM_TEXT),
             color_hover: (OM_TEXT),
             color_down: (OM_TEXT),
@@ -218,7 +315,7 @@ live_design! {
 
     ButtonGhost = <ButtonSecondary> {
         height: 30,
-        padding: {left: 10, right: 10, top: 0, bottom: 0},
+        padding: {left: 11, right: 11, top: 0, bottom: 0},
         draw_bg: {
             border_size: 0.0,
             color: (OM_CLEAR),
@@ -228,27 +325,78 @@ live_design! {
             color_disabled: (OM_CLEAR),
         }
         draw_text: {
-            text_style: <THEME_FONT_REGULAR> {font_size: 10.5},
-            color: (OM_TEXT_3),
+            text_style: <THEME_FONT_BOLD> {font_size: 10.5},
+            color: (OM_TEXT_2),
             color_hover: (OM_TEXT),
             color_down: (OM_TEXT),
             color_focus: (OM_TEXT_3),
         }
     }
 
+    // Icon-only chrome uses the bundled Lucide font rather than a mixture of
+    // platform-dependent Unicode symbols.
+    IconButton = <ButtonGhost> {
+        width: 30,
+        padding: 0,
+        draw_text: {
+            text_style: {
+                font_family: {latin = font("crate://self/resources/lucide.ttf", 0.0, 0.0)},
+                font_size: 14.0
+            },
+            color: (OM_TEXT_2),
+            color_hover: (OM_TEXT),
+            color_down: (OM_ACCENT_HI),
+            color_focus: (OM_TEXT_2)
+        }
+    }
+
+    ButtonDanger = <ButtonSecondary> {
+        draw_bg: {
+            color: (OM_CLEAR),
+            color_hover: (OM_DANGER_SOFT),
+            color_down: #482129,
+            color_focus: (OM_CLEAR),
+            border_color_1: (OM_CLEAR), border_color_2: (OM_CLEAR),
+            border_color_1_hover: #66303a, border_color_2_hover: #66303a,
+            border_color_1_down: #66303a, border_color_2_down: #66303a,
+            border_color_1_focus: (OM_CLEAR), border_color_2_focus: (OM_CLEAR),
+        }
+        draw_text: {
+            color: (OM_DANGER),
+            color_hover: #ff9096,
+            color_down: #ff9096,
+            color_focus: (OM_DANGER),
+        }
+    }
+
+    IconDanger = <IconButton> {
+        draw_bg: {
+            color: (OM_CLEAR),
+            color_hover: (OM_DANGER_SOFT),
+            color_down: #482129,
+            color_focus: (OM_CLEAR),
+        }
+        draw_text: {
+            color: (OM_DANGER),
+            color_hover: #ff9096,
+            color_down: #ff9096,
+            color_focus: (OM_DANGER),
+        }
+    }
+
     Segment = <ButtonPrimary> {
         height: 28,
-        padding: {left: 13, right: 13, top: 0, bottom: 0},
+        padding: {left: 12, right: 12, top: 0, bottom: 0},
         draw_bg: {
             border_size: 0.0,
-            border_radius: 6.5,
+            border_radius: 7.0,
             color: (OM_CLEAR),
             color_hover: (OM_SURFACE_2),
             color_down: (OM_HOVER),
             color_focus: (OM_CLEAR),
         }
         draw_text: {
-            text_style: <THEME_FONT_REGULAR> {font_size: 10.5},
+            text_style: <THEME_FONT_BOLD> {font_size: 10.5},
             color: (OM_TEXT_3),
             color_hover: (OM_TEXT_2),
             color_down: (OM_TEXT),
@@ -259,12 +407,12 @@ live_design! {
     Field = <TextInput> {
         width: Fill, height: Fit,
         margin: 0,
-        padding: {left: 12, right: 12, top: 10, bottom: 10},
+        padding: {left: 11, right: 11, top: 9, bottom: 9},
         empty_text: "",
         draw_bg: {
             color_dither: 0.0,
             border_size: 1.0,
-            border_radius: 8.0,
+            border_radius: 9.0,
             color: (OM_RAIL),
             color_hover: (OM_RAIL),
             color_focus: (OM_RAIL),
@@ -272,14 +420,14 @@ live_design! {
             color_empty: (OM_RAIL),
             color_disabled: (OM_SURFACE),
             border_color_1: (OM_LINE), border_color_2: (OM_LINE),
-            border_color_1_hover: #3a3a43, border_color_2_hover: #3a3a43,
+            border_color_1_hover: (OM_LINE_BRIGHT), border_color_2_hover: (OM_LINE_BRIGHT),
             border_color_1_focus: (OM_ACCENT), border_color_2_focus: (OM_ACCENT),
             border_color_1_down: (OM_ACCENT), border_color_2_down: (OM_ACCENT),
             border_color_1_empty: (OM_LINE), border_color_2_empty: (OM_LINE),
             border_color_1_disabled: (OM_LINE_SOFT), border_color_2_disabled: (OM_LINE_SOFT),
         }
         draw_text: {
-            text_style: <THEME_FONT_REGULAR> {font_size: 11.0},
+            text_style: <THEME_FONT_REGULAR> {font_size: 12.0},
             color: (OM_TEXT),
             color_hover: (OM_TEXT),
             color_focus: (OM_TEXT),
@@ -291,12 +439,185 @@ live_design! {
         }
         draw_cursor: {color: (OM_ACCENT)}
         draw_selection: {
-            color: #e2a44b44,
-            color_hover: #e2a44b44,
-            color_focus: #e2a44b44,
-            color_down: #e2a44b44,
-            color_empty: #e2a44b44,
+            color: #f2aa4c44,
+            color_hover: #f2aa4c44,
+            color_focus: #f2aa4c44,
+            color_down: #f2aa4c44,
+            color_empty: #f2aa4c44,
         }
+    }
+
+    SelectMenuItem = <PopupMenuItem> {
+        height: Fit,
+        padding: {left: 24, right: 14, top: 10, bottom: 10},
+        draw_text: {
+            text_style: <THEME_FONT_REGULAR> {font_size: 11.5},
+            color: (OM_TEXT_2),
+            color_hover: (OM_TEXT),
+            color_active: (OM_ACCENT_HI),
+            color_disabled: (OM_TEXT_3)
+        }
+        draw_bg: {
+            color_dither: 0.0,
+            border_size: 0.0,
+            border_radius: 7.0,
+            color: (OM_CLEAR),
+            color_hover: (OM_HOVER),
+            color_active: (OM_ACCENT_SOFT),
+            color_disabled: (OM_CLEAR),
+            mark_color: (OM_CLEAR),
+            mark_color_active: (OM_ACCENT),
+            mark_color_disabled: (OM_TEXT_3)
+        }
+    }
+
+    SelectMenu = <PopupMenu> {
+        width: 220, height: Fit,
+        flow: Down, padding: 6,
+        menu_item: <SelectMenuItem> {}
+        draw_bg: {
+            color_dither: 0.0,
+            color: (OM_SURFACE_3),
+            border_radius: 10.0,
+            border_size: 1.0,
+            border_color_1: (OM_LINE_BRIGHT),
+            border_color_2: (OM_LINE_BRIGHT)
+        }
+    }
+
+    Select = <DropDown> {
+        height: 34,
+        align: {x: 0.0, y: 0.5},
+        margin: 0,
+        padding: {left: 13, right: 30, top: 0, bottom: 0},
+        popup_menu: <SelectMenu> {}
+        draw_text: {
+            text_style: <THEME_FONT_REGULAR> {font_size: 11.5},
+            color: (OM_TEXT),
+            color_hover: (OM_TEXT),
+            color_focus: (OM_TEXT),
+            color_down: (OM_TEXT),
+            color_disabled: (OM_TEXT_3)
+        }
+        draw_bg: {
+            color_dither: 0.0,
+            border_size: 1.0,
+            border_radius: 9.0,
+            color: (OM_RAIL),
+            color_hover: (OM_SURFACE_2),
+            color_down: (OM_SURFACE_3),
+            color_focus: (OM_RAIL),
+            color_disabled: (OM_SURFACE),
+            border_color_1: (OM_LINE), border_color_2: (OM_LINE),
+            border_color_1_hover: (OM_LINE_BRIGHT), border_color_2_hover: (OM_LINE_BRIGHT),
+            border_color_1_focus: (OM_ACCENT), border_color_2_focus: (OM_ACCENT),
+            border_color_1_down: (OM_ACCENT), border_color_2_down: (OM_ACCENT),
+            border_color_1_disabled: (OM_LINE_SOFT), border_color_2_disabled: (OM_LINE_SOFT),
+            arrow_color: (OM_TEXT_3),
+            arrow_color_hover: (OM_TEXT),
+            arrow_color_focus: (OM_ACCENT),
+            arrow_color_down: (OM_ACCENT),
+            arrow_color_disabled: (OM_TEXT_3)
+        }
+    }
+
+    Toggle = <CheckBox> {
+        padding: {left: 0, right: 0, top: 4, bottom: 4},
+        label_walk: {width: Fit, height: Fit, margin: {left: 9}}
+        draw_text: {
+            text_style: <THEME_FONT_REGULAR> {font_size: 11.5},
+            color: (OM_TEXT_2),
+            color_hover: (OM_TEXT),
+            color_active: (OM_TEXT),
+            color_focus: (OM_TEXT),
+            color_disabled: (OM_TEXT_3)
+        }
+        draw_bg: {
+            size: 17.0,
+            color_dither: 0.0,
+            border_size: 1.0,
+            border_radius: 5.0,
+            color: (OM_RAIL),
+            color_hover: (OM_SURFACE_2),
+            color_down: (OM_SURFACE_3),
+            color_active: (OM_ACCENT),
+            color_focus: (OM_RAIL),
+            color_disabled: (OM_SURFACE),
+            border_color_1: (OM_LINE), border_color_2: (OM_LINE),
+            border_color_1_hover: (OM_LINE_BRIGHT), border_color_2_hover: (OM_LINE_BRIGHT),
+            border_color_1_down: (OM_ACCENT), border_color_2_down: (OM_ACCENT),
+            border_color_1_active: (OM_ACCENT), border_color_2_active: (OM_ACCENT),
+            border_color_1_focus: (OM_ACCENT), border_color_2_focus: (OM_ACCENT),
+            border_color_1_disabled: (OM_LINE_SOFT), border_color_2_disabled: (OM_LINE_SOFT),
+            mark_color: (OM_CLEAR),
+            mark_color_hover: (OM_CLEAR),
+            mark_color_down: (OM_INK),
+            mark_color_active: (OM_INK),
+            mark_color_active_hover: (OM_INK),
+            mark_color_focus: (OM_ACCENT),
+            mark_color_disabled: (OM_TEXT_3)
+        }
+    }
+
+    OmSlider = <Slider> {
+        height: 34,
+        draw_text: {
+            text_style: <THEME_FONT_REGULAR> {font_size: 10.5},
+            color: (OM_TEXT_3),
+            color_hover: (OM_TEXT_2),
+            color_focus: (OM_TEXT_2),
+            color_drag: (OM_TEXT)
+        }
+        draw_bg: {
+            color_dither: 0.0,
+            border_size: 1.0,
+            border_radius: 8.0,
+            color: (OM_RAIL),
+            color_hover: (OM_SURFACE_2),
+            color_focus: (OM_RAIL),
+            color_disabled: (OM_SURFACE),
+            color_drag: (OM_RAIL),
+            val_color: (OM_ACCENT),
+            val_color_hover: (OM_ACCENT_HI),
+            val_color_focus: (OM_ACCENT),
+            val_color_disabled: (OM_TEXT_3),
+            val_color_drag: (OM_ACCENT_HI),
+            handle_color_1: (OM_ACCENT),
+            handle_color_2: (OM_ACCENT),
+            handle_color_1_hover: (OM_ACCENT_HI),
+            handle_color_2_hover: (OM_ACCENT_HI),
+            handle_color_1_focus: (OM_ACCENT_HI),
+            handle_color_2_focus: (OM_ACCENT_HI),
+            handle_color_1_drag: (OM_ACCENT_HI),
+            handle_color_2_drag: (OM_ACCENT_HI),
+            border_color_1: (OM_LINE), border_color_2: (OM_LINE),
+            border_color_1_hover: (OM_LINE_BRIGHT), border_color_2_hover: (OM_LINE_BRIGHT),
+            border_color_1_focus: (OM_ACCENT), border_color_2_focus: (OM_ACCENT),
+            border_color_1_drag: (OM_ACCENT), border_color_2_drag: (OM_ACCENT)
+        }
+    }
+
+    OmScrollBar = <ScrollBar> {
+        bar_size: 8.0,
+        bar_side_margin: 2.0,
+        min_handle_size: 36.0,
+        draw_bg: {
+            size: 4.0,
+            border_size: 0.0,
+            border_radius: 2.0,
+            color: (OM_LINE_SOFT),
+            color_hover: (OM_LINE_BRIGHT),
+            color_drag: (OM_ACCENT),
+            border_color: (OM_CLEAR),
+            border_color_hover: (OM_CLEAR),
+            border_color_drag: (OM_CLEAR)
+        }
+    }
+
+    OmScrollBars = <ScrollBars> {
+        show_scroll_x: false,
+        show_scroll_y: true,
+        scroll_bar_y: <OmScrollBar> {}
     }
 
     // ------------------------------------------------------------- the grid
@@ -304,110 +625,183 @@ live_design! {
     // joystick top-right, touch disc bottom-left, and THIRTEEN independent
     // 1U keys — no 2U cell (PRD hardware scope).
     KeyCap = <View> {
-        width: 96, height: 86,
-        flow: Down, spacing: 2,
-        padding: {left: 8, right: 8, top: 12, bottom: 9},
+        width: 84, height: 66,
+        flow: Down, spacing: 5,
+        padding: {left: 7, right: 7, top: 10, bottom: 9},
         align: {x: 0.5, y: 0.5},
         cursor: Hand,
         show_bg: true,
         draw_bg: {
             instance hover: 0.0
+            instance down: 0.0
             instance active: 0.0
             instance bound: 0.0
             instance warn: 0.0
             instance flash: 0.0
             instance ghost: 0.0
             color: (OM_CLEAR)
-            uniform fill: (OM_SURFACE)
-            uniform fill_empty: (OM_RAIL)
-            uniform fill_hover: (OM_SURFACE_2)
+            uniform fill: (OM_SURFACE_2)
+            uniform fill_empty: (OM_SURFACE)
+            uniform fill_hover: (OM_SURFACE_3)
+            uniform fill_down: (OM_ACCENT_SOFT)
             uniform edge: (OM_LINE)
             uniform edge_soft: (OM_LINE_SOFT)
-            uniform edge_hover: #3a3a43
+            uniform edge_hover: (OM_LINE_BRIGHT)
             uniform edge_active: (OM_ACCENT)
             uniform pip_ok: (OM_OK)
             uniform pip_warn: (OM_DANGER)
             uniform glow: (OM_ACCENT)
-            uniform back: (OM_BG)
+            uniform back: (OM_BOARD)
+            uniform shadow: #00000070
             fn pixel(self) -> vec4 {
                 let sdf = Sdf2d::viewport(self.pos * self.rect_size);
-                // Configured caps sit on a surface; empty caps recede to the
-                // rail fill and a softer border — unmistakable at a glance.
                 let base = mix(self.fill_empty, self.fill, self.bound);
                 let base = mix(base, self.fill_hover, self.hover);
+                let base = mix(base, self.fill_down, self.down * 0.65);
                 let base = mix(base, self.glow, self.flash * 0.30);
                 let line = mix(self.edge_soft, self.edge, self.bound);
                 let line = mix(line, self.edge_hover, self.hover);
                 let line = mix(line, self.edge_active, self.active);
                 let line = mix(line, self.glow, self.flash);
-                sdf.box(1.0, 1.0, self.rect_size.x - 2.0, self.rect_size.y - 2.0, 10.0);
+                sdf.box(2.0, 4.0, self.rect_size.x - 4.0, self.rect_size.y - 6.0, 10.0);
+                sdf.fill(self.shadow);
+                sdf.box(2.0, 1.0 + self.down * 2.0, self.rect_size.x - 4.0, self.rect_size.y - 7.0, 10.0);
                 sdf.fill_keep(base);
-                sdf.stroke(line, 1.0);
-                sdf.circle(self.rect_size.x - 13.0, 13.0, 2.5);
-                sdf.fill(mix(self.color, mix(self.pip_ok, self.pip_warn, self.warn), self.bound));
-                return mix(sdf.result, vec4(self.back.xyz, sdf.result.w), self.ghost * 0.72);
+                sdf.stroke(line, mix(1.0, 2.0, self.active));
+                sdf.circle(self.rect_size.x - 13.0, 12.0 + self.down * 2.0, 2.5);
+                // A normal configured key stays quiet. The corner pip is
+                // reserved for a binding that needs attention.
+                sdf.fill(mix(self.color, self.pip_warn, self.warn));
+                return mix(sdf.result, vec4(self.back.xyz, sdf.result.w), self.ghost * 0.18);
             }
         }
-        cap_icon = <IconLabel> {}
-        cap_label = <Label> {
-            draw_text: {text_style: <THEME_FONT_BOLD> {font_size: 9.5}, color: (OM_TEXT)}
+        animator: {
+            hover = {
+                default: off
+                off = {
+                    from: {all: Forward {duration: 0.12}}
+                    apply: {draw_bg: {hover: 0.0}}
+                }
+                on = {
+                    cursor: Hand
+                    from: {all: Forward {duration: 0.12}}
+                    apply: {draw_bg: {hover: 1.0}}
+                }
+            }
+            down = {
+                default: off
+                off = {
+                    from: {all: Forward {duration: 0.08}}
+                    apply: {draw_bg: {down: 0.0}}
+                }
+                on = {
+                    cursor: Hand
+                    from: {all: Forward {duration: 0.04}}
+                    apply: {draw_bg: {down: 1.0}}
+                }
+            }
         }
-        cap_code = <Label> {
-            draw_text: {text_style: <THEME_FONT_CODE> {font_size: 8.0}, color: (OM_TEXT_3)}
+        cap_icon = <IconLabel> {
+            draw_text: {text_style: {font_size: 16.0}}
+        }
+        cap_label = <Label> {
+            padding: 0,
+            draw_text: {text_style: <THEME_FONT_BOLD> {font_size: 10.5}, color: (OM_TEXT)}
         }
     }
 
     // Encoder / joystick: a dial; touch pad: a disc. Same selection/flash
     // grammar as the keys — these are configurable inputs, not scenery.
     DialCell = <View> {
-        width: 96, height: 86,
-        flow: Down, spacing: 2,
-        padding: {left: 8, right: 8, top: 10, bottom: 9},
-        align: {x: 0.5, y: 1.0},
+        width: 84, height: 66,
+        flow: Down, spacing: 0,
+        padding: {left: 7, right: 7, top: 5, bottom: 7},
+        align: {x: 0.5, y: 0.0},
         cursor: Hand,
         show_bg: true,
         draw_bg: {
             instance hover: 0.0
+            instance down: 0.0
             instance active: 0.0
+            instance bound: 0.0
+            instance warn: 0.0
             instance flash: 0.0
             instance ghost: 0.0
             instance disc: 0.0
             color: (OM_CLEAR)
-            uniform fill: (OM_RAIL)
-            uniform fill_hover: (OM_SURFACE)
+            uniform fill: (OM_SURFACE)
+            uniform fill_bound: (OM_SURFACE_2)
+            uniform fill_hover: (OM_SURFACE_3)
+            uniform fill_down: (OM_ACCENT_SOFT)
             uniform edge: (OM_LINE_SOFT)
-            uniform edge_hover: #3a3a43
+            uniform edge_hover: (OM_LINE_BRIGHT)
             uniform edge_active: (OM_ACCENT)
             uniform ring: (OM_TEXT_3)
+            uniform pip_ok: (OM_OK)
+            uniform pip_warn: (OM_DANGER)
             uniform glow: (OM_ACCENT)
-            uniform back: (OM_BG)
+            uniform back: (OM_BOARD)
+            uniform shadow: #00000070
             fn pixel(self) -> vec4 {
                 let sdf = Sdf2d::viewport(self.pos * self.rect_size);
-                let base = mix(self.fill, self.fill_hover, self.hover);
+                let base = mix(self.fill, self.fill_bound, self.bound);
+                let base = mix(base, self.fill_hover, self.hover);
+                let base = mix(base, self.fill_down, self.down * 0.65);
                 let base = mix(base, self.glow, self.flash * 0.25);
                 let line = mix(self.edge, self.edge_hover, self.hover);
                 let line = mix(line, self.edge_active, self.active);
-                sdf.box(1.0, 1.0, self.rect_size.x - 2.0, self.rect_size.y - 2.0, 10.0);
+                sdf.box(2.0, 4.0, self.rect_size.x - 4.0, self.rect_size.y - 6.0, 10.0);
+                sdf.fill(self.shadow);
+                sdf.box(2.0, 1.0 + self.down * 2.0, self.rect_size.x - 4.0, self.rect_size.y - 7.0, 10.0);
                 sdf.fill_keep(base);
-                sdf.stroke(line, 1.0);
+                sdf.stroke(line, mix(1.0, 2.0, self.active));
                 // The dial: an outer ring with an index notch; the disc
                 // variant fills solid (the touch pad has no notch).
                 let cx = self.rect_size.x * 0.5;
-                let cy = 30.0;
-                sdf.circle(cx, cy, 17.0);
+                let cy = 20.0 + self.down * 2.0;
+                sdf.circle(cx, cy, 13.0);
                 sdf.stroke(mix(self.ring, self.glow, self.flash), 1.5);
-                sdf.circle(cx, cy, mix(3.0, 12.0, self.disc));
+                sdf.circle(cx, cy, mix(3.0, 9.0, self.disc));
                 sdf.fill(mix(self.ring, self.glow, self.flash));
-                sdf.box(cx - 1.0, cy - 17.0, 2.0, 6.0, 1.0);
+                sdf.box(cx - 1.0, cy - 13.0, 2.0, 5.0, 1.0);
                 sdf.fill(mix(mix(self.ring, self.color, self.disc), self.glow, self.flash));
-                return mix(sdf.result, vec4(self.back.xyz, sdf.result.w), self.ghost * 0.72);
+                sdf.circle(self.rect_size.x - 13.0, 12.0 + self.down * 2.0, 2.5);
+                sdf.fill(mix(self.color, self.pip_warn, self.warn));
+                return mix(sdf.result, vec4(self.back.xyz, sdf.result.w), self.ghost * 0.18);
             }
         }
-        dial_label = <Label> {
-            draw_text: {text_style: <THEME_FONT_BOLD> {font_size: 9.5}, color: (OM_TEXT_2)}
+        animator: {
+            hover = {
+                default: off
+                off = {
+                    from: {all: Forward {duration: 0.12}}
+                    apply: {draw_bg: {hover: 0.0}}
+                }
+                on = {
+                    cursor: Hand
+                    from: {all: Forward {duration: 0.12}}
+                    apply: {draw_bg: {hover: 1.0}}
+                }
+            }
+            down = {
+                default: off
+                off = {
+                    from: {all: Forward {duration: 0.08}}
+                    apply: {draw_bg: {down: 0.0}}
+                }
+                on = {
+                    cursor: Hand
+                    from: {all: Forward {duration: 0.04}}
+                    apply: {draw_bg: {down: 1.0}}
+                }
+            }
         }
-        dial_code = <Label> {
-            draw_text: {text_style: <THEME_FONT_CODE> {font_size: 8.0}, color: (OM_TEXT_3)}
+        // The dial is drawn by the cell shader. This explicit spacer keeps
+        // flowed text below it at every platform font scale.
+        <View> {width: 1, height: 35}
+        dial_label = <Label> {
+            padding: 0,
+            draw_text: {text_style: <THEME_FONT_BOLD> {font_size: 10.0}, color: (OM_TEXT_2)}
         }
     }
 
@@ -418,27 +812,34 @@ live_design! {
         visible: false,
         align: {x: 0.5, y: 0.5},
         show_bg: true,
-        draw_bg: {color: #000000b0}
+        draw_bg: {color: #05070bd8}
     }
 
     SheetCard = <RoundedView> {
-        width: 560, height: Fit,
-        flow: Down, spacing: 14, padding: 24,
+        width: 600, height: Fit,
+        flow: Down, spacing: 16, padding: 26,
         draw_bg: {
-            color: (OM_SURFACE),
-            border_radius: 14.0,
+            color: (OM_SURFACE_2),
+            border_radius: 18.0,
             border_size: 1.0,
-            border_color: (OM_LINE)
+            border_color: (OM_LINE_BRIGHT)
         }
     }
 
-    MacroRow = <View> {
+    MacroRow = <RoundedView> {
         width: Fill, height: Fit,
         flow: Right, spacing: 8, align: {y: 0.5},
         visible: false,
+        padding: {left: 10, right: 10, top: 8, bottom: 8},
+        draw_bg: {
+            color: (OM_RAIL),
+            border_radius: 10.0,
+            border_size: 1.0,
+            border_color: (OM_LINE_SOFT)
+        }
         mr_idx = <Mono> {width: 18}
-        mr_en = <ButtonGhost> {text: "on", padding: {left: 7, right: 7}}
-        mr_type = <DropDown> {width: 110}
+        mr_en = <ButtonGhost> {width: 62, text: "Enabled", padding: {left: 7, right: 7}}
+        mr_type = <Select> {width: 120}
         mr_rec = <ButtonGhost> {text: "Record"}
         // Labels and text inputs have no `visible` field; their wrapping
         // Views carry per-step-kind visibility.
@@ -446,31 +847,36 @@ live_design! {
             width: Fit, height: Fit,
             mr_label = <Small> {width: 90}
         }
+        mr_media_wrap = <View> {
+            width: Fit, height: Fit,
+            visible: false,
+            mr_media = <Select> {width: 140}
+        }
         mr_arg_wrap = <View> {
             width: Fill, height: Fit,
             mr_arg = <Field> {width: Fill}
         }
-        mr_up = <ButtonGhost> {text: "↑", padding: {left: 6, right: 6}}
-        mr_down = <ButtonGhost> {text: "↓", padding: {left: 6, right: 6}}
-        mr_del = <ButtonGhost> {text: "✕", padding: {left: 6, right: 6}}
+        mr_up = <IconButton> {text: ""}
+        mr_down = <IconButton> {text: ""}
+        mr_del = <ButtonDanger> {width: 32, text: "×", padding: {left: 6, right: 6}}
     }
 
     // One cell of the icon picker: a Lucide glyph as a button face.
     IconBtn = <Button> {
-        width: 40, height: 40,
+        width: 46, height: 46,
         padding: 0, margin: 0,
         align: {x: 0.5, y: 0.5},
         draw_bg: {
             color_dither: 0.0,
             border_size: 1.0,
-            border_radius: 8.0,
+            border_radius: 10.0,
             color: (OM_RAIL),
             color_hover: (OM_SURFACE_2),
             color_down: (OM_HOVER),
             color_focus: (OM_RAIL),
             color_disabled: (OM_RAIL),
             border_color_1: (OM_LINE_SOFT), border_color_2: (OM_LINE_SOFT),
-            border_color_1_hover: #3a3a43, border_color_2_hover: #3a3a43,
+            border_color_1_hover: (OM_LINE_BRIGHT), border_color_2_hover: (OM_LINE_BRIGHT),
             border_color_1_down: (OM_ACCENT), border_color_2_down: (OM_ACCENT),
             border_color_1_focus: (OM_LINE_SOFT), border_color_2_focus: (OM_LINE_SOFT),
             border_color_1_disabled: (OM_LINE_SOFT), border_color_2_disabled: (OM_LINE_SOFT),
@@ -478,7 +884,7 @@ live_design! {
         draw_text: {
             text_style: {
                 font_family: {latin = font("crate://self/resources/lucide.ttf", 0.0, 0.0)},
-                font_size: 15.0
+                font_size: 17.0
             },
             color: (OM_TEXT_2),
             color_hover: (OM_TEXT),
@@ -490,24 +896,36 @@ live_design! {
     Banner = <RoundedView> {
         width: Fill, height: Fit,
         visible: false,
-        flow: Right, spacing: 12, align: {y: 0.5},
-        padding: {left: 14, right: 10, top: 9, bottom: 9},
-        margin: {left: 16, right: 16, bottom: 8},
+        flow: Right, spacing: 10, align: {y: 0.5},
+        padding: {left: 12, right: 7, top: 6, bottom: 6},
+        margin: {left: 16, right: 16, top: 8, bottom: 0},
         draw_bg: {
-            color: (OM_SURFACE),
-            border_radius: 10.0,
+            color: (OM_ACCENT_SOFT),
+            border_radius: 9.0,
             border_size: 1.0,
-            border_color: (OM_LINE)
+            border_color: #60441f
         }
-        banner_text = <Body> {}
+        banner_dot = <Dot> {width: 6, height: 6, draw_bg: {color: (OM_ACCENT)}}
+        banner_text = <Small> {width: Fill, draw_text: {color: (OM_TEXT_2)}}
     }
 
     // ------------------------------------------------------------------- app
     App = {{App}} {
         ui: <Root> {
             main_window = <Window> {
-                window: {inner_size: vec2(950, 800), title: "OpenMicro"},
+                window: {inner_size: vec2(1120, 760), title: "OpenMicro"},
                 pass: {clear_color: (OM_BG)}
+                // Makepad uses a full-size transparent macOS titlebar. Its
+                // inherited caption bar was hidden, so traffic lights sat on
+                // top of app content and the window had no drag region.
+                caption_bar = {
+                    visible: true,
+                    height: 27,
+                    draw_bg: {color: (OM_SURFACE)}
+                    caption_label = {
+                        label = {text: "", padding: 0}
+                    }
+                }
 
                 body = <View> {
                     width: Fill, height: Fill,
@@ -519,28 +937,73 @@ live_design! {
                         width: Fill, height: Fill,
                         flow: Down,
 
-                        // -------------------------------- profile strip
-                        <View> {
-                            width: Fill, height: 56,
-                            flow: Right, spacing: 6,
-                            align: {x: 0.5, y: 0.5},
-                            prof_prev = <ButtonGhost> {text: "‹", padding: {left: 9, right: 9}}
-                            // The switcher and the rename field share the
-                            // slot; the pen toggles which one is live.
-                            prof_dd_wrap = <View> {
+                        // ------------------------------------ product header
+                        app_header = <View> {
+                            width: Fill, height: 52,
+                            flow: Right, spacing: 10,
+                            padding: {left: 16, right: 16},
+                            align: {y: 0.5},
+                            show_bg: true,
+                            draw_bg: {color: (OM_SURFACE)}
+
+                            <AppMark> {width: 32, height: 32}
+                            <View> {
                                 width: Fit, height: Fit,
-                                profile_dd = <DropDown> {width: 190}
+                                <Display> {text: "OpenMicro"}
                             }
-                            prof_rename_wrap = <View> {
+                            <View> {
+                                width: 1, height: 24,
+                                show_bg: true,
+                                draw_bg: {color: (OM_LINE)}
+                            }
+                            <View> {
                                 width: Fit, height: Fit,
-                                visible: false,
-                                prof_rename = <Field> {width: 190, empty_text: "profile name"}
+                                flow: Right, spacing: 5, align: {y: 0.5},
+                                <Eyebrow> {text: "PROFILE"}
+                                prof_prev = <IconButton> {text: ""}
+                                // The selector and rename field share this
+                                // slot, keeping the header stable.
+                                prof_dd_wrap = <View> {
+                                    width: Fit, height: Fit,
+                                    profile_dd = <Select> {width: 176}
+                                }
+                                prof_rename_wrap = <View> {
+                                    width: Fit, height: Fit,
+                                    visible: false,
+                                    prof_rename = <Field> {
+                                        width: 176, empty_text: "Profile name"
+                                    }
+                                }
+                                prof_next = <IconButton> {text: ""}
+                                prof_edit = <IconButton> {text: ""}
+                                prof_new = <IconButton> {text: ""}
+                                prof_del = <IconDanger> {text: ""}
                             }
-                            prof_next = <ButtonGhost> {text: "›", padding: {left: 9, right: 9}}
-                            prof_edit = <ButtonGhost> {text: "✎", padding: {left: 8, right: 8}}
-                            prof_new = <ButtonGhost> {text: "＋", padding: {left: 8, right: 8}}
-                            prof_del = <ButtonGhost> {text: "−", padding: {left: 9, right: 9}}
+                            <Filler> {}
+                            connection_pill = <RoundedView> {
+                                width: Fit, height: 32,
+                                flow: Right, spacing: 7,
+                                padding: {left: 2, right: 2},
+                                align: {y: 0.5},
+                                draw_bg: {
+                                    color: (OM_CLEAR),
+                                    border_radius: 0.0,
+                                    border_size: 0.0,
+                                    border_color: (OM_CLEAR)
+                                }
+                                status_dot = <Dot> {}
+                                status_text = <Label> {
+                                    text: "Searching…",
+                                    padding: 0,
+                                    draw_text: {
+                                        text_style: <THEME_FONT_BOLD> {font_size: 10.5},
+                                        color: (OM_TEXT)
+                                    }
+                                }
+                            }
+                            gear_btn = <ButtonSecondary> {height: 32, text: "Settings"}
                         }
+                        <Rule> {}
 
                         fw_banner = <Banner> {
                             banner_text = {text: ""}
@@ -548,159 +1011,237 @@ live_design! {
                             fw_banner_later = <ButtonGhost> {text: "Later"}
                         }
                         perm_banner = <Banner> {
-                            banner_text = {text: "Keystroke and media actions need the Input Monitoring / Accessibility permission — without it the app shows state but is not listening."}
-                            perm_btn = <ButtonSecondary> {text: "Grant permission"}
+                            banner_text = {text: "Accessibility is needed for this control's host action."}
+                            perm_btn = <ButtonSecondary> {height: 30, text: "Open Settings"}
                         }
 
                         // ------------------------------------ main row
-                        <View> {
+                        workspace = <View> {
                             width: Fill, height: Fill,
-                            flow: Right, spacing: 14,
-                            padding: {left: 16, right: 16, top: 2, bottom: 8},
+                            flow: Right, spacing: 16,
+                            padding: {left: 16, right: 16, top: 12, bottom: 10},
 
                             // ------------------------------- the pad
-                            <View> {
-                                width: Fit, height: Fill,
-                                flow: Down, spacing: 12,
+                            board_panel = <View> {
+                                width: 404, height: Fill,
+                                flow: Down, spacing: 10,
+                                <View> {
+                                    width: Fill, height: 28,
+                                    flow: Right, align: {y: 0.5},
+                                    <Heading> {text: "Device map"}
+                                    <Small> {margin: {left: 8}, text: "13 keys · 3 controls"}
+                                    <Filler> {}
+                                    map_live = <Small> {text: "Waiting for device"}
+                                }
                                 pad_card = <RoundedView> {
-                                    width: Fit, height: Fit,
-                                    flow: Down, spacing: 12, padding: 20,
+                                    width: Fill, height: Fit,
+                                    flow: Down, spacing: 6, padding: 12,
+                                    align: {x: 0.5},
                                     draw_bg: {
-                                        color: (OM_SURFACE),
-                                        border_radius: 14.0,
+                                        color: (OM_BOARD),
+                                        border_radius: 13.0,
                                         border_size: 1.0,
-                                        border_color: (OM_LINE_SOFT)
+                                        border_color: (OM_LINE_BRIGHT)
                                     }
                                     <View> {
-                                        width: Fit, height: Fit, flow: Right, spacing: 12,
+                                        width: Fit, height: Fit, flow: Right, spacing: 6,
                                         enc_cell = <DialCell> {
-                                            dial_label = {text: "VOL"}
-                                            dial_code = {text: "encoder"}
+                                            dial_label = {text: "ENCODER"}
                                         }
                                         cap_0 = <KeyCap> {}
                                         cap_1 = <KeyCap> {}
                                         joy_cell = <DialCell> {
-                                            dial_label = {text: "NAV"}
-                                            dial_code = {text: "joystick"}
+                                            dial_label = {text: "JOYSTICK"}
                                         }
                                     }
                                     <View> {
-                                        width: Fit, height: Fit, flow: Right, spacing: 12,
+                                        width: Fit, height: Fit, flow: Right, spacing: 6,
                                         cap_2 = <KeyCap> {}
                                         cap_3 = <KeyCap> {}
                                         cap_4 = <KeyCap> {}
                                         cap_5 = <KeyCap> {}
                                     }
                                     <View> {
-                                        width: Fit, height: Fit, flow: Right, spacing: 12,
+                                        width: Fit, height: Fit, flow: Right, spacing: 6,
                                         cap_6 = <KeyCap> {}
                                         cap_7 = <KeyCap> {}
                                         cap_8 = <KeyCap> {}
                                         cap_9 = <KeyCap> {}
                                     }
                                     <View> {
-                                        width: Fit, height: Fit, flow: Right, spacing: 12,
+                                        width: Fit, height: Fit, flow: Right, spacing: 6,
                                         touch_cell = <DialCell> {
                                             draw_bg: {disc: 1.0}
-                                            dial_label = {text: "MEDIA"}
-                                            dial_code = {text: "touch pad"}
+                                            dial_label = {text: "TOUCH"}
                                         }
                                         cap_10 = <KeyCap> {}
                                         cap_11 = <KeyCap> {}
                                         cap_12 = <KeyCap> {}
                                     }
                                 }
+                                <View> {
+                                    width: Fill, height: 24,
+                                    flow: Right, spacing: 7, align: {y: 0.5},
+                                    <Dot> {width: 6, height: 6, draw_bg: {color: (OM_ACCENT)}}
+                                    <Small> {text: "Select a control to edit · presses light up live"}
+                                }
                                 disconnected_card = <RoundedView> {
                                     width: Fill, height: Fit,
                                     visible: false,
-                                    flow: Down, spacing: 6, padding: 16,
+                                    flow: Right, spacing: 8, padding: 10,
+                                    align: {y: 0.5},
                                     draw_bg: {
-                                        color: (OM_SURFACE),
-                                        border_radius: 12.0,
+                                        color: (OM_ACCENT_SOFT),
+                                        border_radius: 9.0,
                                         border_size: 1.0,
-                                        border_color: (OM_LINE_SOFT)
+                                        border_color: #60441f
                                     }
-                                    <Title> {text: "No pad found"}
-                                    <Body> {text: "Plug the pad in over USB-C. Profiles live in this app — everything stays editable, and syncs to the pad when it returns."}
+                                    <Title> {text: "Editing offline"}
+                                    <Small> {width: Fill, text: "Connect over USB-C to sync this profile."}
                                 }
                             }
 
                             // ----------------------------- the editor
-                            editor_scroll = <ScrollYView> {
+                            inspector_panel = <RoundedView> {
                                 width: Fill, height: Fill,
                                 flow: Down,
-
-                                editor_empty = <View> {
-                                    width: Fill, height: Fit,
-                                    flow: Down, spacing: 8, padding: 26,
-                                    align: {x: 0.5},
-                                    <Small> {text: "Select an input to configure it"}
-                                    <Body> {
-                                        width: Fit,
-                                        text: "Keys, the encoder, the joystick and the touch pad all open here."
-                                    }
+                                draw_bg: {
+                                    color: (OM_SURFACE),
+                                    border_radius: 13.0,
+                                    border_size: 1.0,
+                                    border_color: (OM_LINE_SOFT)
                                 }
+                                editor_scroll = <ScrollYView> {
+                                    width: Fill, height: Fill,
+                                    flow: Down, padding: {right: 6, bottom: 4},
+                                    scroll_bars: <OmScrollBars> {}
 
-                                editor = <Card> {
-                                    visible: false,
-                                    <View> {
-                                        width: Fill, height: Fit,
-                                        flow: Right, spacing: 10, align: {y: 0.5},
-                                        ed_icon = <IconLabel> {}
-                                        <View> {
-                                            width: Fill, height: Fit, flow: Down, spacing: 2,
-                                            ed_title = <Title> {}
-                                            ed_pos = <Small> {}
+                                    editor_empty = <View> {
+                                        width: Fill, height: Fill,
+                                        flow: Down, spacing: 10, padding: 32,
+                                        align: {x: 0.5, y: 0.5},
+                                        <AppMark> {}
+                                        <Heading> {text: "Choose a control"}
+                                        <Body> {
+                                            width: Fit,
+                                            text: "Select a key, dial, joystick direction, or touch input from the hardware map."
                                         }
-                                        ed_status = <Pill> {pill_label = {text: ""}}
                                     }
-                                    sub_row = <View> {
+
+                                    editor = <View> {
+                                        width: Fill, height: Fit,
+                                        flow: Down, spacing: 0,
+                                        visible: false,
+                                        editor_header = <SectionCard> {
+                                            draw_bg: {color: (OM_SURFACE_2)}
+                                        <View> {
+                                            width: Fill, height: Fit,
+                                            flow: Right, spacing: 10, align: {y: 0.5},
+                                            <RoundedView> {
+                                                width: 36, height: 36,
+                                                align: {x: 0.5, y: 0.5},
+                                                draw_bg: {
+                                                    color: (OM_ACCENT_SOFT),
+                                                    border_radius: 9.0,
+                                                    border_size: 1.0,
+                                                    border_color: #60441f
+                                                }
+                                                ed_icon = <IconLabel> {
+                                                    draw_text: {color: (OM_ACCENT_HI)}
+                                                }
+                                            }
+                                            <View> {
+                                                width: Fill, height: Fit, flow: Down, spacing: 2,
+                                                ed_title = <Heading> {}
+                                                ed_pos = <Small> {}
+                                            }
+                                            ed_status = <Pill> {pill_label = {text: ""}}
+                                        }
+                                        sub_row = <View> {
+                                            width: Fill, height: Fit,
+                                            visible: false,
+                                            flow: Right, spacing: 10, align: {y: 0.5},
+                                            <Small> {width: 112, text: "DIRECTION / GESTURE"}
+                                            sub_dd = <Select> {width: Fill}
+                                        }
+                                        }
+                                        <Rule> {}
+
+                                        emit_section = <SectionCard> {
+                                    <View> {
+                                        width: Fill, height: Fit,
+                                        flow: Right, spacing: 10, align: {y: 0.5},
+                                        <SectionNumber> {section_number = {text: "1"}}
+                                        <View> {
+                                            width: Fill, height: Fit,
+                                            flow: Down, spacing: 2,
+                                            <Heading> {text: "Device output"}
+                                            <Small> {text: "Stored on the pad and works without this app"}
+                                        }
+                                        <View> {
+                                            width: Fit, height: Fit,
+                                            flow: Right, spacing: 3, padding: 3,
+                                            show_bg: true,
+                                            draw_bg: {color: (OM_RAIL)}
+                                            kind_0 = <Segment> {text: "Nothing"}
+                                            kind_1 = <Segment> {text: "Keycode"}
+                                            kind_2 = <Segment> {text: "Media code"}
+                                        }
+                                    }
+                                    key_pick = <Inset> {
+                                        width: Fill, height: Fit,
+                                        visible: false,
+                                        flow: Down, spacing: 6,
+                                        <View> {
+                                            width: Fill, height: Fit,
+                                            flow: Right, spacing: 12, align: {y: 0.5},
+                                            <Small> {width: 112, text: "MODIFIERS"}
+                                            mod_ctrl = <Toggle> {text: "Ctrl"}
+                                            mod_shift = <Toggle> {text: "Shift"}
+                                            mod_alt = <Toggle> {text: "Alt"}
+                                            mod_gui = <Toggle> {text: "Cmd"}
+                                        }
+                                        <View> {
+                                            width: Fill, height: Fit,
+                                            flow: Right, spacing: 10, align: {y: 0.5},
+                                            <Small> {width: 112, text: "KEYCODE"}
+                                            key_dd = <Select> {width: Fill}
+                                        }
+                                    }
+                                    media_pick = <Inset> {
                                         width: Fill, height: Fit,
                                         visible: false,
                                         flow: Right, spacing: 10, align: {y: 0.5},
-                                        <Small> {text: "Input"}
-                                        sub_dd = <DropDown> {width: 200}
+                                        <Small> {width: 112, text: "MEDIA CODE"}
+                                        media_dd = <Select> {width: Fill}
                                     }
-
-                                    <Rule> {}
-
-                                    <Eyebrow> {text: "THE PAD EMITS"}
-                                    <View> {
-                                        width: Fit, height: Fit,
-                                        flow: Right, spacing: 3, padding: 3,
-                                        show_bg: true,
-                                        draw_bg: {color: (OM_RAIL)}
-                                        kind_0 = <Segment> {text: "Nothing"}
-                                        kind_1 = <Segment> {text: "Keycode"}
-                                        kind_2 = <Segment> {text: "Media code"}
-                                    }
-                                    key_pick = <View> {
+                                    emit_note_wrap = <View> {
                                         width: Fill, height: Fit,
                                         visible: false,
-                                        flow: Right, spacing: 8, align: {y: 0.5},
-                                        mod_ctrl = <CheckBox> {text: "Ctrl"}
-                                        mod_shift = <CheckBox> {text: "Shift"}
-                                        mod_alt = <CheckBox> {text: "Alt"}
-                                        mod_gui = <CheckBox> {text: "Cmd"}
-                                        key_dd = <DropDown> {width: 130}
+                                        emit_note = <Small> {width: Fill, text: ""}
                                     }
-                                    media_pick = <View> {
-                                        width: Fill, height: Fit,
-                                        visible: false,
-                                        flow: Right, spacing: 8, align: {y: 0.5},
-                                        media_dd = <DropDown> {width: 170}
                                     }
-                                    emit_note = <Small> {width: Fill, text: ""}
-
                                     <Rule> {}
 
-                                    <Eyebrow> {text: "THIS COMPUTER RUNS"}
+                                    action_section = <SectionCard> {
                                     <View> {
                                         width: Fill, height: Fit,
-                                        flow: Right, spacing: 8, align: {y: 0.5},
-                                        action_dd = <DropDown> {width: 190}
+                                        flow: Right, spacing: 10, align: {y: 0.5},
+                                        <SectionNumber> {section_number = {text: "2"}}
+                                        <View> {
+                                            width: Fill, height: Fit,
+                                            flow: Down, spacing: 2,
+                                            <Heading> {text: "Desktop action"}
+                                            <Small> {text: "Optional automation run by the host app"}
+                                        }
                                     }
-                                    ks_block = <View> {
+                                    <View> {
+                                        width: Fill, height: Fit,
+                                        flow: Right, spacing: 10, align: {y: 0.5},
+                                        <Small> {width: 112, text: "WHEN PRESSED"}
+                                        action_dd = <Select> {width: Fill}
+                                    }
+                                    ks_block = <Inset> {
                                         width: Fill, height: Fit,
                                         visible: false,
                                         flow: Right, spacing: 10, align: {y: 0.5},
@@ -708,7 +1249,7 @@ live_design! {
                                         ks_label = <Title> {text: "—"}
                                         ks_test = <ButtonGhost> {text: "Test"}
                                     }
-                                    macro_block = <View> {
+                                    macro_block = <Inset> {
                                         width: Fill, height: Fit,
                                         visible: false,
                                         flow: Right, spacing: 10, align: {y: 0.5},
@@ -716,7 +1257,7 @@ live_design! {
                                         macro_edit = <ButtonSecondary> {text: "Edit steps…"}
                                         macro_test = <ButtonGhost> {text: "Test"}
                                     }
-                                    run_block = <View> {
+                                    run_block = <Inset> {
                                         width: Fill, height: Fit,
                                         visible: false,
                                         flow: Down, spacing: 6,
@@ -728,7 +1269,7 @@ live_design! {
                                         }
                                         run_status = <Small> {width: Fill, text: ""}
                                     }
-                                    open_block = <View> {
+                                    open_block = <Inset> {
                                         width: Fill, height: Fit,
                                         flow: Down, spacing: 6,
                                         visible: false,
@@ -740,11 +1281,11 @@ live_design! {
                                             open_test = <ButtonSecondary> {text: "Test"}
                                         }
                                     }
-                                    media_block = <View> {
+                                    media_block = <Inset> {
                                         width: Fill, height: Fit,
                                         visible: false,
                                         flow: Right, spacing: 8, align: {y: 0.5},
-                                        action_media_dd = <DropDown> {width: 170}
+                                        action_media_dd = <Select> {width: Fill}
                                         media_test = <ButtonGhost> {text: "Test"}
                                     }
                                     // Labels have no `visible` field — the
@@ -758,83 +1299,132 @@ live_design! {
                                             draw_text: {color: (OM_DANGER)}
                                         }
                                     }
-                                    action_note = <Small> {width: Fill, text: ""}
-
+                                    action_note_wrap = <View> {
+                                        width: Fill, height: Fit,
+                                        visible: false,
+                                        action_note = <Small> {width: Fill, text: ""}
+                                    }
+                                    }
                                     <Rule> {}
 
-                                    <Eyebrow> {text: "LABEL"}
+                                    appearance_section = <SectionCard> {
                                     <View> {
                                         width: Fill, height: Fit,
                                         flow: Right, spacing: 10, align: {y: 0.5},
-                                        label_input = <Field> {width: 120, empty_text: "label"}
-                                        icon_preview = <IconLabel> {}
-                                        icon_name = <Small> {text: "no icon"}
+                                        <SectionNumber> {section_number = {text: "3"}}
+                                        <View> {
+                                            width: Fill, height: Fit,
+                                            flow: Down, spacing: 2,
+                                            <Heading> {text: "Label & icon"}
+                                            <Small> {text: "Keep the hardware map easy to scan"}
+                                        }
+                                    }
+                                    <View> {
+                                        width: Fill, height: Fit,
+                                        flow: Right, spacing: 10, align: {y: 0.5},
+                                        <Small> {width: 48, text: "LABEL"}
+                                        label_input = <Field> {width: Fill, empty_text: "Short label"}
+                                        <RoundedView> {
+                                            width: 34, height: 34,
+                                            align: {x: 0.5, y: 0.5},
+                                            draw_bg: {
+                                                color: (OM_RAIL),
+                                                border_radius: 8.0,
+                                                border_size: 1.0,
+                                                border_color: (OM_LINE)
+                                            }
+                                            icon_preview = <IconLabel> {}
+                                        }
+                                        icon_name = <Small> {width: 70, text: "no icon"}
                                         icon_pick_btn = <ButtonSecondary> {text: "Choose icon…"}
                                     }
-                                    icon_note = <Small> {width: Fill, text: ""}
-
-                                    joy_block = <View> {
+                                    icon_note_wrap = <View> {
                                         width: Fill, height: Fit,
-                                        flow: Down, spacing: 8,
                                         visible: false,
-                                        <Rule> {}
-                                        <Eyebrow> {text: "JOYSTICK THRESHOLD"}
+                                        icon_note = <Small> {width: Fill, text: ""}
+                                    }
+                                    }
+                                    <Rule> {}
+
+                                    joy_block = <SectionCard> {
+                                        width: Fill, height: Fit,
+                                        flow: Down, spacing: 10,
+                                        visible: false,
+                                        <View> {
+                                            width: Fill, height: Fit,
+                                            flow: Right, spacing: 10, align: {y: 0.5},
+                                            <SectionNumber> {section_number = {text: "4"}}
+                                            <View> {
+                                                width: Fill, height: Fit,
+                                                flow: Down, spacing: 2,
+                                                <Heading> {text: "Joystick sensitivity"}
+                                                <Small> {text: "Applies to every direction in this profile"}
+                                            }
+                                        }
                                         <View> {
                                             width: Fill, height: Fit,
                                             flow: Right, spacing: 12, align: {y: 0.5},
-                                            thr_slider = <Slider> {
+                                            thr_slider = <OmSlider> {
                                                 width: Fill,
                                                 min: 200.0, max: 1900.0, step: 25.0,
-                                                text: "deflection"
+                                                text: "Deflection"
                                             }
                                             thr_value = <Mono> {text: ""}
                                         }
                                         <Small> {
                                             width: Fill,
-                                            text: "How far the stick must deflect before a direction fires. Applies to the whole profile; written to the pad."
+                                            text: "Lower values respond sooner. Changes are debounced and written safely to the pad."
                                         }
                                     }
                                 }
                             }
                         }
+                        }
 
                         // ---------------------------------- status line
                         <View> {
-                            width: Fill, height: 40,
+                            width: Fill, height: 28,
                             flow: Right, spacing: 10, align: {y: 0.5},
-                            padding: {left: 18, right: 12},
+                            padding: {left: 16, right: 16},
                             show_bg: true,
                             draw_bg: {color: (OM_RAIL)}
-                            status_dot = <Dot> {}
-                            status_text = <Label> {
-                                text: "Searching…",
-                                draw_text: {text_style: <THEME_FONT_REGULAR> {font_size: 10.5}, color: (OM_TEXT)}
-                            }
+                            <Small> {text: "Saved locally"}
                             <Filler> {}
                             status_meta = <Mono> {text: ""}
-                            <Filler> {}
-                            gear_btn = <ButtonGhost> {text: "Settings"}
+                            footer_live = <Small> {margin: {left: 12}, text: "Waiting for device"}
                         }
                     }
 
                     // -------------------------------------- the sheets
                     settings_sheet = <Sheet> {
                         <SheetCard> {
+                            width: 660,
                             <View> {
                                 width: Fill, height: Fit, flow: Right, align: {y: 0.5},
-                                <Title> {text: "Settings"}
+                                <View> {
+                                    width: Fill, height: Fit, flow: Down, spacing: 3,
+                                    <Display> {text: "Settings"}
+                                    <Small> {text: "App behavior, profile data, and permissions"}
+                                }
                                 <Filler> {}
-                                settings_close = <ButtonGhost> {text: "Done"}
+                                settings_close = <ButtonPrimary> {text: "Done"}
                             }
                             <Rule> {}
                             <View> {
-                                width: Fill, height: Fit, flow: Right, spacing: 14, align: {y: 0.5},
-                                launch_cb = <CheckBox> {text: "Launch at login"}
-                                menubar_cb = <CheckBox> {text: "Show menubar icon"}
+                                width: Fill, height: Fit, flow: Right, spacing: 10,
+                                <Inset> {
+                                    width: Fill,
+                                    launch_cb = <Toggle> {text: "Launch at login"}
+                                    <Small> {width: Fill, text: "Keep pad actions available after sign-in."}
+                                }
+                                <Inset> {
+                                    width: Fill,
+                                    menubar_cb = <Toggle> {text: "Show menu bar icon"}
+                                    <Small> {width: Fill, text: "Switch profiles without opening the window."}
+                                }
                             }
-                            <Rule> {}
-                            <Eyebrow> {text: "CONFIG"}
-                            <View> {
+                            <Eyebrow> {text: "PROFILE DATA"}
+                            <Inset> {
                                 width: Fill, height: Fit, flow: Right, spacing: 10, align: {y: 0.5},
                                 export_btn = <ButtonSecondary> {text: "Export…"}
                                 import_replace_btn = <ButtonSecondary> {text: "Import (replace)…"}
@@ -842,30 +1432,32 @@ live_design! {
                             }
                             <View> {
                                 width: Fill, height: Fit, flow: Right, spacing: 10, align: {y: 0.5},
-                                reset_btn = <ButtonSecondary> {text: "Reset all bindings to factory defaults"}
+                                reset_btn = <ButtonDanger> {text: "Reset all bindings to factory defaults"}
                             }
                             settings_status = <Small> {width: Fill, text: ""}
-                            <Rule> {}
-                            <Eyebrow> {text: "PERMISSIONS"}
-                            <View> {
+                            <Eyebrow> {text: "ACCESSIBILITY"}
+                            <Inset> {
                                 width: Fill, height: Fit, flow: Right, spacing: 10, align: {y: 0.5},
                                 perm_status = <Body> {width: Fill, text: ""}
                                 perm_open_btn = <ButtonSecondary> {text: "Open System Settings"}
                             }
-                            <Rule> {}
                             <Small> {
                                 width: Fill,
-                                text: "Config lives in a human-readable JSON under your user config directory. Everything works offline."
+                                text: "Your human-readable JSON config stays in the user config directory. Everything works offline."
                             }
                         }
                     }
 
                     macro_sheet = <Sheet> {
                         <SheetCard> {
-                            width: 640,
+                            width: 760,
                             <View> {
                                 width: Fill, height: Fit, flow: Right, align: {y: 0.5},
-                                macro_title = <Title> {text: "Macro"}
+                                <View> {
+                                    width: Fill, height: Fit, flow: Down, spacing: 3,
+                                    macro_title = <Heading> {text: "Macro"}
+                                    <Small> {text: "Build a short, dependable action sequence"}
+                                }
                                 <Filler> {}
                                 macro_cancel = <ButtonGhost> {text: "Cancel"}
                                 macro_done = <ButtonPrimary> {text: "Done"}
@@ -894,9 +1486,14 @@ live_design! {
 
                     fw_sheet = <Sheet> {
                         <SheetCard> {
+                            width: 640,
                             <View> {
                                 width: Fill, height: Fit, flow: Right, align: {y: 0.5},
-                                <Title> {text: "Firmware"}
+                                <View> {
+                                    width: Fill, height: Fit, flow: Down, spacing: 3,
+                                    <Display> {text: "Firmware"}
+                                    <Small> {text: "Safely update or recover your OpenMicro"}
+                                }
                                 <Filler> {}
                                 fw_close = <ButtonGhost> {text: "Close"}
                             }
@@ -908,6 +1505,7 @@ live_design! {
                                     <Eyebrow> {text: "INSTALLED"}
                                     fw_version = <Label> {
                                         text: "—",
+                                        padding: 0,
                                         draw_text: {text_style: <THEME_FONT_BOLD> {font_size: 16.0}, color: (OM_TEXT)}
                                     }
                                 }
@@ -934,6 +1532,7 @@ live_design! {
                                     file_label = <Label> {
                                         width: Fill,
                                         text: "No image selected",
+                                        padding: 0,
                                         draw_text: {text_style: <THEME_FONT_REGULAR> {font_size: 11.0}, color: (OM_TEXT)}
                                     }
                                     file_meta = <Small> {width: Fill, text: "a raw .bin built from the fw crate"}
@@ -967,6 +1566,7 @@ live_design! {
                                     phase_label = <Label> {
                                         width: Fill,
                                         text: "",
+                                        padding: 0,
                                         draw_text: {text_style: <THEME_FONT_REGULAR> {font_size: 11.0}, color: (OM_TEXT)}
                                     }
                                     pct_label = <Mono> {text: "0%"}
@@ -987,24 +1587,26 @@ live_design! {
                             log_label = <Label> {
                                 width: Fill,
                                 text: "",
-                                draw_text: {text_style: <THEME_FONT_CODE> {font_size: 9.0, line_spacing: 1.6}, color: (OM_TEXT_2)}
+                                padding: 0,
+                                draw_text: {text_style: <THEME_FONT_CODE> {font_size: 9.5, line_spacing: 1.6}, color: (OM_TEXT_2)}
                             }
                         }
                     }
 
                     icon_sheet = <Sheet> {
                         <SheetCard> {
-                            width: 470,
+                            width: 520,
                             <View> {
                                 width: Fill, height: Fit, flow: Right, align: {y: 0.5},
-                                icon_sheet_title = <Title> {text: "Icon"}
+                                icon_sheet_title = <Heading> {text: "Icon"}
                                 <Filler> {}
                                 icon_none_btn = <ButtonGhost> {text: "No icon"}
                                 icon_cancel = <ButtonGhost> {text: "Cancel"}
                             }
-                            icon_search = <Field> {empty_text: "search the Lucide set — e.g. mic, git, arrow"}
+                            icon_search = <Field> {empty_text: "Search icons — e.g. mic, git, arrow"}
                             <View> {
-                                width: Fit, height: Fit, flow: Down, spacing: 6,
+                                width: Fill, height: Fit, flow: Down, spacing: 6,
+                                align: {x: 0.5},
                                 <View> {
                                     width: Fit, height: Fit, flow: Right, spacing: 6,
                                     ic_0 = <IconBtn> {} ic_1 = <IconBtn> {} ic_2 = <IconBtn> {} ic_3 = <IconBtn> {}
@@ -1038,8 +1640,8 @@ live_design! {
                             }
                             <View> {
                                 width: Fill, height: Fit, flow: Right, spacing: 8, align: {y: 0.5},
-                                icon_prev = <ButtonGhost> {text: "‹", padding: {left: 9, right: 9}}
-                                icon_next = <ButtonGhost> {text: "›", padding: {left: 9, right: 9}}
+                                icon_prev = <IconButton> {text: ""}
+                                icon_next = <IconButton> {text: ""}
                                 icon_page_label = <Small> {width: Fill, text: ""}
                             }
                         }
@@ -1224,6 +1826,16 @@ fn modifiers_to_hid(m: &KeyModifiers) -> u8 {
     (m.control as u8) | ((m.shift as u8) << 1) | ((m.alt as u8) << 2) | ((m.logo as u8) << 3)
 }
 
+fn compact_text(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let head: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
 impl App {
     // ------------------------------------------------------------- helpers
     fn active_profile(&self) -> &config::Profile {
@@ -1287,7 +1899,7 @@ impl App {
         self.ui.view(id!(prof_rename_wrap)).set_visible(cx, renaming);
         self.ui
             .button(id!(prof_edit))
-            .set_text(cx, if renaming { "✓" } else { "✎" });
+            .set_text(cx, if renaming { "" } else { "" });
         // Switching, creating or deleting mid-rename would rename the wrong
         // profile; those controls sleep until the rename resolves.
         self.ui.button(id!(prof_prev)).set_enabled(cx, !renaming);
@@ -1314,23 +1926,49 @@ impl App {
     }
 
     fn refresh_status(&mut self, cx: &mut Cx) {
-        let (dot, text, meta) = match (&self.state.last_conn, self.state.connected) {
+        let (dot, text, meta, status_text_color) =
+            match (&self.state.last_conn, self.state.connected) {
             (Some((version, serial)), true) => (
-                vec4(0.063, 0.639, 0.498, 1.0),
+                vec4(0.267, 0.820, 0.616, 1.0),
                 "Connected".to_string(),
                 format!("firmware {version} · serial {serial}"),
+                vec4(0.267, 0.820, 0.616, 1.0),
             ),
             _ => (
-                vec4(0.439, 0.439, 0.486, 1.0),
-                "No pad found".to_string(),
+                vec4(0.498, 0.522, 0.561, 1.0),
+                "Offline".to_string(),
                 // Without a pad, firmware/serial are useless — hidden.
                 String::new(),
+                vec4(0.725, 0.710, 0.678, 1.0),
             ),
+        };
+        let (fw_pill_bg, fw_pill_line, fw_pill_text) = if self.state.connected {
+            (
+                vec4(0.071, 0.192, 0.153, 1.0),
+                vec4(0.145, 0.420, 0.325, 1.0),
+                vec4(0.267, 0.820, 0.616, 1.0),
+            )
+        } else {
+            (
+                vec4(0.047, 0.059, 0.078, 1.0),
+                vec4(0.165, 0.200, 0.251, 1.0),
+                vec4(0.725, 0.710, 0.678, 1.0),
+            )
         };
         self.ui
             .view(id!(status_dot))
             .apply_over(cx, live! {draw_bg: {color: (dot)}});
         self.ui.label(id!(status_text)).set_text(cx, &text);
+        let live_text = if self.state.connected {
+            "Live input ready"
+        } else {
+            "Waiting for device"
+        };
+        self.ui.label(id!(map_live)).set_text(cx, live_text);
+        self.ui.label(id!(footer_live)).set_text(cx, live_text);
+        self.ui
+            .label(id!(status_text))
+            .apply_over(cx, live! {draw_text: {color: (status_text_color)}});
         self.ui.label(id!(status_meta)).set_text(cx, &meta);
         self.ui
             .view(id!(disconnected_card))
@@ -1370,10 +2008,10 @@ impl App {
 
         // Permission banner: only when an action actually needs it.
         let needs = self
-            .active_profile()
-            .inputs
-            .iter()
-            .any(|i| actions::needs_permission(&i.action));
+            .state
+            .selected
+            .map(|slot| actions::needs_permission(&self.input(slot).action))
+            .unwrap_or(false);
         let show_perm = needs && !actions::accessibility_trusted();
         self.ui.view(id!(perm_banner)).set_visible(cx, show_perm);
 
@@ -1389,9 +2027,19 @@ impl App {
         self.ui.label(id!(fw_version)).set_text(cx, &version);
         self.ui.label(id!(fw_meta)).set_text(cx, &fw_meta);
         self.ui.label(id!(fw_pill.pill_label)).set_text(cx, &pill);
+        self.ui.view(id!(fw_pill)).apply_over(
+            cx,
+            live! {draw_bg: {color: (fw_pill_bg), border_color: (fw_pill_line)}},
+        );
+        self.ui
+            .label(id!(fw_pill.pill_label))
+            .apply_over(cx, live! {draw_text: {color: (fw_pill_text)}});
         self.ui
             .button(id!(install_btn))
             .set_enabled(cx, !self.state.updating);
+        for id in [id!(choose_btn), id!(adv_btn), id!(dfu_btn)] {
+            self.ui.button(id).set_enabled(cx, !self.state.updating);
+        }
         self.ui.label(id!(install_note)).set_text(
             cx,
             if self.state.connected {
@@ -1410,44 +2058,76 @@ impl App {
         if cell <= 12 {
             let input = self.input(cell).clone();
             let has_action = input.action != Action::None;
-            let emits = input.emitted.kind != SlotKind::None;
-            let bound = if has_action || !input.label.is_empty() { 1.0 } else { 0.0 };
+            let bound = if has_action { 1.0 } else { 0.0 };
             let status = self
                 .state
                 .intercept
                 .as_ref()
                 .map(|i| i.status[cell])
                 .unwrap_or(SlotStatus::Unavailable);
-            let warn = matches!(status, SlotStatus::DeadOnThisOs | SlotStatus::Failed);
+            let warn = has_action
+                && matches!(
+                    status,
+                    SlotStatus::DeadOnThisOs
+                        | SlotStatus::Failed
+                        | SlotStatus::NothingEmitted
+                        | SlotStatus::ConsumerCode
+                );
             let warn = if warn { 1.0 } else { 0.0 };
             let cid = cap_id(cell);
             let icon = lucide::icon_char(&input.icon).map(String::from).unwrap_or_default();
             self.ui.label(&[cid, live_id!(cap_icon)]).set_text(cx, &icon);
+            let label = if input.label.is_empty() {
+                "—".to_string()
+            } else {
+                compact_text(&input.label, 10)
+            };
             self.ui
                 .label(&[cid, live_id!(cap_label)])
-                .set_text(cx, if input.label.is_empty() { "—" } else { &input.label });
-            // The emitted keycode as secondary metadata, never the identity.
-            let code = if emits { keycodes::slot_label(&input.emitted) } else { String::new() };
-            self.ui.label(&[cid, live_id!(cap_code)]).set_text(cx, &code);
+                .set_text(cx, &label);
             self.ui.view(&[cid]).apply_over(
                 cx,
                 live! {draw_bg: {active: (active), bound: (bound), warn: (warn)}},
             );
             self.ui.view(&[cid]).redraw(cx);
         } else {
-            let (vid, label_slot) = match cell {
-                CELL_ENC => (id!(enc_cell), SLOT_ENC_CW),
-                CELL_JOY => (id!(joy_cell), SLOT_JOY_UP),
-                _ => (id!(touch_cell), SLOT_TOUCH_TAP),
+            let (vid, name) = match cell {
+                CELL_ENC => (id!(enc_cell), "ENCODER"),
+                CELL_JOY => (id!(joy_cell), "JOYSTICK"),
+                _ => (id!(touch_cell), "TOUCH PAD"),
             };
-            let input = self.input(label_slot).clone();
-            let name = if input.label.is_empty() { "—".into() } else { input.label };
+            let group = slots_for_cell(cell);
+            let bound = group.iter().any(|&slot| {
+                let input = self.input(slot);
+                input.action != Action::None
+            });
+            let warn = group.iter().any(|&slot| {
+                if self.input(slot).action == Action::None {
+                    return false;
+                }
+                let status = self
+                    .state
+                    .intercept
+                    .as_ref()
+                    .map(|i| i.status[slot])
+                    .unwrap_or(SlotStatus::Unavailable);
+                matches!(
+                    status,
+                    SlotStatus::DeadOnThisOs
+                        | SlotStatus::Failed
+                        | SlotStatus::NothingEmitted
+                        | SlotStatus::ConsumerCode
+                )
+            });
             self.ui
                 .label(&[vid[0], live_id!(dial_label)])
-                .set_text(cx, &name);
-            self.ui
-                .view(vid)
-                .apply_over(cx, live! {draw_bg: {active: (active)}});
+                .set_text(cx, name);
+            let bound = if bound { 1.0 } else { 0.0 };
+            let warn = if warn { 1.0 } else { 0.0 };
+            self.ui.view(vid).apply_over(
+                cx,
+                live! {draw_bg: {active: (active), bound: (bound), warn: (warn)}},
+            );
             self.ui.view(vid).redraw(cx);
         }
     }
@@ -1507,18 +2187,60 @@ impl App {
             .as_ref()
             .map(|i| i.status[slot])
             .unwrap_or(SlotStatus::Unavailable);
-        let status_text = match status {
-            SlotStatus::PassThrough => "Pass-through",
-            SlotStatus::Active => "Intercepted",
-            SlotStatus::ConsumerCode => "OS-handled",
-            SlotStatus::DeadOnThisOs => "Invisible on this OS",
-            SlotStatus::NothingEmitted => "Emits nothing",
-            SlotStatus::Failed => "Key already taken",
-            SlotStatus::Unavailable => "Hotkeys unavailable",
+        let (status_text, status_bg, status_line, status_fg) = match status {
+            SlotStatus::PassThrough => (
+                "No host action",
+                vec4(0.047, 0.059, 0.078, 1.0),
+                vec4(0.165, 0.200, 0.251, 1.0),
+                vec4(0.725, 0.710, 0.678, 1.0),
+            ),
+            SlotStatus::Active => (
+                "Host action active",
+                vec4(0.071, 0.192, 0.153, 1.0),
+                vec4(0.145, 0.420, 0.325, 1.0),
+                vec4(0.267, 0.820, 0.616, 1.0),
+            ),
+            SlotStatus::ConsumerCode => (
+                "Handled by OS",
+                vec4(0.227, 0.161, 0.090, 1.0),
+                vec4(0.376, 0.267, 0.122, 1.0),
+                vec4(1.000, 0.765, 0.420, 1.0),
+            ),
+            SlotStatus::DeadOnThisOs => (
+                "Invisible on this OS",
+                vec4(0.212, 0.102, 0.125, 1.0),
+                vec4(0.400, 0.188, 0.227, 1.0),
+                vec4(1.000, 0.565, 0.588, 1.0),
+            ),
+            SlotStatus::NothingEmitted => (
+                "Emits nothing",
+                vec4(0.212, 0.102, 0.125, 1.0),
+                vec4(0.400, 0.188, 0.227, 1.0),
+                vec4(1.000, 0.565, 0.588, 1.0),
+            ),
+            SlotStatus::Failed => (
+                "Key already taken",
+                vec4(0.212, 0.102, 0.125, 1.0),
+                vec4(0.400, 0.188, 0.227, 1.0),
+                vec4(1.000, 0.565, 0.588, 1.0),
+            ),
+            SlotStatus::Unavailable => (
+                "Hotkeys unavailable",
+                vec4(0.047, 0.059, 0.078, 1.0),
+                vec4(0.165, 0.200, 0.251, 1.0),
+                vec4(0.725, 0.710, 0.678, 1.0),
+            ),
         };
         self.ui
             .label(id!(ed_status.pill_label))
             .set_text(cx, status_text);
+        self.ui.view(id!(ed_status)).apply_over(
+            cx,
+            live! {draw_bg: {color: (status_bg), border_color: (status_line)}},
+        );
+        self.ui
+            .label(id!(ed_status.pill_label))
+            .apply_over(cx, live! {draw_text: {color: (status_fg)}});
 
         // Analog sub-input picker.
         let cell = cell_for_slot(slot);
@@ -1543,9 +2265,15 @@ impl App {
         for s in 0..3usize {
             let on = s == kind_idx;
             let (bg, fg) = if on {
-                (vec4(0.11, 0.11, 0.125, 1.0), vec4(0.957, 0.957, 0.961, 1.0))
+                (
+                    vec4(0.227, 0.161, 0.090, 1.0),
+                    vec4(1.000, 0.765, 0.420, 1.0),
+                )
             } else {
-                (vec4(0.0, 0.0, 0.0, 0.0), vec4(0.439, 0.439, 0.486, 1.0))
+                (
+                    vec4(0.0, 0.0, 0.0, 0.0),
+                    vec4(0.573, 0.592, 0.627, 1.0),
+                )
             };
             self.ui
                 .button(&[LiveId::from_str(&format!("kind_{s}"))])
@@ -1602,22 +2330,25 @@ impl App {
         let off_table_note;
         let emit_note = if !in_table {
             off_table_note = format!(
-                "emits raw usage 0x{:02X} (not in the picker) — choosing from the list replaces it",
+                "Raw usage 0x{:02X} is not in the picker.",
                 input.emitted.code
             );
             off_table_note.as_str()
         } else {
             match status {
                 SlotStatus::DeadOnThisOs => {
-                    "macOS cannot see this keycode at all (no virtual keycode exists) — pick another to run actions here."
+                    "This keycode cannot trigger macOS host actions."
                 }
                 SlotStatus::ConsumerCode => {
-                    "Media codes are handled by the OS directly; app actions need a keycode instead."
+                    "Media codes go directly to the OS; use a keycode for host actions."
                 }
                 _ => "",
             }
         };
         self.ui.label(id!(emit_note)).set_text(cx, emit_note);
+        self.ui
+            .view(id!(emit_note_wrap))
+            .set_visible(cx, !emit_note.is_empty());
 
         // ACTION: dropdown + per-type block.
         let action_idx = match &input.action {
@@ -1685,7 +2416,13 @@ impl App {
             actions::needs_permission(&input.action) && !actions::accessibility_trusted();
         self.ui.view(id!(perm_note)).set_visible(cx, needs_perm);
         let action_note = match &input.action {
-            Action::None => "The keycode passes through as ordinary input.",
+            Action::None if input.emitted.kind == SlotKind::None => {
+                "This input is intentionally inactive."
+            }
+            Action::None if input.emitted.kind == SlotKind::Consumer => {
+                "The media code is handled directly by the operating system."
+            }
+            Action::None => "The keycode passes through as ordinary keyboard input.",
             Action::AppSettings => "Opens this app's settings sheet.",
             // No dead ends: a media op with no synthesis path on this OS
             // must say so instead of silently doing nothing.
@@ -1697,6 +2434,9 @@ impl App {
             _ => "",
         };
         self.ui.label(id!(action_note)).set_text(cx, action_note);
+        self.ui
+            .view(id!(action_note_wrap))
+            .set_visible(cx, !action_note.is_empty());
 
         // LABEL
         if set_inputs {
@@ -1715,6 +2455,9 @@ impl App {
         self.ui.label(id!(icon_preview)).set_text(cx, &preview);
         self.ui.label(id!(icon_name)).set_text(cx, &name);
         self.ui.label(id!(icon_note)).set_text(cx, &icon_note);
+        self.ui
+            .view(id!(icon_note_wrap))
+            .set_visible(cx, !icon_note.is_empty());
 
         // Joystick tuning, only where it applies.
         let is_joy = (SLOT_JOY_UP..=20).contains(&slot);
@@ -1738,10 +2481,14 @@ impl App {
         }
         self.refresh_cell(cx, cell_for_slot(slot));
         self.refresh_editor(cx, true);
+        self.refresh_status(cx);
     }
 
     // -------------------------------------------------------------- sheets
     fn open_sheet(&mut self, cx: &mut Cx, kind: SheetKind) {
+        // Recording belongs to the surface that armed it. Never let a hidden
+        // editor or a newly opened sheet receive the next keystroke.
+        self.state.recording = RecordTarget::None;
         self.state.sheet = kind;
         self.ui
             .view(id!(settings_sheet))
@@ -1880,7 +2627,7 @@ impl App {
                 .set_text(cx, &format!("{}", i + 1));
             self.ui
                 .button(&[rid, live_id!(mr_en)])
-                .set_text(cx, if entry.enabled { "on" } else { "off" });
+                .set_text(cx, if entry.enabled { "Enabled" } else { "Off" });
             let dd = self.ui.drop_down(&[rid, live_id!(mr_type)]);
             dd.set_labels(cx, MACRO_STEP_KINDS.iter().map(|s| s.to_string()).collect());
             let (kind_idx, arg, label) = match &step {
@@ -1896,17 +2643,7 @@ impl App {
                 MacroStep::Delay { ms } => (1, Some(format!("{ms}")), None),
                 MacroStep::Run { command } => (2, Some(command.clone()), None),
                 MacroStep::Open { target } => (3, Some(target.clone()), None),
-                MacroStep::Media { op } => (
-                    4,
-                    None,
-                    Some(
-                        MEDIA_OPS
-                            .iter()
-                            .find(|(o, _)| o == op)
-                            .map(|(_, n)| n.to_string())
-                            .unwrap_or_default(),
-                    ),
-                ),
+                MacroStep::Media { .. } => (4, None, None),
             };
             dd.set_selected_item(cx, kind_idx);
             let is_ks = matches!(step, MacroStep::Keystroke { .. });
@@ -1915,6 +2652,20 @@ impl App {
             self.ui
                 .view(&[rid, live_id!(mr_label_wrap)])
                 .set_visible(cx, label.is_some());
+            self.ui
+                .view(&[rid, live_id!(mr_media_wrap)])
+                .set_visible(cx, is_media);
+            if let MacroStep::Media { op } = &step {
+                let media = self.ui.drop_down(&[rid, live_id!(mr_media)]);
+                media.set_labels(
+                    cx,
+                    MEDIA_OPS.iter().map(|(_, name)| name.to_string()).collect(),
+                );
+                media.set_selected_item(
+                    cx,
+                    MEDIA_OPS.iter().position(|(candidate, _)| candidate == op).unwrap_or(0),
+                );
+            }
             if let Some(l) = &label {
                 let l = if self.state.recording == RecordTarget::MacroStep(i) {
                     "press keys…"
@@ -1984,6 +2735,10 @@ impl App {
         // committing it against the newly active profile would rename the
         // wrong one.
         self.end_rename(cx, false);
+        self.state.recording = RecordTarget::None;
+        self.state.confirm_delete = false;
+        cx.stop_timer(self.state.confirm_delete_timer);
+        self.ui.button(id!(prof_del)).set_text(cx, "");
         if idx >= self.state.config.profiles.len() {
             return;
         }
@@ -2048,14 +2803,20 @@ impl App {
             self.open_sheet(cx, SheetKind::None);
         }
         if let Some(on) = self.ui.check_box(id!(launch_cb)).changed(actions) {
-            self.state.config.launch_at_login = on;
-            let result = apply_launch_at_login(on);
-            if let Err(e) = result {
-                self.ui
-                    .label(id!(settings_status))
-                    .set_text(cx, &format!("launch at login: {e}"));
+            match apply_launch_at_login(on) {
+                Ok(()) => {
+                    self.state.config.launch_at_login = on;
+                    self.persist(cx);
+                }
+                Err(e) => {
+                    self.ui
+                        .check_box(id!(launch_cb))
+                        .set_active(cx, self.state.config.launch_at_login);
+                    self.ui
+                        .label(id!(settings_status))
+                        .set_text(cx, &format!("Launch at login: {e}"));
+                }
             }
-            self.persist(cx);
         }
         if let Some(on) = self.ui.check_box(id!(menubar_cb)).changed(actions) {
             self.state.config.show_menubar = on;
@@ -2086,10 +2847,16 @@ impl App {
                     .add_filter("config", &["json"])
                     .pick_file()
                 {
-                    let msg = match config::import_from(&path, mode, &mut self.state.config) {
+                    let mut msg = match config::import_from(&path, mode, &mut self.state.config) {
                         Ok(summary) => summary,
                         Err(e) => format!("import failed: {e}"),
                     };
+                    if let Err(e) = apply_launch_at_login(self.state.config.launch_at_login) {
+                        msg.push_str(&format!(" · login item: {e}"));
+                    }
+                    if let Some(menubar) = &mut self.state.menubar {
+                        menubar.set_visible(self.state.config.show_menubar);
+                    }
                     self.ui.label(id!(settings_status)).set_text(cx, &msg);
                     self.persist(cx);
                     self.refresh_profile_strip(cx);
@@ -2102,6 +2869,10 @@ impl App {
             if self.state.confirm_reset {
                 self.state.confirm_reset = false;
                 config::factory_reset(&mut self.state.config);
+                let _ = apply_launch_at_login(self.state.config.launch_at_login);
+                if let Some(menubar) = &mut self.state.menubar {
+                    menubar.set_visible(self.state.config.show_menubar);
+                }
                 if let Some(tx) = &self.state.device_tx {
                     let _ = tx.send(DeviceCmd::FactoryReset);
                 }
@@ -2153,6 +2924,7 @@ impl App {
                 self.refresh_macro_sheet(cx);
             }
             if let Some(kind) = self.ui.drop_down(&[rid, live_id!(mr_type)]).selected(actions) {
+                self.state.recording = RecordTarget::None;
                 let new = match kind {
                     0 => MacroStep::Keystroke { mods: 0, key: 0 },
                     1 => MacroStep::Delay { ms: 100 },
@@ -2173,6 +2945,19 @@ impl App {
                     self.refresh_macro_sheet(cx);
                 }
             }
+            if let Some(op_idx) = self
+                .ui
+                .drop_down(&[rid, live_id!(mr_media)])
+                .selected(actions)
+            {
+                if let (Some((op, _)), MacroStep::Media { op: current }) = (
+                    MEDIA_OPS.get(op_idx),
+                    &mut self.state.macro_draft[i].step,
+                ) {
+                    *current = *op;
+                    self.refresh_macro_sheet(cx);
+                }
+            }
             if self.ui.button(&[rid, live_id!(mr_rec)]).clicked(actions) {
                 self.state.recording = RecordTarget::MacroStep(i);
                 self.refresh_macro_sheet(cx);
@@ -2186,16 +2971,19 @@ impl App {
                 }
             }
             if self.ui.button(&[rid, live_id!(mr_up)]).clicked(actions) && i > 0 {
+                self.state.recording = RecordTarget::None;
                 self.state.macro_draft.swap(i, i - 1);
                 self.refresh_macro_sheet(cx);
             }
             if self.ui.button(&[rid, live_id!(mr_down)]).clicked(actions)
                 && i + 1 < self.state.macro_draft.len()
             {
+                self.state.recording = RecordTarget::None;
                 self.state.macro_draft.swap(i, i + 1);
                 self.refresh_macro_sheet(cx);
             }
             if self.ui.button(&[rid, live_id!(mr_del)]).clicked(actions) {
+                self.state.recording = RecordTarget::None;
                 self.state.macro_draft.remove(i);
                 self.refresh_macro_sheet(cx);
             }
@@ -2232,7 +3020,11 @@ impl App {
                 self.state.updating = true;
                 self.ui.view(id!(progress_block)).set_visible(cx, true);
                 self.ui.label(id!(phase_label)).set_text(cx, "Starting…");
-                self.ui.button(id!(install_btn)).set_enabled(cx, false);
+                self.ui.label(id!(pct_label)).set_text(cx, "0%");
+                self.ui
+                    .view(id!(progress_fill))
+                    .apply_over(cx, live! {width: 0});
+                self.refresh_status(cx);
                 if let Some(tx) = &self.state.device_tx {
                     let _ = tx.send(DeviceCmd::StartUpdate { image });
                 }
@@ -2272,6 +3064,13 @@ const MEDIA_OPS: [(MediaOp, &str); 8] = [
 impl MatchEvent for App {
     fn handle_startup(&mut self, cx: &mut Cx) {
         self.state.config = config::load();
+        self.ui.view(id!(caption_bar)).set_visible(
+            cx,
+            cfg!(target_os = "macos") || cfg!(target_os = "windows"),
+        );
+        // Open on a useful, complete inspector instead of an unfinished-
+        // looking placeholder. The first key is always present.
+        self.state.selected = Some(0);
         // Reconcile the OS login item with the config every start (the PRD's
         // launch-at-login defaults ON; a checkbox that only renders checked
         // without registering would be a lie). Also re-registers the correct
@@ -2320,6 +3119,16 @@ impl MatchEvent for App {
         self.refresh_status(cx);
     }
 
+    fn handle_app_got_focus(&mut self, cx: &mut Cx) {
+        // Permission changes happen in another app (System Settings). Refresh
+        // semantic banners and notes as soon as OpenMicro becomes active.
+        self.refresh_status(cx);
+        self.refresh_editor(cx, false);
+        if self.state.sheet == SheetKind::Settings {
+            self.refresh_settings(cx);
+        }
+    }
+
     fn handle_timer(&mut self, cx: &mut Cx, e: &TimerEvent) {
         let mut expired = Vec::new();
         self.state.flash_timers.retain(|(cell, timer)| {
@@ -2335,7 +3144,7 @@ impl MatchEvent for App {
         }
         if self.state.confirm_delete_timer.is_timer(e).is_some() && self.state.confirm_delete {
             self.state.confirm_delete = false;
-            self.ui.button(id!(prof_del)).set_text(cx, "−");
+            self.ui.button(id!(prof_del)).set_text(cx, "");
             self.ui.redraw(cx);
         }
         if self.state.sync_timer.is_timer(e).is_some() && self.state.sync_pending {
@@ -2476,7 +3285,11 @@ impl MatchEvent for App {
                 }
             } else if let Some(msg) = action.downcast_ref::<MenubarMsg>() {
                 if let Some(idx) = msg.id.strip_prefix("profile:").and_then(|s| s.parse().ok()) {
-                    self.switch_profile(cx, idx);
+                    // A modal draft belongs to the profile that opened it.
+                    // Ignore tray switches until it is committed/cancelled.
+                    if self.state.sheet == SheetKind::None {
+                        self.switch_profile(cx, idx);
+                    }
                 } else if msg.id == "quit" {
                     let _ = config::save(&self.state.config);
                     std::process::exit(0);
@@ -2536,7 +3349,7 @@ impl MatchEvent for App {
                     let idx = self.state.config.active_profile;
                     self.state.config.profiles.remove(idx);
                     let idx = idx.min(self.state.config.profiles.len() - 1);
-                    self.ui.button(id!(prof_del)).set_text(cx, "−");
+                    self.ui.button(id!(prof_del)).set_text(cx, "");
                     self.switch_profile(cx, idx);
                 } else {
                     // Arm, and let a TIMER disarm it — disarming on "any
@@ -2545,7 +3358,7 @@ impl MatchEvent for App {
                     self.state.confirm_delete = true;
                     cx.stop_timer(self.state.confirm_delete_timer);
                     self.state.confirm_delete_timer = cx.start_timeout(3.0);
-                    self.ui.button(id!(prof_del)).set_text(cx, "sure?");
+                    self.ui.button(id!(prof_del)).set_text(cx, "");
                     self.ui.redraw(cx);
                 }
             }
@@ -2657,6 +3470,7 @@ impl MatchEvent for App {
                 }
             }
             if let Some(idx) = self.ui.drop_down(id!(action_dd)).selected(actions) {
+                self.state.recording = RecordTarget::None;
                 let current = self.input(slot).action.clone();
                 let new = match idx {
                     0 => Action::None,
@@ -2797,6 +3611,10 @@ impl MatchEvent for App {
     fn handle_key_down(&mut self, cx: &mut Cx, e: &KeyEvent) {
         // Press-to-record: the next chord lands in whatever armed it.
         if self.state.recording == RecordTarget::None {
+            if e.key_code == KeyCode::Escape && self.state.sheet != SheetKind::None {
+                self.state.confirm_reset = false;
+                self.open_sheet(cx, SheetKind::None);
+            }
             return;
         }
         if e.key_code == KeyCode::Escape {
