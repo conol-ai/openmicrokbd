@@ -15,31 +15,37 @@
 //!   LED_UG   = PA0       (16x SK6812MINI-E underglow ring)
 //!   USB      = PA11/PA12 (FS device; HSI48 + CRS, crystal not required)
 //!
-//! HID map: 13 keys -> F13..F24 (the 2U cap's two switches, sw10+sw11, share
-//! F23); encoder -> volume +/- ; encoder push -> mute; touch -> play/pause;
-//! joystick -> arrow keys, push -> enter.
+//! HID map: every input's emitted code is CONFIGURABLE and stored in flash
+//! (keymap.rs) — all 13 keys are independent positions (including the pair
+//! under the 2U keycap). Factory defaults: keys F13..F20 + Shift+F13..F17
+//! (interceptable on every OS), encoder -> volume/mute, touch -> play/pause,
+//! joystick -> arrows/enter.
 //!
 //! A third, vendor-defined HID interface (usage page 0xFF60) carries the
-//! updater protocol: the host app can query the firmware version and command
-//! a reboot into the ROM DFU bootloader (see dfu.rs and README.md).
+//! app protocol: version query, DFU reboot, keymap read/write/save, analog
+//! tuning, and unsolicited input-event reports (first byte 0x80) that give
+//! the app live press feedback without any OS input-monitoring permission.
 
 #![no_std]
 #![no_main]
 
 mod dfu;
+mod keymap;
 mod ws2812;
 
 use embassy_executor::Spawner;
 use embassy_futures::join::join3;
+use embassy_futures::select::{select, Either};
 use embassy_stm32::adc::Adc;
 use embassy_stm32::exti::ExtiInput;
+use embassy_stm32::flash::Flash;
 use embassy_stm32::gpio::{Flex, Input, Level, Output, Pull, Speed};
 use embassy_stm32::rcc::{Hsi48Config, Sysclk};
 use embassy_stm32::usb::Driver;
 use embassy_stm32::{bind_interrupts, peripherals, usb, Config};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::channel::Channel;
-use embassy_time::{Duration, Ticker, Timer};
+use embassy_time::{with_timeout, Duration, Ticker, Timer};
 use embassy_usb::class::hid::{HidReaderWriter, State};
 // Bring-up logging over the SWD probe (RTT) + panic messages on the same
 // channel. `DEFMT_LOG=off` compiles every log statement out.
@@ -54,28 +60,14 @@ bind_interrupts!(struct Irqs {
     ADC1_COMP => embassy_stm32::adc::InterruptHandler<peripherals::ADC1>;
 });
 
-// F13..F24 HID keyboard usages.
-const KC_F13: u8 = 0x68;
-
-/// keymap[row][col] -> keycode (0 = no key at that matrix position).
-/// sw10 and sw11 sit under one 2U keycap and share F23.
-const KEYMAP: [[u8; 4]; 4] = [
-    [0, KC_F13, KC_F13 + 1, 0],                       // R0: -,  k1,  k2,  -
-    [KC_F13 + 2, KC_F13 + 3, KC_F13 + 4, KC_F13 + 5], // R1: k3..k6
-    [KC_F13 + 6, KC_F13 + 7, KC_F13 + 8, KC_F13 + 9], // R2: k7..k10
-    [0, KC_F13 + 10, KC_F13 + 10, KC_F13 + 11],       // R3: -, k11, k11, k13
+/// matrix position -> key slot index (-1 = no switch there). All 13 keys are
+/// independent — the two switches under the 2U keycap are positions 10 and 11.
+const POSITIONS: [[i8; 4]; 4] = [
+    [-1, 0, 1, -1],   // R0: -,  p0,  p1,  -
+    [2, 3, 4, 5],     // R1: p2..p5
+    [6, 7, 8, 9],     // R2: p6..p9
+    [-1, 10, 11, 12], // R3: -, p10, p11, p12
 ];
-
-const KC_RIGHT: u8 = 0x4F;
-const KC_LEFT: u8 = 0x50;
-const KC_DOWN: u8 = 0x51;
-const KC_UP: u8 = 0x52;
-const KC_ENTER: u8 = 0x28;
-
-const USAGE_MUTE: u16 = 0xE2;
-const USAGE_VOL_UP: u16 = 0xE9;
-const USAGE_VOL_DOWN: u16 = 0xEA;
-const USAGE_PLAY_PAUSE: u16 = 0xCD;
 
 const FW_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -119,17 +111,114 @@ const RAW_HID_DESC: &[u8] = &[
     0xC0,             // End Collection
 ];
 
-// Updater protocol, one command per 32-byte OUT report:
-//   [0x01, ...]                -> reply [0x01, len, version ascii...]
-//   [0x02, 'D', 'F', 'U', '!'] -> ack [0x02, 0x01], reboot into ROM DFU
+// App protocol (v2), one command per 32-byte OUT report; replies echo the
+// command byte, unsolicited event reports start 0x80 (see EVENT_CH):
+//   [0x01, ...]                    -> [0x01, len, version ascii...]
+//   [0x02, 'D','F','U','!']        -> [0x02, 0x01], reboot into ROM DFU
+//   [0x03, page]                   -> [0x03, page, count, count*4 slot bytes]
+//   [0x04, page, count, slots...]  -> [0x04, ok] (applies to RAM immediately)
+//   [0x05, 'S','A','V','E']        -> [0x05, ok] (persist keymap to flash)
+//   [0x06, 'R','S','T','!']        -> [0x06, ok] (factory defaults, flash wiped)
+//   [0x07]                         -> [0x07, thr_lo, thr_hi] (joystick threshold)
+//   [0x08, thr_lo, thr_hi]         -> [0x08, 0x01] (RAM only; SAVE persists)
 const CMD_VERSION: u8 = 0x01;
 const CMD_ENTER_DFU: u8 = 0x02;
+const CMD_GET_KEYMAP: u8 = 0x03;
+const CMD_SET_KEYMAP: u8 = 0x04;
+const CMD_SAVE: u8 = 0x05;
+const CMD_FACTORY_RESET: u8 = 0x06;
+const CMD_GET_ANALOG: u8 = 0x07;
+const CMD_SET_ANALOG: u8 = 0x08;
 const ENTER_DFU_KEY: &[u8; 4] = b"DFU!";
+const SAVE_KEY: &[u8; 4] = b"SAVE";
+const RESET_KEY: &[u8; 4] = b"RST!";
+const EVENT_REPORT: u8 = 0x80;
 
-static KBD_CH: Channel<ThreadModeRawMutex, KeyboardReport, 4> = Channel::new();
-static CONSUMER_CH: Channel<ThreadModeRawMutex, MediaKeyboardReport, 4> = Channel::new();
-/// Bit i = logical key i pressed — drives the per-key LED effect.
+static KBD_CH: Channel<ThreadModeRawMutex, KeyboardReport, 8> = Channel::new();
+static CONSUMER_CH: Channel<ThreadModeRawMutex, MediaKeyboardReport, 8> = Channel::new();
+/// Bit i = key position i pressed — drives the per-key LED effect.
 static KEYSTATE: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);
+
+/// Live input events for the app ([src, a, b] -> report [0x80, src, a, b]):
+/// src 0 = key (a = position, b = pressed), 1 = encoder rotate (a = 1 CW),
+/// 2 = encoder button, 3 = joystick (a = dir 0..4, b = active), 4 = touch tap.
+/// Dropped when full — press feedback is best-effort by design.
+static EVENT_CH: Channel<ThreadModeRawMutex, [u8; 3], 16> = Channel::new();
+
+fn post_event(src: u8, a: u8, b: u8) {
+    let _ = EVENT_CH.try_send([src, a, b]);
+}
+
+/// Which slots are currently held (matrix keys by position, plus the button
+/// and joystick-direction slots). One shared set so the keyboard report is
+/// always rebuilt from the WHOLE truth — a joystick move can no longer drop a
+/// held key from the host's point of view, which the old per-task single-key
+/// reports could.
+static HELD: embassy_sync::blocking_mutex::Mutex<
+    ThreadModeRawMutex,
+    core::cell::RefCell<[bool; keymap::SLOT_COUNT]>,
+> = embassy_sync::blocking_mutex::Mutex::new(core::cell::RefCell::new(
+    [false; keymap::SLOT_COUNT],
+));
+
+/// Mark a slot held/released and emit the consequences: keyboard-kind slots
+/// rebuild the composite 6KRO report (modifiers OR-ed across every held slot —
+/// the documented impurity of modifier-qualified codes); consumer-kind slots
+/// send their usage on press and 0 on release.
+fn set_held(slot_idx: usize, held: bool) {
+    let s = keymap::slot(slot_idx);
+    let changed = HELD.lock(|h| {
+        let mut h = h.borrow_mut();
+        let changed = h[slot_idx] != held;
+        h[slot_idx] = held;
+        changed
+    });
+    if !changed {
+        return;
+    }
+    match s.kind {
+        keymap::KIND_CONSUMER => {
+            let usage = if held { s.code } else { 0 };
+            let _ = CONSUMER_CH.try_send(MediaKeyboardReport { usage_id: usage });
+        }
+        _ => {
+            // KIND_NONE falls through here too: rebuilding the keyboard
+            // report from the held set is cheap and always correct.
+            let mut report = KeyboardReport {
+                modifier: 0,
+                reserved: 0,
+                leds: 0,
+                keycodes: [0; 6],
+            };
+            let mut n = 0;
+            HELD.lock(|h| {
+                let h = h.borrow();
+                for (i, held) in h.iter().enumerate() {
+                    if !held {
+                        continue;
+                    }
+                    let s = keymap::slot(i);
+                    if s.kind != keymap::KIND_KEYBOARD {
+                        continue;
+                    }
+                    report.modifier |= s.mods;
+                    let code = s.code as u8;
+                    if code != 0 && n < 6 && !report.keycodes[..n].contains(&code) {
+                        report.keycodes[n] = code;
+                        n += 1;
+                    }
+                }
+            });
+            let _ = KBD_CH.try_send(report);
+        }
+    }
+}
+
+/// Momentary tap of a slot (encoder detents, touch tap): press then release.
+fn tap_slot(slot_idx: usize) {
+    set_held(slot_idx, true);
+    set_held(slot_idx, false);
+}
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -151,6 +240,15 @@ async fn main(spawner: Spawner) {
         "OpenMicro fw v{}: clocks up (HSI48 -> 48 MHz core, CRS synced from USB SOF)",
         FW_VERSION
     );
+
+    // The configurable keymap: saved copy from the last flash page if one
+    // exists, factory defaults otherwise. Loaded before any task can emit.
+    let mut flash = Flash::new_blocking(p.FLASH);
+    if keymap::load_from_flash() {
+        info!("keymap: loaded saved configuration from flash");
+    } else {
+        info!("keymap: no saved configuration — factory defaults");
+    }
 
     // ---- USB HID: a boot keyboard + a consumer-control interface ----
     let driver = Driver::new(p.USB, Irqs, p.PA12, p.PA11);
@@ -270,37 +368,102 @@ async fn main(spawner: Spawner) {
             }
         }
     };
+    // The vendor channel serves two flows on one endpoint pair: command
+    // replies (echo the command byte) and unsolicited input events (0x80).
+    // Events are best-effort: when no host is draining the IN endpoint the
+    // write would park forever, so it gets a short timeout and the event is
+    // dropped — a stale event left armed in the endpoint is harmless.
     let updater = async {
         let mut buf = [0u8; 32];
         loop {
-            // `read` fails *immediately* while the endpoint is disabled — i.e.
-            // any time the host has not configured us yet. A bare `continue`
-            // here never awaits, so this future would never return Pending and
-            // would starve every other task on the executor. Back off instead.
-            let Ok(_) = raw_reader.read(&mut buf).await else {
-                Timer::after_millis(100).await;
-                continue;
-            };
-            match buf[0] {
-                CMD_VERSION => {
-                    info!("updater: version query -> {}", FW_VERSION);
+            match select(raw_reader.read(&mut buf), EVENT_CH.receive()).await {
+                Either::Second(ev) => {
+                    let mut rep = [0u8; 32];
+                    rep[0] = EVENT_REPORT;
+                    rep[1..4].copy_from_slice(&ev);
+                    let _ = with_timeout(Duration::from_millis(50), raw_writer.write(&rep)).await;
+                }
+                Either::First(res) => {
+                    // `read` fails *immediately* while the endpoint is disabled
+                    // — i.e. before the host configures us. A bare `continue`
+                    // would never await and starve every other task; back off.
+                    let Ok(_) = res else {
+                        Timer::after_millis(100).await;
+                        continue;
+                    };
                     let mut reply = [0u8; 32];
-                    reply[0] = CMD_VERSION;
-                    reply[1] = FW_VERSION.len() as u8;
-                    reply[2..2 + FW_VERSION.len()].copy_from_slice(FW_VERSION.as_bytes());
+                    reply[0] = buf[0];
+                    match buf[0] {
+                        CMD_VERSION => {
+                            info!("app: version query -> {}", FW_VERSION);
+                            reply[1] = FW_VERSION.len() as u8;
+                            reply[2..2 + FW_VERSION.len()]
+                                .copy_from_slice(FW_VERSION.as_bytes());
+                        }
+                        CMD_ENTER_DFU if &buf[1..5] == ENTER_DFU_KEY => {
+                            warn!("app: DFU reboot requested -> ROM bootloader");
+                            reply[1] = 0x01;
+                            let _ = raw_writer.write(&reply).await;
+                            // Let the ack reach the host before dropping off
+                            // the bus.
+                            Timer::after_millis(50).await;
+                            dfu::reboot_into_bootloader();
+                        }
+                        CMD_GET_KEYMAP => {
+                            let page = buf[1] as usize;
+                            reply[1] = buf[1];
+                            match keymap::read_page(page, &mut reply[3..31]) {
+                                Some(n) => reply[2] = n as u8,
+                                None => reply[2] = 0,
+                            }
+                        }
+                        CMD_SET_KEYMAP => {
+                            let ok = keymap::write_page(
+                                buf[1] as usize,
+                                buf[2] as usize,
+                                &buf[3..31],
+                            );
+                            info!(
+                                "app: keymap page {=u8} write -> {}",
+                                buf[1],
+                                if ok { "ok" } else { "rejected" }
+                            );
+                            reply[1] = ok as u8;
+                        }
+                        CMD_SAVE if &buf[1..5] == SAVE_KEY => {
+                            let ok = keymap::save_to_flash(&mut flash).is_ok();
+                            info!(
+                                "app: keymap save -> {}",
+                                if ok { "flash written" } else { "FLASH ERROR" }
+                            );
+                            reply[1] = ok as u8;
+                        }
+                        CMD_FACTORY_RESET if &buf[1..5] == RESET_KEY => {
+                            let ok = keymap::factory_reset(&mut flash).is_ok();
+                            warn!("app: factory reset -> defaults");
+                            reply[1] = ok as u8;
+                        }
+                        CMD_GET_ANALOG => {
+                            let thr = keymap::joy_threshold();
+                            reply[1..3].copy_from_slice(&thr.to_le_bytes());
+                        }
+                        CMD_SET_ANALOG => {
+                            let thr = u16::from_le_bytes([buf[1], buf[2]]);
+                            // Clamp to sane bounds: a tiny threshold would
+                            // stream arrows from ADC noise, a huge one can
+                            // never trigger.
+                            let thr = thr.clamp(200, 1900);
+                            keymap::KEYMAP.lock(|k| k.borrow_mut().joy_threshold = thr);
+                            info!("app: joystick threshold -> {=u16}", thr);
+                            reply[1] = 0x01;
+                        }
+                        other => {
+                            debug!("app: unknown cmd 0x{=u8:02x}", other);
+                            continue;
+                        }
+                    }
                     let _ = raw_writer.write(&reply).await;
                 }
-                CMD_ENTER_DFU if &buf[1..5] == ENTER_DFU_KEY => {
-                    warn!("updater: DFU reboot requested -> ROM bootloader");
-                    let mut reply = [0u8; 32];
-                    reply[0] = CMD_ENTER_DFU;
-                    reply[1] = 0x01;
-                    let _ = raw_writer.write(&reply).await;
-                    // Let the ack reach the host before dropping off the bus.
-                    Timer::after_millis(50).await;
-                    dfu::reboot_into_bootloader();
-                }
-                other => debug!("updater: unknown cmd 0x{=u8:02x}", other),
             }
         }
     };
@@ -338,20 +501,13 @@ async fn scan_task(
     let mut n: u32 = 0;
     let mut debounce = [[0u8; 4]; 4];
     let mut pressed = [[false; 4]; 4];
-    let mut last_report = KeyboardReport {
-        modifier: 0,
-        reserved: 0,
-        leds: 0,
-        keycodes: [0; 6],
-    };
     let mut enc_sw_last = enc_sw.is_high();
     let mut joy_sw_last = joy_sw.is_high();
 
     loop {
         ticker.next().await;
 
-        // -- matrix --
-        let mut changed = false;
+        // -- matrix: debounced edges feed the shared held-slot set --
         for (ri, row) in rows.iter_mut().enumerate() {
             row.set_high();
             // Two cycles of settle: the row line + diode charge instantly at
@@ -366,73 +522,49 @@ async fn scan_task(
                     if debounce[ri][ci] >= 5 {
                         pressed[ri][ci] = raw;
                         debounce[ri][ci] = 0;
-                        changed = true;
-                        info!(
-                            "matrix r{=usize} c{=usize} {} kc=0x{=u8:02x}",
-                            ri,
-                            ci,
-                            if raw { "DOWN" } else { "UP" },
-                            KEYMAP[ri][ci]
-                        );
+                        let pos = POSITIONS[ri][ci];
+                        if pos >= 0 {
+                            let pos = pos as usize;
+                            info!(
+                                "key p{=usize} {} (r{=usize} c{=usize})",
+                                pos,
+                                if raw { "DOWN" } else { "UP" },
+                                ri,
+                                ci
+                            );
+                            set_held(pos, raw);
+                            post_event(0, pos as u8, raw as u8);
+                            // LED feedback tracks the physical press whatever
+                            // the slot emits (or even if it emits nothing).
+                            let mut state =
+                                KEYSTATE.load(core::sync::atomic::Ordering::Relaxed);
+                            if raw {
+                                state |= 1 << pos;
+                            } else {
+                                state &= !(1 << pos);
+                            }
+                            KEYSTATE.store(state, core::sync::atomic::Ordering::Relaxed);
+                        }
                     }
                 }
             }
             row.set_low();
         }
 
-        if changed {
-            let mut report = KeyboardReport {
-                modifier: 0,
-                reserved: 0,
-                leds: 0,
-                keycodes: [0; 6],
-            };
-            let mut n = 0;
-            let mut state: u16 = 0;
-            for ri in 0..4 {
-                for ci in 0..4 {
-                    if pressed[ri][ci] {
-                        let kc = KEYMAP[ri][ci];
-                        if kc != 0 {
-                            state |= 1 << (kc - KC_F13);
-                            if n < 6 && !report.keycodes[..n].contains(&kc) {
-                                report.keycodes[n] = kc;
-                                n += 1;
-                            }
-                        }
-                    }
-                }
-            }
-            KEYSTATE.store(state, core::sync::atomic::Ordering::Relaxed);
-            if report.keycodes != last_report.keycodes {
-                last_report = report;
-                let _ = KBD_CH.try_send(last_report);
-            }
-        }
-
-        // -- encoder push -> mute, joystick push -> enter --
+        // -- encoder push + joystick push: held slots like any key --
         let e = enc_sw.is_high();
         if e != enc_sw_last {
             info!("encoder switch {}", if e { "UP" } else { "DOWN" });
-        }
-        if !e && enc_sw_last {
-            let _ = CONSUMER_CH.try_send(MediaKeyboardReport {
-                usage_id: USAGE_MUTE,
-            });
-            let _ = CONSUMER_CH.try_send(MediaKeyboardReport { usage_id: 0 });
+            set_held(keymap::SLOT_ENC_PRESS, !e);
+            post_event(2, !e as u8, 0);
         }
         enc_sw_last = e;
 
         let j = joy_sw.is_high();
         if j != joy_sw_last {
             info!("joystick switch {}", if j { "UP" } else { "DOWN" });
-            let mut r = last_report;
-            if !j {
-                if let Some(slot) = r.keycodes.iter_mut().find(|k| **k == 0) {
-                    *slot = KC_ENTER;
-                }
-            }
-            let _ = KBD_CH.try_send(r);
+            set_held(keymap::SLOT_JOY_PRESS, !j);
+            post_event(3, 4, !j as u8);
         }
         joy_sw_last = j;
 
@@ -483,24 +615,21 @@ async fn encoder_task(mut enc_a: ExtiInput<'static>, mut enc_b: ExtiInput<'stati
 
         while accum >= ENC_COUNTS_PER_DETENT {
             accum -= ENC_COUNTS_PER_DETENT;
-            info!("encoder CW -> vol+");
-            let _ = CONSUMER_CH.try_send(MediaKeyboardReport {
-                usage_id: USAGE_VOL_UP,
-            });
-            let _ = CONSUMER_CH.try_send(MediaKeyboardReport { usage_id: 0 });
+            info!("encoder CW");
+            tap_slot(keymap::SLOT_ENC_CW);
+            post_event(1, 1, 0);
         }
         while accum <= -ENC_COUNTS_PER_DETENT {
             accum += ENC_COUNTS_PER_DETENT;
-            info!("encoder CCW -> vol-");
-            let _ = CONSUMER_CH.try_send(MediaKeyboardReport {
-                usage_id: USAGE_VOL_DOWN,
-            });
-            let _ = CONSUMER_CH.try_send(MediaKeyboardReport { usage_id: 0 });
+            info!("encoder CCW");
+            tap_slot(keymap::SLOT_ENC_CCW);
+            post_event(1, 0, 0);
         }
     }
 }
 
-/// Joystick: 50 Hz ADC poll, thresholds -> arrow keys.
+/// Joystick: 50 Hz ADC poll; deflection past the (configurable) threshold
+/// holds that direction's slot until the stick returns to centre.
 #[embassy_executor::task]
 async fn adc_task(
     mut adc: Adc<'static, peripherals::ADC1>,
@@ -509,38 +638,51 @@ async fn adc_task(
 ) {
     info!("adc_task: entered");
     let mut ticker = Ticker::every(Duration::from_millis(20));
-    let mut last: u8 = 0;
+    // Direction indices on the wire (and their slots, at SLOT_JOY_UP + dir).
+    const DIR_NONE: u8 = 0xFF;
+    let mut last: u8 = DIR_NONE;
     let mut n: u32 = 0;
     loop {
         ticker.next().await;
         let x = adc.read(&mut joy_x).await;
         let y = adc.read(&mut joy_y).await;
         // Once a second, so the raw swing can be eyeballed while the stick is
-        // moved — these are the numbers the thresholds below are judged against.
+        // moved — these are the numbers the threshold is judged against.
         n = n.wrapping_add(1);
         if n % 50 == 0 {
             debug!("joystick raw x={=u16} y={=u16}", x, y);
         }
-        // 12-bit, centre ~2048, generous dead zone.
-        let mut dir = 0u8;
-        if x < 1024 {
-            dir = KC_LEFT;
-        } else if x > 3072 {
-            dir = KC_RIGHT;
-        } else if y < 1024 {
-            dir = KC_UP;
-        } else if y > 3072 {
-            dir = KC_DOWN;
-        }
+        // 12-bit, centre ~2048; the dead zone is the app-tunable threshold.
+        let thr = keymap::joy_threshold();
+        let lo = 2048u16.saturating_sub(thr);
+        let hi = 2048u16.saturating_add(thr);
+        let dir = if x < lo {
+            2 // left
+        } else if x > hi {
+            3 // right
+        } else if y < lo {
+            0 // up
+        } else if y > hi {
+            1 // down
+        } else {
+            DIR_NONE
+        };
         if dir != last {
-            info!("joystick dir kc=0x{=u8:02x} (x={=u16} y={=u16})", dir, x, y);
-            let report = KeyboardReport {
-                modifier: 0,
-                reserved: 0,
-                leds: 0,
-                keycodes: [dir, 0, 0, 0, 0, 0],
-            };
-            let _ = KBD_CH.try_send(report);
+            info!("joystick dir {=u8} (x={=u16} y={=u16})", dir, x, y);
+            const DIR_SLOTS: [usize; 4] = [
+                keymap::SLOT_JOY_UP,
+                keymap::SLOT_JOY_DOWN,
+                keymap::SLOT_JOY_LEFT,
+                keymap::SLOT_JOY_RIGHT,
+            ];
+            if last != DIR_NONE {
+                set_held(DIR_SLOTS[last as usize], false);
+                post_event(3, last, 0);
+            }
+            if dir != DIR_NONE {
+                set_held(DIR_SLOTS[dir as usize], true);
+                post_event(3, dir, 1);
+            }
             last = dir;
         }
     }
@@ -636,15 +778,10 @@ async fn touch_task(mut pad: Flex<'static>) {
             baseline = (baseline * 15 + t) / 16;
         }
         if touched && armed {
-            info!(
-                "touch DOWN (t={=u32} baseline={=u32}) -> play/pause",
-                t, baseline
-            );
+            info!("touch TAP (t={=u32} baseline={=u32})", t, baseline);
             armed = false;
-            let _ = CONSUMER_CH.try_send(MediaKeyboardReport {
-                usage_id: USAGE_PLAY_PAUSE,
-            });
-            let _ = CONSUMER_CH.try_send(MediaKeyboardReport { usage_id: 0 });
+            tap_slot(keymap::SLOT_TOUCH_TAP);
+            post_event(4, 1, 0);
         } else if !touched {
             armed = true;
         }
@@ -670,10 +807,10 @@ async fn led_task(mut led_key: Output<'static>, mut led_ug: Output<'static>) {
 
         let mut keys = [ws2812::Grb::default(); 13];
         for (i, px) in keys.iter_mut().enumerate() {
-            // key_leds[i] sits under logical key i's switch (chain order is
-            // the sw index order in the .cohdl).
-            let logical = KEYMAP_CHAIN[i];
-            *px = if state & (1 << logical) != 0 {
+            // key_leds[i] sits under key position i's switch — chain order is
+            // the sw index order in the .cohdl, and every position is
+            // independent now (the 2U pair each has its own LED and bit).
+            *px = if state & (1 << i) != 0 {
                 ws2812::Grb::rgb(255, 255, 255).scaled(24)
             } else {
                 hue(phase.wrapping_add((i as u8) * 20)).scaled(6)
@@ -687,9 +824,6 @@ async fn led_task(mut led_key: Output<'static>, mut led_ug: Output<'static>) {
         ws2812::write(&mut led_ug, &ring);
     }
 }
-
-/// key_leds chain index -> logical key bit (sw index folded to keycode bit).
-const KEYMAP_CHAIN: [u8; 13] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 11];
 
 /// Cheap 0..255 hue -> saturated RGB.
 fn hue(h: u8) -> ws2812::Grb {

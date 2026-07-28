@@ -3,9 +3,9 @@
 Rust/[embassy](https://embassy.dev) firmware for the OpenMicro macropad
 (STM32F072CBT6). Async, no RTOS, no unsafe outside the vendored HAL.
 
-Build stats (release, LTO, `opt-level = "s"`): 34.5 KiB flash of 128 KiB with
-bring-up logging compiled in, 23.5 KiB with `DEFMT_LOG=off`; ~5 KiB static RAM
-of 16 KiB.
+Build stats (release, LTO, `opt-level = "s"`): 37.9 KiB flash of 128 KiB with
+bring-up logging compiled in, 25.8 KiB with `DEFMT_LOG=off`; ~5 KiB static RAM
+of 16 KiB. The last 2 KiB flash page is reserved for the saved keymap.
 
 ## Pin map — where it comes from
 
@@ -33,23 +33,38 @@ the WS2812 bit-bang cycle counts assume it) and the USB peripheral. The
 ## What it does
 
 A composite USB HID device (VID `0x1209` pid.codes, keyboard + consumer
-control):
+control), with **every input's emitted code configurable and stored on the
+device** (`keymap.rs`):
 
-- **13 keys → F13…F24** — 1 kHz matrix scan, 5 ms debounce, COL2ROW diodes.
-  The two switches under the 2U keycap (sw10/sw11) both send F23.
-- **Encoder → volume** up/down, push → mute. A/B are decoded from a full
+- **24 keymap slots** — the 13 keys (all independent positions, including the
+  pair under the 2U keycap), encoder CW/CCW/press, joystick up/down/left/
+  right/press, touch tap (+ two reserved swipe slots for a future multi-zone
+  pad). Each slot emits a keyboard usage (with a modifier mask — `Shift+F13`
+  style) or a consumer usage, or nothing. The companion app writes slots over
+  the vendor HID interface; SAVE persists them to the last flash page, which
+  neither DFU updates nor probe-rs flashing touches — so the keymap follows
+  the pad across machines and firmware updates.
+- **Factory defaults chosen to be interceptable on every OS**: keys emit
+  F13–F20 and Shift+F13…F17 (macOS has no virtual keycodes for F21–F24, so
+  those never appear as defaults), encoder volume/mute, joystick arrows and
+  Enter, touch play/pause.
+- **13 keys** — 1 kHz matrix scan, 5 ms debounce, COL2ROW diodes. Held slots
+  feed one shared 6KRO report builder, so a joystick move can no longer drop
+  a held key from the host's view.
+- **Encoder** — A/B are decoded from a full
   quadrature transition table on their own EXTI-driven task: polling them
   from the 1 kHz scan aliased away transitions during a fast spin, and the
   WS2812 critical section (below) blanks interrupts long enough to lose
   states outright. EXTI latches its pending bit, so nothing is dropped.
-- **Touch pad → play/pause.** The RC rise on `PB9` is only ~20 CPU cycles, so
+- **Touch pad.** The RC rise on `PB9` is only ~20 CPU cycles, so
   the sense loop configures PUPDR/ODR once and flips *only* MODER via raw
   register writes (`unstable-pac`) — going through `Flex::set_as_input()` per
   cycle costs longer than the rise being measured, and reads a constant zero.
   Each tick sums 64 charge cycles for SNR: on hardware that puts an untouched
   pad at exactly 192 with no jitter, a finger at 242–1015, and the trigger at
   25% over a self-calibrating baseline.
-- **Joystick → arrow keys** (ADC thresholds), push → Enter.
+- **Joystick** — 50 Hz ADC poll with an app-tunable deflection threshold
+  (`SET_ANALOG`, persisted with the keymap).
 - **LEDs**: pressed keys light white over an idle rainbow; the underglow
   ring rotates hue. Brightness is capped in `ws2812.rs` (`scaled(n/64)`)
   to keep all 29 LEDs inside the 500 mA VBUS budget.
@@ -97,14 +112,28 @@ cargo install probe-rs-tools
 cargo run --release        # runner = probe-rs run --chip STM32F072CBTx
 ```
 
-**Field updates: app-triggered DFU, no probe, no buttons.** The firmware
-exposes a vendor HID interface (usage page `0xFF60`, 32-byte reports, no
-report IDs) that the host updater app drives:
+**The vendor HID interface** (usage page `0xFF60`, 32-byte reports, no
+report IDs) carries the whole app protocol — replies echo the command byte;
+any IN report starting `0x80` is an unsolicited input event, not a reply:
 
 | OUT report | Effect |
 |---|---|
-| `[0x01, …]` | Replies `[0x01, len, "0.1.0"…]` — running firmware version |
+| `[0x01, …]` | Replies `[0x01, len, "0.2.0"…]` — running firmware version |
 | `[0x02, 'D','F','U','!']` | Acks `[0x02, 0x01]`, then reboots into the ROM DFU bootloader |
+| `[0x03, page]` | Replies `[0x03, page, count, count×4 slot bytes]` — read keymap (4 pages of ≤7 slots; slot = kind, mods, code LE; kind 0 none / 1 keyboard / 2 consumer) |
+| `[0x04, page, count, slots…]` | Acks `[0x04, ok]` — write keymap page to RAM, live immediately |
+| `[0x05, 'S','A','V','E']` | Acks `[0x05, ok]` — persist keymap + analog to the last flash page |
+| `[0x06, 'R','S','T','!']` | Acks `[0x06, ok]` — factory defaults, saved config wiped |
+| `[0x07]` | Replies `[0x07, thr_lo, thr_hi]` — joystick threshold (u16 LE) |
+| `[0x08, thr_lo, thr_hi]` | Acks `[0x08, 0x01]` — set threshold in RAM (SAVE persists) |
+
+Event reports (`[0x80, src, a, b]`, best-effort, dropped when no host reads):
+src 0 = key (a = position 0–12, b = pressed), 1 = encoder rotate (a = 1 CW),
+2 = encoder button, 3 = joystick (a = dir 0 up / 1 down / 2 left / 3 right /
+4 press, b = active), 4 = touch tap. These give the companion app live press
+feedback — and a hardware test — with no OS input-monitoring permission.
+
+**Field updates: app-triggered DFU, no probe, no buttons.**
 
 On the DFU command the firmware stamps a magic word in noinit RAM and
 resets; early boot (before any peripheral init) sees it and jumps into

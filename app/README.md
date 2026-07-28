@@ -8,70 +8,89 @@ board, embassy firmware, host app) stays in Rust.
 cargo run --release
 ```
 
-## What it does
+## The shape of it
 
-A rail on the left carries identity, navigation and live connection state;
-one page at a time fills the rest of the window.
+A single surface, not tabs: **the pad is the home screen** and the only
+permanent view. A slim profile strip on top, the grid drawn true to life in
+the middle — encoder and joystick as dials, the touch pad as a disc, and all
+**13 keys as independent 1U cells** — and a status line at the bottom
+(connection dot, firmware + serial when connected, settings gear). Selecting
+any input opens its editor beside the grid; macros, settings and firmware
+updates are sheets over the pad; a menubar item carries profile switching and
+connection status. Disconnected, the grid ghosts and a card explains —
+profiles live in the app, so everything stays editable.
 
-**Pad** — the macropad drawn to its real 4×4 layout: encoder top-left,
-joystick top-right, touch bar bottom-left, the 2U keycap spanning the two
-middle columns of the bottom row. Every binding is printed on the key it
-belongs to. Click a key to edit it; press a bound key on the real pad and its
-cap lights up, so a binding can be verified without leaving the app.
+## How an input does something
 
-**Device dashboard** — finds the pad over its vendor HID interface
-(`1209:0001`, usage page `0xFF60`), shows live connection state, running
-firmware version (in-band version query) and serial.
+Two layers, per the PRD's architecture decision:
 
-**Firmware updates** — the product's field-update path (no buttons, no
-probe): pick a `.bin`, press Install, and the app
+1. **The pad emits a configurable HID code.** Every input slot (13 keys,
+   encoder CW/CCW/press, joystick directions/press, touch tap) stores its
+   emitted code — keyboard usage + modifier mask, or consumer usage — **in
+   device flash**, written over the vendor HID interface (`1209:0001`, usage
+   page `0xFF60`). Switching a profile writes its keymap to the pad, so the
+   pad emits the right codes on any machine, app running or not. Factory
+   defaults (F13–F20, Shift+F13…F17) are interceptable on all three OSes by
+   construction — no macOS F21–F24 dead keys.
+2. **The app optionally intercepts that code** OS-wide (`RegisterEventHotKey`
+   on macOS — no accessibility permission needed for the grab itself) and
+   runs the bound action instead of letting it type: **keystroke** (recorded
+   chord), **macro** (ordered steps with delays: keystroke / delay / run /
+   open / media), **run command**, **open app or URL**, **media control**, or
+   **app settings**. Keystroke and media *synthesis* does need the
+   Accessibility permission; the app asks with an explanation, shows a
+   "not listening" state without it, and stays fully usable read-only.
 
-1. sanity-checks the image (Cortex-M0 vector table for 128K flash / 16K RAM
-   — a wrong file is refused before anything is touched),
-2. sends the `ENTER_DFU` command over raw HID; the firmware reboots into
-   the STM32F072's ROM bootloader (`0483:df11`, same USB-C port),
-3. speaks DfuSe (AN3156) directly over libusb: erase the covered 2 KiB
-   pages, program in `wTransferSize` blocks, set the address pointer and
-   manifest — the pad boots the new firmware,
-4. waits for the pad to re-enumerate and confirms the new version.
+Live press feedback needs neither layer: the firmware streams input events
+over the vendor interface (`0x80` reports), so pressing a physical key lights
+its on-screen cell — a built-in hardware test that works with zero OS
+permissions.
 
-A previously interrupted update is picked up automatically: if a bare
-`0483:df11` bootloader is present, Install skips step 2 and just flashes.
-(If power was lost mid-flash *and* the pad was unplugged, the app is gone
-and BOOT0 is strapped low — recovery is SWD on J2, by design.)
+## Profiles
 
-To produce an image from the firmware crate:
+Named profiles are first-class: full pad configuration (bindings, labels,
+Lucide icons, emitted codes, joystick threshold) stored app-side in a
+human-readable JSON under the OS config dir, exported/imported as one file
+(merge or replace). Switching — strip chevrons, dropdown, or the menubar —
+writes the keymap to the device and persists it to device flash. Ships with
+one default profile, **Codex**, matching the Codex Micro keycap set (FAST /
+APPR / REJ / SPLIT / NEW / TERM / PLAY / GIT / PR / DIFF / MIC / MIC / SETUP,
+icons from the full bundled Lucide set).
 
-```sh
-cd ../fw
-cargo objcopy --release -- -O binary openmicro.bin
-```
+## Firmware updates
 
-**Key actions** — the pad's 13 keys arrive as F13..F24 (the 2U cap's two
-switches share F23). Each can be bound to a host-side action, saved to
-`<config-dir>/OpenMicro/config.json` and registered as global hotkeys:
-
-- *Run a command* — `sh -c` / `cmd /C`
-- *Open a URL or app* — OS default handler (URL, file, or app)
-
-A *Test* button next to the argument runs the binding immediately, so an
-action can be checked before it is wired to a key press.
-
-Encoder (volume/mute), touch bar (play/pause) and joystick (arrows/enter)
-are ordinary media/arrow usages the OS handles directly — nothing to
-configure.
+The product's field-update path (no buttons, no probe): the sheet checks the
+image (Cortex-M0 vector table for 128 K flash), sends `ENTER_DFU` over raw
+HID, speaks DfuSe (AN3156) directly over libusb to the ROM bootloader
+(`0483:df11`), and waits for the pad to come back. An update banner appears
+on the home screen when a connected pad runs an older firmware than the app
+ships against. A stranded bootloader (interrupted update) is picked up by
+Install automatically. **Profiles and the on-device keymap survive updates**
+— the keymap lives in a flash page updates never touch.
 
 ## Platform notes
 
-- **macOS** — no Input-Monitoring permission needed (the app only opens the
-  vendor usage page, not the keyboard interface). macOS has no F21-F24
-  virtual keycodes, so the last four F-keys can't trigger host actions
-  there; the UI marks them. DFU works out of the box.
-- **Windows** — driving the DFU device (`0483:df11`) needs a WinUSB driver
-  bound to it once (Zadig, or libwdi in an installer).
-- **Linux** — udev rules needed for unprivileged access to `1209:0001`
-  (hidraw) and `0483:df11` (DFU).
+- **macOS** — interception and live feedback need no permission; only
+  keystroke/media *synthesis* (actions that type or press media keys for
+  you) needs Accessibility, requested with a deep link. macOS has no
+  virtual keycodes for F21–F24; the editor marks any code the OS cannot see.
+- **Windows** — DFU needs a WinUSB driver bound to `0483:df11` once (Zadig).
+  Interception uses `RegisterHotKey`; synthesis needs no special permission.
+- **Linux** — udev rules needed for `1209:0001` (hidraw) and `0483:df11`
+  (DFU); interception depends on the session (X11 grabs; Wayland varies).
 
-This crate is standalone (like `../fw`) — the repository's CI does not
-build it; it is part of the example product's deliverables, not the CoHDL
-compiler.
+## Known deferrals
+
+- The menubar popover is a native menu (status, profiles, quick actions,
+  firmware footer) — the PRD's mini pad mirror inside the popover needs a
+  custom platform view and is deferred.
+- The window is sized for grid + editor rather than growing/shrinking as the
+  editor opens (makepad window resizing at runtime is not yet reliable).
+- Touch swipe left/right slots exist end-to-end in config and protocol, but
+  the current single-zone pad cannot detect swipe direction — hardware
+  revision territory.
+- Per the PRD's out-of-scope list: no auto per-app switching, no layers, no
+  lighting control, no snippets, no multi-device, no plugins.
+
+This crate is standalone (like `../fw`) — the repository's CI does not build
+it; it is part of the example product's deliverables, not the CoHDL compiler.

@@ -1,20 +1,27 @@
 [package]
 name = "openmicro-app"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
-description = "OpenMicro companion app: firmware updates + key actions (makepad GUI)"
+description = "OpenMicro companion app: profiles, key actions, firmware updates (makepad GUI)"
 
 [dependencies]
 makepad-widgets = "1.0"
 
-# device access: vendor HID interface (updater protocol) + DFU (ROM bootloader)
+# device access: vendor HID interface (keymap + events + updater) + DFU
 hidapi = "2.6"
 rusb = { version = "0.9", features = ["vendored"] }
 
-# key actions
+# key actions: OS-level interception, keystroke/media synthesis, launchers
 global-hotkey = "0.8"
+enigo = "0.6"
 open = "5"
+
+# menubar presence (profile switching + status at a glance)
+tray-icon = "0.19"
+
+# launch at login
+auto-launch = "0.5"
 
 # config + dialogs
 serde = { version = "1", features = ["derive"] }
