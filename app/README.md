@@ -10,6 +10,15 @@ cargo run --release
 
 ## What it does
 
+A rail on the left carries identity, navigation and live connection state;
+one page at a time fills the rest of the window.
+
+**Pad** — the macropad drawn to its real 4×4 layout: encoder top-left,
+joystick top-right, touch bar bottom-left, the 2U keycap spanning the two
+middle columns of the bottom row. Every binding is printed on the key it
+belongs to. Click a key to edit it; press a bound key on the real pad and its
+cap lights up, so a binding can be verified without leaving the app.
+
 **Device dashboard** — finds the pad over its vendor HID interface
 (`1209:0001`, usage page `0xFF60`), shows live connection state, running
 firmware version (in-band version query) and serial.
@@ -42,8 +51,11 @@ cargo objcopy --release -- -O binary openmicro.bin
 switches share F23). Each can be bound to a host-side action, saved to
 `<config-dir>/OpenMicro/config.json` and registered as global hotkeys:
 
-- *Run command* — `sh -c` / `cmd /C`
-- *Open URL / file* — OS default handler (URL, file, or app)
+- *Run a command* — `sh -c` / `cmd /C`
+- *Open a URL or app* — OS default handler (URL, file, or app)
+
+A *Test* button next to the argument runs the binding immediately, so an
+action can be checked before it is wired to a key press.
 
 Encoder (volume/mute), touch bar (play/pause) and joystick (arrows/enter)
 are ordinary media/arrow usages the OS handles directly — nothing to

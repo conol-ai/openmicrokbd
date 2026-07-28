@@ -13,18 +13,24 @@ pub const KEY_COUNT: usize = 12;
 
 /// Physical position of each F-key on the pad, for UI labels.
 pub const KEY_LABELS: [&str; KEY_COUNT] = [
-    "key 1 · top row",
-    "key 2 · top row",
-    "key 3 · row 2",
-    "key 4 · row 2",
-    "key 5 · row 2",
-    "key 6 · row 2",
-    "key 7 · row 3",
-    "key 8 · row 3",
-    "key 9 · row 3",
-    "key 10 · row 3",
-    "keys 11+12 · 2U cap",
-    "key 13 · bottom right",
+    "Top row · left of centre",
+    "Top row · right of centre",
+    "Row 2 · first column",
+    "Row 2 · second column",
+    "Row 2 · third column",
+    "Row 2 · fourth column",
+    "Row 3 · first column",
+    "Row 3 · second column",
+    "Row 3 · third column",
+    "Row 3 · fourth column",
+    "Bottom row · 2U keycap",
+    "Bottom row · far right",
+];
+
+/// Short name of each binding, as printed on the pad's key map.
+pub const KEY_TITLES: [&str; KEY_COUNT] = [
+    "Key 1", "Key 2", "Key 3", "Key 4", "Key 5", "Key 6", "Key 7", "Key 8", "Key 9", "Key 10",
+    "Keys 11 + 12", "Key 13",
 ];
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default, Debug)]
