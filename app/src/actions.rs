@@ -56,8 +56,10 @@ fn run_blocking(action: &Action) {
         Action::None => {}
         Action::Keystroke { mods, key } => synthesize_keystroke(*mods, *key),
         Action::Macro { steps } => {
-            for step in steps {
-                run_step(step);
+            for entry in steps {
+                if entry.enabled {
+                    run_step(&entry.step);
+                }
             }
         }
         Action::Run { command } => run_command(command),
@@ -111,6 +113,28 @@ fn open_target(target: &str) {
 // Synthesis (all enigo usage lives below this line)
 // ---------------------------------------------------------------------------
 
+/// Chords we synthesized in the immediate past. OS-level hotkey grabs match
+/// SYNTHETIC events too, so an action that types a chord some pad slot also
+/// emits would re-enter our own interception and loop; the dispatcher asks
+/// `was_just_synthesized` before running an intercepted slot's action.
+static SYNTH_GUARD: std::sync::Mutex<Vec<(u8, u16, std::time::Instant)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// True if this exact (modifiers, usage) chord was synthesized by us within
+/// the last few hundred milliseconds. Consumes the entry.
+pub fn was_just_synthesized(mods: u8, usage: u16) -> bool {
+    let Ok(mut guard) = SYNTH_GUARD.lock() else {
+        return false;
+    };
+    let now = std::time::Instant::now();
+    guard.retain(|&(_, _, t)| now.duration_since(t).as_millis() < 500);
+    if let Some(pos) = guard.iter().position(|&(m, u, _)| m == mods && u == usage) {
+        guard.remove(pos);
+        return true;
+    }
+    false
+}
+
 /// Hold the HID-bitmask modifiers, tap the key, release modifiers in reverse
 /// — the same shape a human chord has, which is what shortcut-matching apps
 /// expect to see.
@@ -119,6 +143,9 @@ fn synthesize_keystroke(mods: u8, usage: u16) {
         eprintln!("actions: HID usage 0x{usage:02X} has no host mapping; keystroke skipped");
         return;
     };
+    if let Ok(mut guard) = SYNTH_GUARD.lock() {
+        guard.push((mods, usage, std::time::Instant::now()));
+    }
     let Some(mut enigo) = new_enigo() else {
         return;
     };
@@ -296,9 +323,9 @@ pub fn open_permission_settings() {
 pub fn needs_permission(action: &Action) -> bool {
     match action {
         Action::Keystroke { .. } | Action::Media { .. } => true,
-        Action::Macro { steps } => steps
-            .iter()
-            .any(|s| matches!(s, MacroStep::Keystroke { .. } | MacroStep::Media { .. })),
+        Action::Macro { steps } => steps.iter().any(|e| {
+            e.enabled && matches!(e.step, MacroStep::Keystroke { .. } | MacroStep::Media { .. })
+        }),
         Action::None | Action::Run { .. } | Action::Open { .. } | Action::AppSettings => false,
     }
 }
@@ -395,12 +422,19 @@ mod tests {
         assert!(!needs_permission(&Action::AppSettings));
         assert!(needs_permission(&Action::Macro {
             steps: vec![
-                MacroStep::Delay { ms: 5 },
-                MacroStep::Media { op: MediaOp::PlayPause },
+                MacroStep::Delay { ms: 5 }.into(),
+                MacroStep::Media { op: MediaOp::PlayPause }.into(),
             ],
         }));
         assert!(!needs_permission(&Action::Macro {
-            steps: vec![MacroStep::Open { target: "https://example.com".into() }],
+            steps: vec![MacroStep::Open { target: "https://example.com".into() }.into()],
+        }));
+        // A disabled synthesis step must not demand the permission.
+        assert!(!needs_permission(&Action::Macro {
+            steps: vec![crate::config::MacroStepEntry {
+                enabled: false,
+                step: MacroStep::Media { op: MediaOp::PlayPause },
+            }],
         }));
     }
 
@@ -417,7 +451,7 @@ mod tests {
             "Open · linear.app"
         );
         assert_eq!(
-            describe(&Action::Macro { steps: vec![MacroStep::Delay { ms: 1 }] }),
+            describe(&Action::Macro { steps: vec![MacroStep::Delay { ms: 1 }.into()] }),
             "Macro · 1 step"
         );
     }

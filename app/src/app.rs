@@ -22,8 +22,8 @@ use std::sync::mpsc::Sender;
 
 use crate::actions::{self, OpenAppSettings};
 use crate::config::{
-    self, Action, AppConfig, InputConfig, MacroStep, MediaOp, SlotKind, SLOT_ENC_CW, SLOT_JOY_UP,
-    SLOT_NAMES, SLOT_TOUCH_TAP,
+    self, Action, AppConfig, InputConfig, MacroStep, MacroStepEntry, MediaOp, SlotKind,
+    SLOT_ENC_CW, SLOT_JOY_UP, SLOT_NAMES, SLOT_TOUCH_TAP,
 };
 use crate::device::{self, DeviceCmd, DeviceMsg, PadEvent, UpdateMsg};
 use crate::intercept::{self, HotkeyMsg, Intercept, SlotStatus};
@@ -437,6 +437,7 @@ live_design! {
         flow: Right, spacing: 8, align: {y: 0.5},
         visible: false,
         mr_idx = <Mono> {width: 18}
+        mr_en = <ButtonGhost> {text: "on", padding: {left: 7, right: 7}}
         mr_type = <DropDown> {width: 110}
         mr_rec = <ButtonGhost> {text: "Record"}
         // Labels and text inputs have no `visible` field; their wrapping
@@ -1014,7 +1015,7 @@ struct AppState {
     sheet: SheetKind,
     recording: RecordTarget,
     /// Scratch macro being edited in the sheet.
-    macro_draft: Vec<MacroStep>,
+    macro_draft: Vec<MacroStepEntry>,
     /// Keyboard-usage list backing key_dd, index-aligned with its labels.
     kbd_usages: Vec<u16>,
     /// Consumer-usage list backing media_dd / action_media_dd.
@@ -1025,9 +1026,16 @@ struct AppState {
     /// Per-cell press-flash timers (encoder rotation, touch taps).
     flash_timers: Vec<(usize, Timer)>,
     fw_banner_dismissed: bool,
-    /// Two-step confirms.
+    /// Two-step confirms (disarmed by their timers, not by other clicks —
+    /// a button's own press action must not cancel its confirmation).
     confirm_delete: bool,
+    confirm_delete_timer: Timer,
     confirm_reset: bool,
+    /// Debounce for device keymap writes from continuous controls (the
+    /// threshold slider): every device sync ends in a flash erase+program,
+    /// so drags coalesce into one write after the hand stops.
+    sync_timer: Timer,
+    sync_pending: bool,
 }
 
 #[derive(Live, LiveHook)]
@@ -1096,8 +1104,10 @@ fn keycode_to_hid(kc: KeyCode) -> Option<u16> {
         Backtick => 0x35, Comma => 0x36, Period => 0x37, Slash => 0x38,
         F1 => 0x3A, F2 => 0x3B, F3 => 0x3C, F4 => 0x3D, F5 => 0x3E, F6 => 0x3F,
         F7 => 0x40, F8 => 0x41, F9 => 0x42, F10 => 0x43, F11 => 0x44, F12 => 0x45,
-        PrintScreen => 0x46, ScrollLock => 0x47, Pause => 0x48,
-        Insert => 0x49, Home => 0x4A, PageUp => 0x4B, Delete => 0x4C,
+        // PrintScreen/ScrollLock/Pause/Insert are deliberately absent: the
+        // synthesis side (actions::hid_to_enigo) cannot replay them, so
+        // recording them would create a chord that silently does nothing.
+        Home => 0x4A, PageUp => 0x4B, Delete => 0x4C,
         End => 0x4D, PageDown => 0x4E,
         ArrowRight => 0x4F, ArrowLeft => 0x50, ArrowDown => 0x51, ArrowUp => 0x52,
         _ => return None,
@@ -1222,12 +1232,14 @@ impl App {
                 .apply_over(cx, live! {draw_bg: {ghost: (ghost)}});
         }
 
-        // Firmware banner: connected and running something else.
+        // Firmware banner: connected and running something OLDER — a pad
+        // running something newer than this app must not be offered a
+        // downgrade dressed up as an update.
         let fw_stale = self
             .state
             .last_conn
             .as_ref()
-            .map(|(v, _)| self.state.connected && v != LATEST_FW)
+            .map(|(v, _)| self.state.connected && version_lt(v, LATEST_FW))
             .unwrap_or(false);
         let show_banner = fw_stale && !self.state.fw_banner_dismissed;
         if show_banner {
@@ -1323,11 +1335,13 @@ impl App {
         }
     }
 
+    /// Cells only — callers pair this with the refresh_editor variant that
+    /// suits them (an unconditional set_inputs=true here would rewrite the
+    /// label/icon fields on every keystroke and fight the caret).
     fn refresh_grid(&mut self, cx: &mut Cx) {
         for cell in 0..CELL_COUNT {
             self.refresh_cell(cx, cell);
         }
-        self.refresh_editor(cx, true);
     }
 
     fn flash_cell(&mut self, cx: &mut Cx, cell: usize, on: bool, momentary: bool) {
@@ -1445,28 +1459,46 @@ impl App {
             self.ui
                 .check_box(id!(mod_gui))
                 .set_active(cx, input.emitted.mods & 0x08 != 0);
-            if let Some(pos) = self.state.kbd_usages.iter().position(|&u| u == input.emitted.code) {
-                self.ui.drop_down(id!(key_dd)).set_selected_item(cx, pos);
+            match self.state.kbd_usages.iter().position(|&u| u == input.emitted.code) {
+                Some(pos) => self.ui.drop_down(id!(key_dd)).set_selected_item(cx, pos),
+                // Off-table code (imported config): don't leave whatever the
+                // dropdown showed last — the raw code is called out below.
+                None => self.ui.drop_down(id!(key_dd)).set_selected_item(cx, 0),
             }
         }
         if input.emitted.kind == SlotKind::Consumer {
-            if let Some(pos) = self
+            match self
                 .state
                 .consumer_usages
                 .iter()
                 .position(|&u| u == input.emitted.code)
             {
-                self.ui.drop_down(id!(media_dd)).set_selected_item(cx, pos);
+                Some(pos) => self.ui.drop_down(id!(media_dd)).set_selected_item(cx, pos),
+                None => self.ui.drop_down(id!(media_dd)).set_selected_item(cx, 0),
             }
         }
-        let emit_note = match status {
-            SlotStatus::DeadOnThisOs => {
-                "macOS cannot see this keycode at all (no virtual keycode exists) — pick another to run actions here."
+        let in_table = match input.emitted.kind {
+            SlotKind::Keyboard => self.state.kbd_usages.contains(&input.emitted.code),
+            SlotKind::Consumer => self.state.consumer_usages.contains(&input.emitted.code),
+            SlotKind::None => true,
+        };
+        let off_table_note;
+        let emit_note = if !in_table {
+            off_table_note = format!(
+                "emits raw usage 0x{:02X} (not in the picker) — choosing from the list replaces it",
+                input.emitted.code
+            );
+            off_table_note.as_str()
+        } else {
+            match status {
+                SlotStatus::DeadOnThisOs => {
+                    "macOS cannot see this keycode at all (no virtual keycode exists) — pick another to run actions here."
+                }
+                SlotStatus::ConsumerCode => {
+                    "Media codes are handled by the OS directly; app actions need a keycode instead."
+                }
+                _ => "",
             }
-            SlotStatus::ConsumerCode => {
-                "Media codes are handled by the OS directly; app actions need a keycode instead."
-            }
-            _ => "",
         };
         self.ui.label(id!(emit_note)).set_text(cx, emit_note);
 
@@ -1514,6 +1546,9 @@ impl App {
             Action::Run { command } => {
                 if set_inputs {
                     self.ui.text_input(id!(run_input)).set_text(cx, command);
+                    // A stale "launched" line from a previous Test reads as
+                    // the status of THIS slot's command.
+                    self.ui.label(id!(run_status)).set_text(cx, "");
                 }
             }
             Action::Open { target } => {
@@ -1535,6 +1570,13 @@ impl App {
         let action_note = match &input.action {
             Action::None => "The keycode passes through as ordinary input.",
             Action::AppSettings => "Opens this app's settings sheet.",
+            // No dead ends: a media op with no synthesis path on this OS
+            // must say so instead of silently doing nothing.
+            Action::Media {
+                op: MediaOp::BrightnessUp | MediaOp::BrightnessDown,
+            } if !cfg!(target_os = "macos") => {
+                "Brightness control is macOS-only for now — this action will do nothing here."
+            }
             _ => "",
         };
         self.ui.label(id!(action_note)).set_text(cx, action_note);
@@ -1644,10 +1686,14 @@ impl App {
             if !visible {
                 continue;
             }
-            let step = self.state.macro_draft[i].clone();
+            let entry = self.state.macro_draft[i].clone();
+            let step = entry.step;
             self.ui
                 .label(&[rid, live_id!(mr_idx)])
                 .set_text(cx, &format!("{}", i + 1));
+            self.ui
+                .button(&[rid, live_id!(mr_en)])
+                .set_text(cx, if entry.enabled { "on" } else { "off" });
             let dd = self.ui.drop_down(&[rid, live_id!(mr_type)]);
             dd.set_labels(cx, MACRO_STEP_KINDS.iter().map(|s| s.to_string()).collect());
             let (kind_idx, arg, label) = match &step {
@@ -1727,8 +1773,235 @@ impl App {
         self.persist(cx);
         self.refresh_profile_strip(cx);
         self.refresh_editor(cx, true);
+        // A settings sheet left open shows the previous profile's name.
+        if self.state.sheet == SheetKind::Settings {
+            self.refresh_settings(cx);
+        }
         // The whole point of profiles: the pad follows the switch.
         self.sync_device();
+    }
+
+    /// Widget handling for whichever sheet is open — the only live
+    /// surface while one is (handle_actions returns early).
+    fn handle_sheet_actions(&mut self, cx: &mut Cx, actions: &Actions) {
+        // ---- settings sheet ----
+        if self.ui.button(id!(settings_close)).clicked(actions) {
+            self.state.confirm_reset = false;
+            self.open_sheet(cx, SheetKind::None);
+        }
+        if let Some(on) = self.ui.check_box(id!(launch_cb)).changed(actions) {
+            self.state.config.launch_at_login = on;
+            let result = apply_launch_at_login(on);
+            if let Err(e) = result {
+                self.ui
+                    .label(id!(settings_status))
+                    .set_text(cx, &format!("launch at login: {e}"));
+            }
+            self.persist(cx);
+        }
+        if let Some(on) = self.ui.check_box(id!(menubar_cb)).changed(actions) {
+            self.state.config.show_menubar = on;
+            if let Some(menubar) = &mut self.state.menubar {
+                menubar.set_visible(on);
+            }
+            self.persist(cx);
+        }
+        if let Some(text) = self.ui.text_input(id!(profile_name_input)).changed(actions) {
+            let a = self.state.config.active_profile;
+            self.state.config.profiles[a].name = text;
+            self.persist(cx);
+            self.refresh_profile_strip(cx);
+        }
+        if self.ui.button(id!(export_btn)).clicked(actions) {
+            if let Some(path) = rfd::FileDialog::new()
+                .set_file_name("openmicro-config.json")
+                .save_file()
+            {
+                let msg = match config::export_to(&path, &self.state.config) {
+                    Ok(()) => format!("exported to {}", path.display()),
+                    Err(e) => format!("export failed: {e}"),
+                };
+                self.ui.label(id!(settings_status)).set_text(cx, &msg);
+                self.ui.redraw(cx);
+            }
+        }
+        for (id, mode) in [
+            (id!(import_replace_btn), config::ImportMode::Replace),
+            (id!(import_merge_btn), config::ImportMode::Merge),
+        ] {
+            if self.ui.button(id).clicked(actions) {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("config", &["json"])
+                    .pick_file()
+                {
+                    let msg = match config::import_from(&path, mode, &mut self.state.config) {
+                        Ok(summary) => summary,
+                        Err(e) => format!("import failed: {e}"),
+                    };
+                    self.ui.label(id!(settings_status)).set_text(cx, &msg);
+                    self.persist(cx);
+                    self.refresh_profile_strip(cx);
+                    self.refresh_settings(cx);
+                    self.sync_device();
+                }
+            }
+        }
+        if self.ui.button(id!(reset_btn)).clicked(actions) {
+            if self.state.confirm_reset {
+                self.state.confirm_reset = false;
+                config::factory_reset(&mut self.state.config);
+                if let Some(tx) = &self.state.device_tx {
+                    let _ = tx.send(DeviceCmd::FactoryReset);
+                }
+                self.persist(cx);
+                self.refresh_profile_strip(cx);
+                self.refresh_settings(cx);
+                self.ui
+                    .label(id!(settings_status))
+                    .set_text(cx, "everything back to factory defaults");
+            } else {
+                self.state.confirm_reset = true;
+                self.refresh_settings(cx);
+            }
+        }
+        if self.ui.button(id!(perm_open_btn)).clicked(actions) {
+            actions::open_permission_settings();
+        }
+
+        // ---- macro sheet ----
+        if self.ui.button(id!(macro_cancel)).clicked(actions) {
+            self.state.recording = RecordTarget::None;
+            self.open_sheet(cx, SheetKind::None);
+        }
+        if self.ui.button(id!(macro_done)).clicked(actions) {
+            self.state.recording = RecordTarget::None;
+            self.commit_macro(cx);
+            self.open_sheet(cx, SheetKind::None);
+        }
+        if self.ui.button(id!(macro_add)).clicked(actions) {
+            if self.state.macro_draft.len() < MACRO_ROWS {
+                self.state
+                    .macro_draft
+                    .push(MacroStep::Delay { ms: 100 }.into());
+                self.refresh_macro_sheet(cx);
+            }
+        }
+        if self.ui.button(id!(macro_test_sheet)).clicked(actions) {
+            actions::execute(&Action::Macro {
+                steps: self.state.macro_draft.clone(),
+            });
+        }
+        for i in 0..MACRO_ROWS {
+            let rid = macro_row_id(i);
+            if i >= self.state.macro_draft.len() {
+                continue;
+            }
+            if self.ui.button(&[rid, live_id!(mr_en)]).clicked(actions) {
+                self.state.macro_draft[i].enabled = !self.state.macro_draft[i].enabled;
+                self.refresh_macro_sheet(cx);
+            }
+            if let Some(kind) = self.ui.drop_down(&[rid, live_id!(mr_type)]).selected(actions) {
+                let new = match kind {
+                    0 => MacroStep::Keystroke { mods: 0, key: 0 },
+                    1 => MacroStep::Delay { ms: 100 },
+                    2 => MacroStep::Run {
+                        command: String::new(),
+                    },
+                    3 => MacroStep::Open {
+                        target: String::new(),
+                    },
+                    _ => MacroStep::Media {
+                        op: MediaOp::PlayPause,
+                    },
+                };
+                if std::mem::discriminant(&new)
+                    != std::mem::discriminant(&self.state.macro_draft[i].step)
+                {
+                    self.state.macro_draft[i].step = new;
+                    self.refresh_macro_sheet(cx);
+                }
+            }
+            if self.ui.button(&[rid, live_id!(mr_rec)]).clicked(actions) {
+                self.state.recording = RecordTarget::MacroStep(i);
+                self.refresh_macro_sheet(cx);
+            }
+            if let Some(text) = self.ui.text_input(&[rid, live_id!(mr_arg)]).changed(actions) {
+                match &mut self.state.macro_draft[i].step {
+                    MacroStep::Delay { ms } => *ms = text.trim().parse().unwrap_or(*ms),
+                    MacroStep::Run { command } => *command = text,
+                    MacroStep::Open { target } => *target = text,
+                    _ => {}
+                }
+            }
+            if self.ui.button(&[rid, live_id!(mr_up)]).clicked(actions) && i > 0 {
+                self.state.macro_draft.swap(i, i - 1);
+                self.refresh_macro_sheet(cx);
+            }
+            if self.ui.button(&[rid, live_id!(mr_down)]).clicked(actions)
+                && i + 1 < self.state.macro_draft.len()
+            {
+                self.state.macro_draft.swap(i, i + 1);
+                self.refresh_macro_sheet(cx);
+            }
+            if self.ui.button(&[rid, live_id!(mr_del)]).clicked(actions) {
+                self.state.macro_draft.remove(i);
+                self.refresh_macro_sheet(cx);
+            }
+        }
+
+        // ---- firmware sheet ----
+        if self.ui.button(id!(fw_close)).clicked(actions) {
+            self.open_sheet(cx, SheetKind::None);
+        }
+        if self.ui.button(id!(choose_btn)).clicked(actions) {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("firmware image", &["bin"])
+                .pick_file()
+            {
+                let name = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("?")
+                    .to_string();
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                self.ui.label(id!(file_label)).set_text(cx, &name);
+                self.ui.label(id!(file_meta)).set_text(
+                    cx,
+                    &format!("{:.1} KiB · {}", size as f64 / 1024.0, path.display()),
+                );
+                self.state.image = Some(path);
+                self.ui.redraw(cx);
+            }
+        }
+        if self.ui.button(id!(install_btn)).clicked(actions) {
+            if self.state.updating {
+                self.log_line(cx, "an update is already running".into());
+            } else if let Some(image) = self.state.image.clone() {
+                self.state.updating = true;
+                self.ui.view(id!(progress_block)).set_visible(cx, true);
+                self.ui.label(id!(phase_label)).set_text(cx, "Starting…");
+                self.ui.button(id!(install_btn)).set_enabled(cx, false);
+                if let Some(tx) = &self.state.device_tx {
+                    let _ = tx.send(DeviceCmd::StartUpdate { image });
+                }
+                self.ui.redraw(cx);
+            } else {
+                self.ui.view(id!(progress_block)).set_visible(cx, true);
+                self.ui
+                    .label(id!(phase_label))
+                    .set_text(cx, "Choose a firmware .bin first.");
+            }
+        }
+        if self.ui.button(id!(adv_btn)).clicked(actions) {
+            let visible = !self.ui.view(id!(adv_block)).visible();
+            self.ui.view(id!(adv_block)).set_visible(cx, visible);
+            self.ui.redraw(cx);
+        }
+        if self.ui.button(id!(dfu_btn)).clicked(actions) {
+            if let Some(tx) = &self.state.device_tx {
+                let _ = tx.send(DeviceCmd::EnterDfuOnly);
+            }
+        }
     }
 }
 
@@ -1747,6 +2020,13 @@ const MEDIA_OPS: [(MediaOp, &str); 8] = [
 impl MatchEvent for App {
     fn handle_startup(&mut self, cx: &mut Cx) {
         self.state.config = config::load();
+        // Reconcile the OS login item with the config every start (the PRD's
+        // launch-at-login defaults ON; a checkbox that only renders checked
+        // without registering would be a lie). Also re-registers the correct
+        // path if the binary moved.
+        if let Err(e) = apply_launch_at_login(self.state.config.launch_at_login) {
+            eprintln!("launch at login: {e}");
+        }
         self.state.device_tx = Some(device::spawn_worker());
 
         let mut intercept = Intercept::new();
@@ -1784,6 +2064,7 @@ impl MatchEvent for App {
 
         self.refresh_profile_strip(cx);
         self.refresh_grid(cx);
+        self.refresh_editor(cx, true);
         self.refresh_status(cx);
     }
 
@@ -1799,6 +2080,16 @@ impl MatchEvent for App {
         });
         for cell in expired {
             self.flash_cell(cx, cell, false, false);
+        }
+        if self.state.confirm_delete_timer.is_timer(e).is_some() && self.state.confirm_delete {
+            self.state.confirm_delete = false;
+            self.ui.button(id!(prof_del)).set_text(cx, "−");
+            self.ui.redraw(cx);
+        }
+        if self.state.sync_timer.is_timer(e).is_some() && self.state.sync_pending {
+            self.state.sync_pending = false;
+            self.persist(cx);
+            self.sync_device();
         }
     }
 
@@ -1917,11 +2208,20 @@ impl MatchEvent for App {
                     .map(|i| i.slots_for_id(msg.hotkey_id).collect())
                     .unwrap_or_default();
                 for slot in slots {
-                    let act = self.input(slot).action.clone();
-                    actions::execute(&act);
+                    let input = self.input(slot).clone();
+                    // A chord we synthesized ourselves re-enters our own OS
+                    // grab; running the action again would loop.
+                    if actions::was_just_synthesized(input.emitted.mods, input.emitted.code) {
+                        continue;
+                    }
+                    actions::execute(&input.action);
                 }
             } else if action.downcast_ref::<OpenAppSettings>().is_some() {
-                self.open_sheet(cx, SheetKind::Settings);
+                // Never steal a sheet that's already open — swapping the
+                // macro sheet away mid-edit would discard the draft.
+                if self.state.sheet == SheetKind::None {
+                    self.open_sheet(cx, SheetKind::Settings);
+                }
             } else if let Some(msg) = action.downcast_ref::<MenubarMsg>() {
                 if let Some(idx) = msg.id.strip_prefix("profile:").and_then(|s| s.parse().ok()) {
                     self.switch_profile(cx, idx);
@@ -1929,9 +2229,15 @@ impl MatchEvent for App {
                     let _ = config::save(&self.state.config);
                     std::process::exit(0);
                 }
-                // "open": the window is already visible; nothing to raise
-                // portably from here.
             }
+        }
+
+        // Everything below the sheets is inert while a sheet is open: the
+        // dim backdrop is visual, not a hit-blocker, so without this guard
+        // clicks would fall straight through onto the grid and editor.
+        if self.state.sheet != SheetKind::None {
+            self.handle_sheet_actions(cx, actions);
+            return;
         }
 
         // ---- profile strip ----
@@ -1959,24 +2265,25 @@ impl MatchEvent for App {
         if self.ui.button(id!(prof_del)).clicked(actions) {
             if self.state.config.profiles.len() > 1 {
                 if self.state.confirm_delete {
+                    // Second click within the window: delete for real.
                     self.state.confirm_delete = false;
+                    cx.stop_timer(self.state.confirm_delete_timer);
                     let idx = self.state.config.active_profile;
                     self.state.config.profiles.remove(idx);
                     let idx = idx.min(self.state.config.profiles.len() - 1);
                     self.ui.button(id!(prof_del)).set_text(cx, "−");
                     self.switch_profile(cx, idx);
                 } else {
+                    // Arm, and let a TIMER disarm it — disarming on "any
+                    // other widget action" also fires on this very button's
+                    // own press action, making confirmation impossible.
                     self.state.confirm_delete = true;
+                    cx.stop_timer(self.state.confirm_delete_timer);
+                    self.state.confirm_delete_timer = cx.start_timeout(3.0);
                     self.ui.button(id!(prof_del)).set_text(cx, "sure?");
                     self.ui.redraw(cx);
                 }
             }
-        } else if self.state.confirm_delete
-            && actions.iter().any(|a| a.as_widget_action().is_some())
-        {
-            // Any other interaction cancels the pending delete.
-            self.state.confirm_delete = false;
-            self.ui.button(id!(prof_del)).set_text(cx, "−");
         }
 
         // ---- banners ----
@@ -2206,8 +2513,12 @@ impl MatchEvent for App {
                 self.ui
                     .label(id!(thr_value))
                     .set_text(cx, &format!("{}", v as u16));
-                self.persist(cx);
-                self.sync_device();
+                // slided() fires per drag tick, and a device sync ends in a
+                // flash erase+program — debounce so a drag costs ONE write
+                // (~0.6 s after the hand stops), not hundreds.
+                self.state.sync_pending = true;
+                cx.stop_timer(self.state.sync_timer);
+                self.state.sync_timer = cx.start_timeout(0.6);
             }
         }
 
@@ -2216,218 +2527,6 @@ impl MatchEvent for App {
             self.open_sheet(cx, SheetKind::Settings);
         }
 
-        // ---- settings sheet ----
-        if self.ui.button(id!(settings_close)).clicked(actions) {
-            self.state.confirm_reset = false;
-            self.open_sheet(cx, SheetKind::None);
-        }
-        if let Some(on) = self.ui.check_box(id!(launch_cb)).changed(actions) {
-            self.state.config.launch_at_login = on;
-            let result = apply_launch_at_login(on);
-            if let Err(e) = result {
-                self.ui
-                    .label(id!(settings_status))
-                    .set_text(cx, &format!("launch at login: {e}"));
-            }
-            self.persist(cx);
-        }
-        if let Some(on) = self.ui.check_box(id!(menubar_cb)).changed(actions) {
-            self.state.config.show_menubar = on;
-            if let Some(menubar) = &mut self.state.menubar {
-                menubar.set_visible(on);
-            }
-            self.persist(cx);
-        }
-        if let Some(text) = self.ui.text_input(id!(profile_name_input)).changed(actions) {
-            let a = self.state.config.active_profile;
-            self.state.config.profiles[a].name = text;
-            self.persist(cx);
-            self.refresh_profile_strip(cx);
-        }
-        if self.ui.button(id!(export_btn)).clicked(actions) {
-            if let Some(path) = rfd::FileDialog::new()
-                .set_file_name("openmicro-config.json")
-                .save_file()
-            {
-                let msg = match config::export_to(&path, &self.state.config) {
-                    Ok(()) => format!("exported to {}", path.display()),
-                    Err(e) => format!("export failed: {e}"),
-                };
-                self.ui.label(id!(settings_status)).set_text(cx, &msg);
-                self.ui.redraw(cx);
-            }
-        }
-        for (id, mode) in [
-            (id!(import_replace_btn), config::ImportMode::Replace),
-            (id!(import_merge_btn), config::ImportMode::Merge),
-        ] {
-            if self.ui.button(id).clicked(actions) {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("config", &["json"])
-                    .pick_file()
-                {
-                    let msg = match config::import_from(&path, mode, &mut self.state.config) {
-                        Ok(summary) => summary,
-                        Err(e) => format!("import failed: {e}"),
-                    };
-                    self.ui.label(id!(settings_status)).set_text(cx, &msg);
-                    self.persist(cx);
-                    self.refresh_profile_strip(cx);
-                    self.refresh_settings(cx);
-                    self.sync_device();
-                }
-            }
-        }
-        if self.ui.button(id!(reset_btn)).clicked(actions) {
-            if self.state.confirm_reset {
-                self.state.confirm_reset = false;
-                config::factory_reset(&mut self.state.config);
-                if let Some(tx) = &self.state.device_tx {
-                    let _ = tx.send(DeviceCmd::FactoryReset);
-                }
-                self.persist(cx);
-                self.refresh_profile_strip(cx);
-                self.refresh_settings(cx);
-                self.ui
-                    .label(id!(settings_status))
-                    .set_text(cx, "everything back to factory defaults");
-            } else {
-                self.state.confirm_reset = true;
-                self.refresh_settings(cx);
-            }
-        }
-        if self.ui.button(id!(perm_open_btn)).clicked(actions) {
-            actions::open_permission_settings();
-        }
-
-        // ---- macro sheet ----
-        if self.ui.button(id!(macro_cancel)).clicked(actions) {
-            self.state.recording = RecordTarget::None;
-            self.open_sheet(cx, SheetKind::None);
-        }
-        if self.ui.button(id!(macro_done)).clicked(actions) {
-            self.state.recording = RecordTarget::None;
-            self.commit_macro(cx);
-            self.open_sheet(cx, SheetKind::None);
-        }
-        if self.ui.button(id!(macro_add)).clicked(actions) {
-            if self.state.macro_draft.len() < MACRO_ROWS {
-                self.state.macro_draft.push(MacroStep::Delay { ms: 100 });
-                self.refresh_macro_sheet(cx);
-            }
-        }
-        if self.ui.button(id!(macro_test_sheet)).clicked(actions) {
-            actions::execute(&Action::Macro {
-                steps: self.state.macro_draft.clone(),
-            });
-        }
-        for i in 0..MACRO_ROWS {
-            let rid = macro_row_id(i);
-            if i >= self.state.macro_draft.len() {
-                continue;
-            }
-            if let Some(kind) = self.ui.drop_down(&[rid, live_id!(mr_type)]).selected(actions) {
-                let new = match kind {
-                    0 => MacroStep::Keystroke { mods: 0, key: 0 },
-                    1 => MacroStep::Delay { ms: 100 },
-                    2 => MacroStep::Run {
-                        command: String::new(),
-                    },
-                    3 => MacroStep::Open {
-                        target: String::new(),
-                    },
-                    _ => MacroStep::Media {
-                        op: MediaOp::PlayPause,
-                    },
-                };
-                if std::mem::discriminant(&new)
-                    != std::mem::discriminant(&self.state.macro_draft[i])
-                {
-                    self.state.macro_draft[i] = new;
-                    self.refresh_macro_sheet(cx);
-                }
-            }
-            if self.ui.button(&[rid, live_id!(mr_rec)]).clicked(actions) {
-                self.state.recording = RecordTarget::MacroStep(i);
-                self.refresh_macro_sheet(cx);
-            }
-            if let Some(text) = self.ui.text_input(&[rid, live_id!(mr_arg)]).changed(actions) {
-                match &mut self.state.macro_draft[i] {
-                    MacroStep::Delay { ms } => *ms = text.trim().parse().unwrap_or(*ms),
-                    MacroStep::Run { command } => *command = text,
-                    MacroStep::Open { target } => *target = text,
-                    _ => {}
-                }
-            }
-            if self.ui.button(&[rid, live_id!(mr_up)]).clicked(actions) && i > 0 {
-                self.state.macro_draft.swap(i, i - 1);
-                self.refresh_macro_sheet(cx);
-            }
-            if self.ui.button(&[rid, live_id!(mr_down)]).clicked(actions)
-                && i + 1 < self.state.macro_draft.len()
-            {
-                self.state.macro_draft.swap(i, i + 1);
-                self.refresh_macro_sheet(cx);
-            }
-            if self.ui.button(&[rid, live_id!(mr_del)]).clicked(actions) {
-                self.state.macro_draft.remove(i);
-                self.refresh_macro_sheet(cx);
-            }
-        }
-
-        // ---- firmware sheet ----
-        if self.ui.button(id!(fw_close)).clicked(actions) {
-            self.open_sheet(cx, SheetKind::None);
-        }
-        if self.ui.button(id!(choose_btn)).clicked(actions) {
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("firmware image", &["bin"])
-                .pick_file()
-            {
-                let name = path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("?")
-                    .to_string();
-                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                self.ui.label(id!(file_label)).set_text(cx, &name);
-                self.ui.label(id!(file_meta)).set_text(
-                    cx,
-                    &format!("{:.1} KiB · {}", size as f64 / 1024.0, path.display()),
-                );
-                self.state.image = Some(path);
-                self.ui.redraw(cx);
-            }
-        }
-        if self.ui.button(id!(install_btn)).clicked(actions) {
-            if self.state.updating {
-                self.log_line(cx, "an update is already running".into());
-            } else if let Some(image) = self.state.image.clone() {
-                self.state.updating = true;
-                self.ui.view(id!(progress_block)).set_visible(cx, true);
-                self.ui.label(id!(phase_label)).set_text(cx, "Starting…");
-                self.ui.button(id!(install_btn)).set_enabled(cx, false);
-                if let Some(tx) = &self.state.device_tx {
-                    let _ = tx.send(DeviceCmd::StartUpdate { image });
-                }
-                self.ui.redraw(cx);
-            } else {
-                self.ui.view(id!(progress_block)).set_visible(cx, true);
-                self.ui
-                    .label(id!(phase_label))
-                    .set_text(cx, "Choose a firmware .bin first.");
-            }
-        }
-        if self.ui.button(id!(adv_btn)).clicked(actions) {
-            let visible = !self.ui.view(id!(adv_block)).visible();
-            self.ui.view(id!(adv_block)).set_visible(cx, visible);
-            self.ui.redraw(cx);
-        }
-        if self.ui.button(id!(dfu_btn)).clicked(actions) {
-            if let Some(tx) = &self.state.device_tx {
-                let _ = tx.send(DeviceCmd::EnterDfuOnly);
-            }
-        }
     }
 
     fn handle_key_down(&mut self, cx: &mut Cx, e: &KeyEvent) {
@@ -2456,7 +2555,7 @@ impl MatchEvent for App {
             }
             RecordTarget::MacroStep(i) => {
                 if i < self.state.macro_draft.len() {
-                    self.state.macro_draft[i] = MacroStep::Keystroke { mods, key: usage };
+                    self.state.macro_draft[i].step = MacroStep::Keystroke { mods, key: usage };
                 }
                 self.state.recording = RecordTarget::None;
                 self.refresh_macro_sheet(cx);
@@ -2468,6 +2567,18 @@ impl MatchEvent for App {
     fn handle_shutdown(&mut self, _cx: &mut Cx) {
         let _ = config::save(&self.state.config);
     }
+}
+
+/// "a.b.c" semver-style compare, lenient about junk (missing parts = 0).
+fn version_lt(a: &str, b: &str) -> bool {
+    let parse = |s: &str| -> [u64; 3] {
+        let mut out = [0u64; 3];
+        for (i, part) in s.split('.').take(3).enumerate() {
+            out[i] = part.trim().parse().unwrap_or(0);
+        }
+        out
+    };
+    parse(a) < parse(b)
 }
 
 /// Register (or remove) the app as a login item. Isolated so a platform

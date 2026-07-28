@@ -89,6 +89,15 @@ Install automatically. **Profiles and the on-device keymap survive updates**
 - Touch swipe left/right slots exist end-to-end in config and protocol, but
   the current single-zone pad cannot detect swipe direction — hardware
   revision territory.
+- Joystick key-repeat rate is not separately configurable: a held direction
+  holds its keycode, so the OS's own key-repeat applies. A per-binding
+  repeat-rate override is deferred.
+- While a shortcut-record is armed, keys typed into a focused text field are
+  captured as the shortcut *and* typed into the field — click Record before
+  clicking into any field.
+- Alternating one pad between machines with different active profiles writes
+  the keymap flash page once per plug (the profile always wins). The page is
+  rated for 10k erase cycles — years of plugging — but worth knowing.
 - Per the PRD's out-of-scope list: no auto per-app switching, no layers, no
   lighting control, no snippets, no multi-device, no plugins.
 

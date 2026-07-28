@@ -160,8 +160,21 @@ const CONFIG_OFFSET: u32 = 0x1F800;
 const CONFIG_ADDR: u32 = 0x0800_0000 + CONFIG_OFFSET;
 const MAGIC: u32 = 0x4F4D_4B31; // "OMK1"
 const LAYOUT_VERSION: u16 = 1;
-/// magic(4) + version(2) + joy_threshold(2) + 24 slots × 4.
-const BLOB_LEN: usize = 8 + SLOT_COUNT * 4;
+/// Where the checksum sits: right after the slots.
+const CK_OFFSET: usize = 8 + SLOT_COUNT * 4;
+/// magic(4) + version(2) + joy_threshold(2) + 24 slots × 4 + checksum(2)
+/// + 2 pad bytes, so both flash writes (body, then magic) are multiples of
+/// the F0's 4-byte programming unit.
+const BLOB_LEN: usize = CK_OFFSET + 4;
+
+/// Wrapping byte sum over everything before the checksum field. Combined
+/// with magic-last write ordering this makes a torn SAVE fail validation
+/// instead of loading garbage slots.
+fn checksum(b: &[u8]) -> u16 {
+    b[..CK_OFFSET]
+        .iter()
+        .fold(0u16, |a, &x| a.wrapping_add(x as u16))
+}
 
 fn encode(state: &KeymapState) -> [u8; BLOB_LEN] {
     let mut b = [0u8; BLOB_LEN];
@@ -174,6 +187,8 @@ fn encode(state: &KeymapState) -> [u8; BLOB_LEN] {
         b[o + 1] = s.mods;
         b[o + 2..o + 4].copy_from_slice(&s.code.to_le_bytes());
     }
+    let ck = checksum(&b);
+    b[CK_OFFSET..CK_OFFSET + 2].copy_from_slice(&ck.to_le_bytes());
     b
 }
 
@@ -187,21 +202,29 @@ pub fn load_from_flash() -> bool {
     }
     if u32::from_le_bytes([b[0], b[1], b[2], b[3]]) != MAGIC
         || u16::from_le_bytes([b[4], b[5]]) != LAYOUT_VERSION
+        || u16::from_le_bytes([b[CK_OFFSET], b[CK_OFFSET + 1]]) != checksum(&b)
     {
         return false;
     }
     KEYMAP.lock(|k| {
         let mut k = k.borrow_mut();
-        k.joy_threshold = u16::from_le_bytes([b[6], b[7]]);
+        k.joy_threshold = u16::from_le_bytes([b[6], b[7]]).clamp(200, 1900);
         for i in 0..SLOT_COUNT {
             let o = 8 + i * 4;
-            // An out-of-range kind byte means a corrupt slot; disable it
+            // A corrupt slot (bad kind, or a keyboard code outside u8 range,
+            // which the report builder cannot express) degrades to disabled
             // rather than emitting garbage.
             let kind = if b[o] <= KIND_CONSUMER { b[o] } else { KIND_NONE };
+            let code = u16::from_le_bytes([b[o + 2], b[o + 3]]);
+            let kind = if kind == KIND_KEYBOARD && code > 0xFF {
+                KIND_NONE
+            } else {
+                kind
+            };
             k.slots[i] = Slot {
                 kind,
                 mods: b[o + 1],
-                code: u16::from_le_bytes([b[o + 2], b[o + 3]]),
+                code,
             };
         }
     });
@@ -212,12 +235,23 @@ pub fn load_from_flash() -> bool {
 /// stalls on flash operations (~25 ms erase) — USB rides it out on hardware
 /// NAKs, the same trade the WS2812 bit-bang already makes, and this only runs
 /// on an explicit SAVE command.
+///
+/// The 4-byte magic is written LAST, as its own operation: a save torn by
+/// power loss leaves the header blank (erased flash reads 0xFF), so the next
+/// boot fails the magic check and falls back to defaults instead of loading
+/// half a keymap. The checksum covers the subtler torn case where power dies
+/// between the body write and the magic write of a *re*-save.
 pub fn save_to_flash(flash: &mut Flash<'_, Blocking>) -> Result<(), ()> {
     let blob = KEYMAP.lock(|k| encode(&k.borrow()));
     flash
         .blocking_erase(CONFIG_OFFSET, CONFIG_OFFSET + 2048)
         .map_err(|_| ())?;
-    flash.blocking_write(CONFIG_OFFSET, &blob).map_err(|_| ())
+    flash
+        .blocking_write(CONFIG_OFFSET + 4, &blob[4..])
+        .map_err(|_| ())?;
+    flash
+        .blocking_write(CONFIG_OFFSET, &blob[..4])
+        .map_err(|_| ())
 }
 
 /// Factory reset: defaults in RAM, config page erased (so the next boot also
@@ -260,12 +294,22 @@ pub fn read_page(page: usize, out: &mut [u8]) -> Option<usize> {
     Some(n)
 }
 
-/// Apply one SET_KEYMAP page to RAM. Returns false for a malformed request.
+/// Apply one SET_KEYMAP page to RAM. Returns false for a malformed request —
+/// validated in full BEFORE mutating, so a rejected page leaves RAM intact.
 pub fn write_page(page: usize, count: usize, data: &[u8]) -> bool {
     let start = page * PAGE_SLOTS;
     if page >= PAGE_COUNT || count > PAGE_SLOTS || start + count > SLOT_COUNT || data.len() < count * 4
     {
         return false;
+    }
+    for i in 0..count {
+        let o = i * 4;
+        let code = u16::from_le_bytes([data[o + 2], data[o + 3]]);
+        // Keyboard usages live in a u8 report field; codes past 0xFF would
+        // silently alias to their low byte — reject instead.
+        if data[o] == KIND_KEYBOARD && code > 0xFF {
+            return false;
+        }
     }
     KEYMAP.lock(|k| {
         let mut k = k.borrow_mut();

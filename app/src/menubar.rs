@@ -137,8 +137,10 @@ impl Menubar {
             let _ = menu.append(&item);
         }
         let _ = menu.append(&PredefinedMenuItem::separator());
-        let _ = menu.append(&MenuItem::with_id("open", "Open OpenMicro", true, None));
-        let _ = menu.append(&MenuItem::with_id("quit", "Quit", true, None));
+        // No "Open" item: neither makepad nor the tray API can portably
+        // raise an existing window, and the PRD forbids dead ends — better
+        // absent than a menu entry that does nothing.
+        let _ = menu.append(&MenuItem::with_id("quit", "Quit OpenMicro", true, None));
         if connected {
             let _ = menu.append(&PredefinedMenuItem::separator());
             let _ = menu.append(&MenuItem::with_id(

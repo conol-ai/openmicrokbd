@@ -109,13 +109,36 @@ pub enum MacroStep {
     Media { op: MediaOp },
 }
 
+fn default_true() -> bool {
+    true
+}
+
+/// One macro step plus its enabled flag (the PRD's per-step disable). The
+/// flatten + default keep step JSON from before the flag loading unchanged.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MacroStepEntry {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(flatten)]
+    pub step: MacroStep,
+}
+
+impl From<MacroStep> for MacroStepEntry {
+    fn from(step: MacroStep) -> Self {
+        MacroStepEntry {
+            enabled: true,
+            step,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Action {
     #[default]
     None,
     Keystroke { mods: u8, key: u16 },
-    Macro { steps: Vec<MacroStep> },
+    Macro { steps: Vec<MacroStepEntry> },
     Run { command: String },
     Open { target: String },
     Media { op: MediaOp },
@@ -297,6 +320,10 @@ fn sanitize(cfg: &mut AppConfig) {
                 profile.inputs.push(defaults.inputs[profile.inputs.len()].clone());
             }
         }
+        // The firmware clamps SET_ANALOG to this range; clamping here keeps
+        // app truth and device truth from fighting (an out-of-range value
+        // would re-sync forever because the device reads back different).
+        profile.analog.joy_threshold = profile.analog.joy_threshold.clamp(200, 1900);
     }
     if cfg.active_profile >= cfg.profiles.len() {
         cfg.active_profile = cfg.profiles.len() - 1;
@@ -380,13 +407,33 @@ fn config_path() -> Option<PathBuf> {
 }
 
 /// Load the config, migrating the legacy schema if that's what's on disk.
-/// Never fails: unreadable or unparseable files yield the default config
-/// (the broken file stays untouched until the next `save()`).
+/// Never fails — but a file that EXISTS and cannot be parsed is first copied
+/// aside to `config.json.invalid` before defaults take over, because the app
+/// saves on every edit and on quit: without the backup, one corrupt read
+/// would silently overwrite whatever the user had.
 pub fn load() -> AppConfig {
-    let mut cfg = config_path()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|text| parse_any(&text))
-        .unwrap_or_default();
+    let mut cfg = AppConfig::default();
+    if let Some(path) = config_path() {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            match parse_any(&text) {
+                Some(parsed) => cfg = parsed,
+                None => {
+                    let backup = path.with_extension("json.invalid");
+                    match std::fs::write(&backup, &text) {
+                        Ok(()) => eprintln!(
+                            "config: {} is unreadable — preserved at {}, using defaults",
+                            path.display(),
+                            backup.display()
+                        ),
+                        Err(e) => eprintln!(
+                            "config: {} is unreadable AND could not be backed up ({e}) — using defaults",
+                            path.display()
+                        ),
+                    }
+                }
+            }
+        }
+    }
     sanitize(&mut cfg);
     cfg
 }

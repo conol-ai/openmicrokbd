@@ -150,40 +150,85 @@ fn post_event(src: u8, a: u8, b: u8) {
 }
 
 /// Which slots are currently held (matrix keys by position, plus the button
-/// and joystick-direction slots). One shared set so the keyboard report is
-/// always rebuilt from the WHOLE truth — a joystick move can no longer drop a
-/// held key from the host's point of view, which the old per-task single-key
-/// reports could.
+/// and joystick-direction slots), each with the Slot SNAPSHOT taken at press
+/// time. One shared set so the keyboard report is always rebuilt from the
+/// WHOLE truth — a joystick move can no longer drop a held key from the
+/// host's point of view. The snapshot matters: the app can rewrite the
+/// keymap mid-hold (profile switch), and a release must retract exactly what
+/// its press emitted, not whatever the slot means now.
 static HELD: embassy_sync::blocking_mutex::Mutex<
     ThreadModeRawMutex,
-    core::cell::RefCell<[bool; keymap::SLOT_COUNT]>,
+    core::cell::RefCell<[Option<keymap::Slot>; keymap::SLOT_COUNT]>,
 > = embassy_sync::blocking_mutex::Mutex::new(core::cell::RefCell::new(
-    [false; keymap::SLOT_COUNT],
+    [None; keymap::SLOT_COUNT],
 ));
+
+/// try_send that never drops the NEWEST report: on a full channel the oldest
+/// entry is evicted first. Both channels carry absolute state (a keyboard
+/// report is the full held set; a consumer report replaces the previous
+/// usage), so newest-wins is always correct — while a plain try_send could
+/// drop a release and leave the host with a key or media usage stuck down.
+/// Single executor, no await between evict and re-send: cannot interleave.
+fn force_send_kbd(report: KeyboardReport) {
+    if KBD_CH.try_send(report).is_err() {
+        let _ = KBD_CH.try_receive();
+        let _ = KBD_CH.try_send(report);
+    }
+}
+
+fn force_send_consumer(usage: u16) {
+    let report = MediaKeyboardReport { usage_id: usage };
+    if CONSUMER_CH.try_send(report).is_err() {
+        let _ = CONSUMER_CH.try_receive();
+        let _ = CONSUMER_CH.try_send(report);
+    }
+}
 
 /// Mark a slot held/released and emit the consequences: keyboard-kind slots
 /// rebuild the composite 6KRO report (modifiers OR-ed across every held slot —
 /// the documented impurity of modifier-qualified codes); consumer-kind slots
-/// send their usage on press and 0 on release.
+/// send their usage on press, and on release fall back to another still-held
+/// consumer slot's usage (or 0) so overlapping holds don't strand each other.
 fn set_held(slot_idx: usize, held: bool) {
-    let s = keymap::slot(slot_idx);
-    let changed = HELD.lock(|h| {
+    // Press dispatches on the slot's current meaning; release dispatches on
+    // the snapshot stored at press time.
+    let (changed, s) = HELD.lock(|h| {
         let mut h = h.borrow_mut();
-        let changed = h[slot_idx] != held;
-        h[slot_idx] = held;
-        changed
+        if held {
+            let s = keymap::slot(slot_idx);
+            let changed = h[slot_idx].is_none();
+            h[slot_idx] = Some(s);
+            (changed, s)
+        } else {
+            match h[slot_idx].take() {
+                Some(s) => (true, s),
+                None => (false, keymap::Slot::none()),
+            }
+        }
     });
     if !changed {
         return;
     }
     match s.kind {
         keymap::KIND_CONSUMER => {
-            let usage = if held { s.code } else { 0 };
-            let _ = CONSUMER_CH.try_send(MediaKeyboardReport { usage_id: usage });
+            let usage = if held {
+                s.code
+            } else {
+                // Re-assert any other consumer slot still held.
+                HELD.lock(|h| {
+                    h.borrow()
+                        .iter()
+                        .flatten()
+                        .find(|o| o.kind == keymap::KIND_CONSUMER)
+                        .map(|o| o.code)
+                        .unwrap_or(0)
+                })
+            };
+            force_send_consumer(usage);
         }
         _ => {
             // KIND_NONE falls through here too: rebuilding the keyboard
-            // report from the held set is cheap and always correct.
+            // report from the held snapshots is cheap and always correct.
             let mut report = KeyboardReport {
                 modifier: 0,
                 reserved: 0,
@@ -192,16 +237,13 @@ fn set_held(slot_idx: usize, held: bool) {
             };
             let mut n = 0;
             HELD.lock(|h| {
-                let h = h.borrow();
-                for (i, held) in h.iter().enumerate() {
-                    if !held {
-                        continue;
-                    }
-                    let s = keymap::slot(i);
+                for s in h.borrow().iter().flatten() {
                     if s.kind != keymap::KIND_KEYBOARD {
                         continue;
                     }
                     report.modifier |= s.mods;
+                    // Codes above u8 range never enter RAM (write_page
+                    // rejects them); the cast is exact.
                     let code = s.code as u8;
                     if code != 0 && n < 6 && !report.keycodes[..n].contains(&code) {
                         report.keycodes[n] = code;
@@ -209,7 +251,7 @@ fn set_held(slot_idx: usize, held: bool) {
                     }
                 }
             });
-            let _ = KBD_CH.try_send(report);
+            force_send_kbd(report);
         }
     }
 }
