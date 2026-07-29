@@ -1,6 +1,7 @@
 # Rust build artifacts
 /target
 **/target
+/dist/
 Cargo.lock.orig
 *.orig
 

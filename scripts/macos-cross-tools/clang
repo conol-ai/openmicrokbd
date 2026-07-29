@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Makepad 1.0's macOS build script invokes `clang` directly without the target
+# architecture. Cargo supplies TARGET to build scripts, so preserve native
+# behavior and add the missing -arch only for an Apple cross-build.
+case "${TARGET:-}" in
+    aarch64-apple-darwin)
+        exec /usr/bin/clang -arch arm64 "$@"
+        ;;
+    x86_64-apple-darwin)
+        exec /usr/bin/clang -arch x86_64 "$@"
+        ;;
+    *)
+        exec /usr/bin/clang "$@"
+        ;;
+esac

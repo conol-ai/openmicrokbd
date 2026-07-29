@@ -1,6 +1,8 @@
 pub use makepad_widgets;
 pub mod actions;
 pub mod app;
+pub mod app_picker;
+pub mod behaviors;
 pub mod config;
 pub mod device;
 pub mod dfuse;
@@ -8,3 +10,4 @@ pub mod intercept;
 pub mod keycodes;
 pub mod lucide;
 pub mod menubar;
+pub mod release;

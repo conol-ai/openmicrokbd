@@ -1,6 +1,6 @@
 [package]
 name = "openmicro-fw"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license = "MIT"
 description = "OpenMicro macropad firmware (STM32F072CBT6, embassy)"
@@ -9,7 +9,6 @@ description = "OpenMicro macropad firmware (STM32F072CBT6, embassy)"
 embassy-stm32 = { version = "0.2", features = [
     "stm32f072cb",
     "time-driver-any",
-    "memory-x",
     "exti",
     "defmt",
     # Raw register access for the cap-touch sense loop: the RC rise on PB9 is

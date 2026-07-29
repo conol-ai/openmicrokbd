@@ -60,13 +60,24 @@ icons from the full bundled Lucide set).
 ## Firmware updates
 
 The product's field-update path (no buttons, no probe): the sheet checks the
-image (Cortex-M0 vector table for 128 K flash), sends `ENTER_DFU` over raw
-HID, speaks DfuSe (AN3156) directly over libusb to the ROM bootloader
-(`0483:df11`), and waits for the pad to come back. An update banner appears
-on the home screen when a connected pad runs an older firmware than the app
-ships against. A stranded bootloader (interrupted update) is picked up by
-Install automatically. **Profiles and the on-device keymap survive updates**
-— the keymap lives in a flash page updates never touch.
+image, sends `ENTER_DFU` over raw HID, speaks DfuSe (AN3156) directly over
+libusb to the ROM bootloader (`0483:df11`), and verifies the reported version
+when the pad returns. Release builds bundle the exact production firmware; a
+newer independent firmware release can also be downloaded from the GitHub
+Release path and is checked for size, SHA-256, board, protocol, and
+Cortex-M0 vectors before flashing. If the app stops while the powered device
+remains in ROM DFU, Install can resume. Do not unplug during flashing: power
+loss can leave recovery requiring SWD on J2. **Profiles and the on-device
+keymap survive updates** — the keymap lives in a reserved flash page updates
+never touch.
+
+## App updates
+
+Release builds check `release-manifest.json` at startup and every six hours.
+When a newer host version exists, the banner downloads the DMG for the running
+Mac architecture, verifies its declared size and SHA-256, and opens it so the
+user can replace OpenMicro in Applications. See [`../RELEASING.md`](../RELEASING.md)
+for packaging, Developer ID signing, notarization, and publishing.
 
 ## Platform notes
 
@@ -101,5 +112,5 @@ Install automatically. **Profiles and the on-device keymap survive updates**
 - Per the PRD's out-of-scope list: no auto per-app switching, no layers, no
   lighting control, no snippets, no multi-device, no plugins.
 
-This crate is standalone (like `../fw`) — the repository's CI does not build
-it; it is part of the example product's deliverables, not the CoHDL compiler.
+This crate is standalone (like `../fw`), but the tag-triggered release workflow
+builds and publishes it as native Apple Silicon and Intel DMGs.

@@ -22,19 +22,26 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
 use crate::actions::{self, OpenAppSettings};
+use crate::app_picker::*;
+use crate::behaviors::{self, InstalledApp};
 use crate::config::{
-    self, Action, AppConfig, InputConfig, MacroStep, MacroStepEntry, MediaOp, SlotKind,
-    SLOT_ENC_CW, SLOT_JOY_UP, SLOT_NAMES, SLOT_TOUCH_TAP,
+    self, Action, AppConfig, ControlBehavior, InputConfig, MacOsControl, MacroStep, MacroStepEntry,
+    MediaOp, RotatorPressPreset, RotatorRotationPreset, SlotKind, SLOT_ENC_CW, SLOT_ENC_PRESS,
+    SLOT_JOY_UP, SLOT_NAMES, SLOT_TOUCH_TAP,
 };
 use crate::device::{self, DeviceCmd, DeviceMsg, PadEvent, UpdateMsg};
 use crate::intercept::{self, HotkeyMsg, Intercept, SlotStatus};
 use crate::keycodes;
 use crate::lucide;
 use crate::menubar::{Menubar, MenubarMsg};
+use crate::release::{self, DownloadKind, ReleaseCatalog, ReleaseMsg};
 
-/// The firmware this app ships against; a connected pad running something
-/// older gets the update banner.
-const LATEST_FW: &str = "0.2.0";
+/// Release builds set this from `fw/Cargo.toml`; the fallback keeps ordinary
+/// local `cargo run` builds useful when no release environment is present.
+const LATEST_FW: &str = match option_env!("OPENMICRO_FIRMWARE_VERSION") {
+    Some(version) => version,
+    None => "0.2.1",
+};
 
 /// UI cap on macro steps (the config format itself has no limit).
 const MACRO_ROWS: usize = 8;
@@ -43,6 +50,7 @@ live_design! {
     use link::theme::*;
     use link::shaders::*;
     use link::widgets::*;
+    use crate::app_picker::*;
 
     // ---------------------------------------------------------------- palette
     // Deep graphite surfaces with a warm hardware-inspired amber. Green is
@@ -559,6 +567,89 @@ live_design! {
         }
     }
 
+    ModifierKey = <CheckBox> {
+        width: 112, height: 38,
+        padding: 0,
+        align: {x: 0.5, y: 0.5},
+        icon_walk: {width: 0, height: 0},
+        label_walk: {width: Fill, height: Fit, margin: 0},
+        label_align: {x: 0.5, y: 0.5},
+        draw_text: {
+            text_style: <THEME_FONT_BOLD> {font_size: 11.0},
+            color: (OM_TEXT_2),
+            color_hover: (OM_TEXT),
+            color_down: (OM_TEXT),
+            color_active: (OM_ACCENT_HI),
+            color_focus: (OM_TEXT),
+            color_disabled: (OM_TEXT_3)
+        }
+        draw_bg: {
+            color_dither: 0.0,
+            border_size: 1.0,
+            border_radius: 8.0,
+            color: (OM_SURFACE_2),
+            color_hover: (OM_SURFACE_3),
+            color_down: (OM_RAIL),
+            color_active: (OM_ACCENT_SOFT),
+            color_focus: (OM_SURFACE_2),
+            color_disabled: (OM_SURFACE),
+            border_color_1: (OM_LINE_BRIGHT), border_color_2: (OM_LINE_BRIGHT),
+            border_color_1_hover: (OM_TEXT_3), border_color_2_hover: (OM_TEXT_3),
+            border_color_1_down: (OM_ACCENT), border_color_2_down: (OM_ACCENT),
+            border_color_1_active: (OM_ACCENT), border_color_2_active: (OM_ACCENT),
+            border_color_1_focus: (OM_ACCENT), border_color_2_focus: (OM_ACCENT),
+            border_color_1_disabled: (OM_LINE_SOFT), border_color_2_disabled: (OM_LINE_SOFT),
+
+            fn pixel(self) -> vec4 {
+                let sdf = Sdf2d::viewport(self.pos * self.rect_size);
+                let pressed = self.down * self.hover;
+
+                // The darker lower shell gives the control the stepped profile
+                // of a physical Mac key instead of a checkbox or flat pill.
+                sdf.box(
+                    1.0,
+                    3.0,
+                    self.rect_size.x - 2.0,
+                    self.rect_size.y - 4.0,
+                    self.border_radius
+                );
+                sdf.fill(#07090d);
+
+                sdf.box(
+                    1.0,
+                    1.0 + pressed * 1.5,
+                    self.rect_size.x - 2.0,
+                    self.rect_size.y - 5.0,
+                    self.border_radius
+                );
+                sdf.stroke_keep(
+                    mix(
+                        mix(
+                            mix(self.border_color_1, self.border_color_1_active, self.active),
+                            self.border_color_1_focus,
+                            self.focus
+                        ),
+                        mix(self.border_color_1_hover, self.border_color_1_down, self.down),
+                        self.hover
+                    ),
+                    self.border_size
+                );
+                sdf.fill(
+                    mix(
+                        mix(
+                            mix(self.color, self.color_active, self.active),
+                            self.color_focus,
+                            self.focus
+                        ),
+                        mix(self.color_hover, self.color_down, self.down),
+                        self.hover
+                    )
+                );
+                return sdf.result
+            }
+        }
+    }
+
     OmSlider = <Slider> {
         height: 34,
         draw_text: {
@@ -1011,7 +1102,7 @@ live_design! {
                             fw_banner_later = <ButtonGhost> {text: "Later"}
                         }
                         perm_banner = <Banner> {
-                            banner_text = {text: "Accessibility is needed for this control's host action."}
+                            banner_text = {text: "Accessibility permission is needed for this behavior."}
                             perm_btn = <ButtonSecondary> {height: 30, text: "Open Settings"}
                         }
 
@@ -1046,7 +1137,7 @@ live_design! {
                                     <View> {
                                         width: Fit, height: Fit, flow: Right, spacing: 6,
                                         enc_cell = <DialCell> {
-                                            dial_label = {text: "ENCODER"}
+                                            dial_label = {text: "ROTATOR"}
                                         }
                                         cap_0 = <KeyCap> {}
                                         cap_1 = <KeyCap> {}
@@ -1165,8 +1256,288 @@ live_design! {
                                             sub_dd = <Select> {width: Fill}
                                         }
                                         }
-                                        <Rule> {}
+                                        editor_header_rule = <Rule> {}
 
+                                        rotator_editor = <View> {
+                                            width: Fill, height: Fit,
+                                            flow: Down, spacing: 0,
+                                            visible: false,
+                                            rotator_section = <SectionCard> {
+                                                spacing: 12,
+                                                <View> {
+                                                    width: Fill, height: Fit,
+                                                    flow: Right, spacing: 10, align: {y: 0.5},
+                                                    <SectionNumber> {section_number = {text: "1"}}
+                                                    <View> {
+                                                        width: Fill, height: Fit,
+                                                        flow: Down, spacing: 2,
+                                                        <Heading> {text: "Choose what the rotator does"}
+                                                        <Small> {
+                                                            text: "Rotation sets both directions; Press sets the push switch."
+                                                        }
+                                                    }
+                                                }
+
+                                                <Inset> {
+                                                    padding: 12, spacing: 10,
+                                                    <View> {
+                                                        width: Fill, height: Fit,
+                                                        flow: Right, spacing: 12, align: {y: 0.5},
+                                                        <RoundedView> {
+                                                            width: 38, height: 38,
+                                                            align: {x: 0.5, y: 0.5},
+                                                            draw_bg: {
+                                                                color: (OM_ACCENT_SOFT),
+                                                                border_radius: 9.0,
+                                                                border_size: 1.0,
+                                                                border_color: #60441f
+                                                            }
+                                                            rot_rotation_icon = <IconLabel> {
+                                                                draw_text: {color: (OM_ACCENT_HI)}
+                                                            }
+                                                        }
+                                                        <View> {
+                                                            width: Fill, height: Fit,
+                                                            flow: Down, spacing: 2,
+                                                            <Title> {text: "Rotation"}
+                                                            <Small> {text: "Clockwise and counter-clockwise"}
+                                                        }
+                                                        rot_rotation_dd = <Select> {width: 236}
+                                                    }
+                                                    rot_rotation_detail = <Body> {
+                                                        width: Fill,
+                                                        text: ""
+                                                    }
+                                                }
+
+                                                <Inset> {
+                                                    padding: 12, spacing: 10,
+                                                    <View> {
+                                                        width: Fill, height: Fit,
+                                                        flow: Right, spacing: 12, align: {y: 0.5},
+                                                        <RoundedView> {
+                                                            width: 38, height: 38,
+                                                            align: {x: 0.5, y: 0.5},
+                                                            draw_bg: {
+                                                                color: (OM_SURFACE_3),
+                                                                border_radius: 9.0,
+                                                                border_size: 1.0,
+                                                                border_color: (OM_LINE_BRIGHT)
+                                                            }
+                                                            rot_press_icon = <IconLabel> {}
+                                                        }
+                                                        <View> {
+                                                            width: Fill, height: Fit,
+                                                            flow: Down, spacing: 2,
+                                                            <Title> {text: "Press"}
+                                                            <Small> {text: "Push the rotator down"}
+                                                        }
+                                                        rot_press_dd = <Select> {width: 236}
+                                                    }
+                                                    rot_press_detail = <Body> {
+                                                        width: Fill,
+                                                        text: ""
+                                                    }
+                                                }
+
+                                                rot_custom_note_wrap = <RoundedView> {
+                                                    width: Fill, height: Fit,
+                                                    visible: false,
+                                                    padding: 10,
+                                                    draw_bg: {
+                                                        color: (OM_ACCENT_SOFT),
+                                                        border_radius: 8.0,
+                                                        border_size: 1.0,
+                                                        border_color: #60441f
+                                                    }
+                                                    rot_custom_note = <Small> {
+                                                        width: Fill,
+                                                        text: "This profile has custom rotator mappings. They stay untouched until you choose a preset."
+                                                        draw_text: {color: (OM_ACCENT_HI)}
+                                                    }
+                                                }
+
+                                                <View> {
+                                                    width: Fill, height: Fit,
+                                                    flow: Right, spacing: 8, align: {y: 0.5},
+                                                    rot_sync_dot = <Dot> {width: 6, height: 6}
+                                                    rot_sync_note = <Small> {width: Fill, text: ""}
+                                                }
+                                            }
+                                        }
+
+                                        simple_editor = <View> {
+                                            width: Fill, height: Fit,
+                                            flow: Down, spacing: 0,
+                                            visible: false,
+
+                                            simple_keycap_section = <SectionCard> {
+                                                spacing: 12,
+                                                <View> {
+                                                    width: Fill, height: Fit,
+                                                    flow: Right, spacing: 10, align: {y: 0.5},
+                                                    <View> {
+                                                        width: Fill, height: Fit,
+                                                        flow: Down, spacing: 2,
+                                                        <Heading> {text: "Keycap"}
+                                                        <Small> {text: "Choose the artwork and short label shown on the map"}
+                                                    }
+                                                }
+                                                <Inset> {
+                                                    padding: 14,
+                                                    <View> {
+                                                        width: Fill, height: Fit,
+                                                        flow: Right, spacing: 12, align: {y: 0.5},
+                                                        <RoundedView> {
+                                                            width: 52, height: 52,
+                                                            align: {x: 0.5, y: 0.5},
+                                                            draw_bg: {
+                                                                color: (OM_RAIL),
+                                                                border_radius: 12.0,
+                                                                border_size: 1.0,
+                                                                border_color: (OM_LINE_BRIGHT)
+                                                            }
+                                                            simple_icon_preview = <IconLabel> {
+                                                                draw_text: {
+                                                                    text_style: {
+                                                                        font_family: {latin = font("crate://self/resources/lucide.ttf", 0.0, 0.0)},
+                                                                        font_size: 23.0
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        <View> {
+                                                            width: Fill, height: Fit,
+                                                            flow: Down, spacing: 5,
+                                                            <Small> {text: "LABEL"}
+                                                            simple_label_input = <Field> {
+                                                                width: Fill,
+                                                                empty_text: "Short keycap label"
+                                                            }
+                                                        }
+                                                        simple_icon_pick_btn = <ButtonSecondary> {text: "Change icon…"}
+                                                    }
+                                                }
+                                            }
+                                            <Rule> {}
+
+                                            simple_behavior_section = <SectionCard> {
+                                                spacing: 12,
+                                                <View> {
+                                                    width: Fill, height: Fit,
+                                                    flow: Right, spacing: 10, align: {y: 0.5},
+                                                    <View> {
+                                                        width: Fill, height: Fit,
+                                                        flow: Down, spacing: 2,
+                                                        <Heading> {text: "Behavior"}
+                                                        <Small> {text: "Choose what happens when you press this control"}
+                                                    }
+                                                    behavior_dd = <Select> {width: 250}
+                                                }
+
+                                                behavior_existing = <RoundedView> {
+                                                    width: Fill, height: Fit,
+                                                    visible: false,
+                                                    padding: 12,
+                                                    draw_bg: {
+                                                        color: (OM_ACCENT_SOFT),
+                                                        border_radius: 9.0,
+                                                        border_size: 1.0,
+                                                        border_color: #60441f
+                                                    }
+                                                    behavior_existing_note = <Small> {
+                                                        width: Fill,
+                                                        text: "This control keeps its existing setup until you choose a behavior."
+                                                        draw_text: {color: (OM_ACCENT_HI)}
+                                                    }
+                                                }
+
+                                                shortcut_block = <Inset> {
+                                                    width: Fill, height: Fit,
+                                                    visible: false,
+                                                    flow: Down, spacing: 10,
+                                                    <View> {
+                                                        width: Fill, height: Fit,
+                                                        flow: Right, spacing: 10, align: {y: 0.5},
+                                                        <Small> {width: 100, text: "APPLICATION"}
+                                                        shortcut_app_dd = <Select> {width: Fill}
+                                                    }
+                                                    <View> {
+                                                        width: Fill, height: Fit,
+                                                        flow: Right, spacing: 10, align: {y: 0.5},
+                                                        <Small> {width: 100, text: "SHORTCUT"}
+                                                        shortcut_dd = <Select> {width: Fill}
+                                                    }
+                                                    shortcut_detail = <Small> {width: Fill, text: ""}
+                                                }
+
+                                                macos_block = <Inset> {
+                                                    width: Fill, height: Fit,
+                                                    visible: false,
+                                                    flow: Down, spacing: 8,
+                                                    <View> {
+                                                        width: Fill, height: Fit,
+                                                        flow: Right, spacing: 10, align: {y: 0.5},
+                                                        <Small> {width: 100, text: "CONTROL"}
+                                                        macos_dd = <Select> {width: Fill}
+                                                    }
+                                                    macos_detail = <Small> {width: Fill, text: ""}
+                                                }
+
+                                                behavior_keystroke_block = <Inset> {
+                                                    width: Fill, height: Fit,
+                                                    visible: false,
+                                                    flow: Down, spacing: 10,
+                                                    <View> {
+                                                        width: Fill, height: Fit,
+                                                        flow: Right, spacing: 10, align: {y: 0.5},
+                                                        <Small> {width: 100, text: "MODIFIERS"}
+                                                        behavior_mod_ctrl = <ModifierKey> {
+                                                            width: 112, text: "⌃ Control"
+                                                        }
+                                                        behavior_mod_alt = <ModifierKey> {
+                                                            width: 112, text: "⌥ Option"
+                                                        }
+                                                        behavior_mod_gui = <ModifierKey> {
+                                                            width: 128, text: "⌘ Command"
+                                                        }
+                                                        behavior_mod_shift = <ModifierKey> {
+                                                            width: 104, text: "⇧ Shift"
+                                                        }
+                                                    }
+                                                    <View> {
+                                                        width: Fill, height: Fit,
+                                                        flow: Right, spacing: 10, align: {y: 0.5},
+                                                        <Small> {width: 100, text: "KEY"}
+                                                        behavior_key_group_dd = <Select> {width: 210}
+                                                        behavior_key_dd = <Select> {width: Fill}
+                                                    }
+                                                }
+
+                                                behavior_app_block = <Inset> {
+                                                    width: Fill, height: Fit,
+                                                    visible: false,
+                                                    flow: Down, spacing: 8,
+                                                    <View> {
+                                                        width: Fill, height: Fit,
+                                                        flow: Right, spacing: 10, align: {y: 0.5},
+                                                        <Small> {width: 100, text: "APPLICATION"}
+                                                        installed_app_choose = <ButtonSecondary> {
+                                                            width: Fill,
+                                                            align: {x: 0.0, y: 0.5},
+                                                            text: "Choose an application…"
+                                                        }
+                                                        installed_apps_refresh = <ButtonGhost> {text: "Refresh"}
+                                                        installed_app_open = <ButtonSecondary> {text: "Open"}
+                                                    }
+                                                    installed_apps_note = <Small> {width: Fill, text: ""}
+                                                }
+                                            }
+                                        }
+
+                                        standard_editor = <View> {
+                                            width: Fill, height: Fit,
+                                            flow: Down, spacing: 0,
                                         emit_section = <SectionCard> {
                                     <View> {
                                         width: Fill, height: Fit,
@@ -1376,6 +1747,7 @@ live_design! {
                                             text: "Lower values respond sooner. Changes are debounced and written safely to the pad."
                                         }
                                     }
+                                        }
                                 }
                             }
                         }
@@ -1581,7 +1953,7 @@ live_design! {
                                 }
                                 <Small> {
                                     width: Fill,
-                                    text: "Do not unplug the pad while the update runs. An interrupted update is picked up again by Install."
+                                    text: "Keep the pad powered. If the app stops while ROM DFU is still present, Install can resume; unplugging mid-flash may require SWD recovery."
                                 }
                             }
                             log_label = <Label> {
@@ -1589,6 +1961,28 @@ live_design! {
                                 text: "",
                                 padding: 0,
                                 draw_text: {text_style: <THEME_FONT_CODE> {font_size: 9.5, line_spacing: 1.6}, color: (OM_TEXT_2)}
+                            }
+                        }
+                    }
+
+                    app_picker_sheet = <Sheet> {
+                        <SheetCard> {
+                            width: 560,
+                            <View> {
+                                width: Fill, height: Fit, flow: Right, align: {y: 0.5},
+                                <View> {
+                                    width: Fill, height: Fit, flow: Down, spacing: 3,
+                                    <Display> {text: "Choose an application"}
+                                    app_picker_meta = <Small> {
+                                        text: "Search or scroll through installed apps"
+                                    }
+                                }
+                                <Filler> {}
+                                app_picker_clear = <ButtonGhost> {text: "Clear"}
+                                app_picker_cancel = <ButtonGhost> {text: "Cancel"}
+                            }
+                            installed_app_picker = <AppPicker> {
+                                width: Fill, height: 360
                             }
                         }
                     }
@@ -1662,6 +2056,7 @@ enum SheetKind {
     Settings,
     Macro,
     Firmware,
+    Applications,
     Icon,
 }
 
@@ -1681,6 +2076,15 @@ enum RecordTarget {
     Action,
     /// A step of the macro draft.
     MacroStep(usize),
+}
+
+/// Which release notice currently owns the shared banner.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum UpdateBanner {
+    #[default]
+    None,
+    App,
+    Firmware,
 }
 
 /// Grid cell indices: 0..=12 the keys, then the three dials.
@@ -1723,13 +2127,30 @@ struct AppState {
     icon_page_names: Vec<&'static str>,
     /// Keyboard-usage list backing key_dd, index-aligned with its labels.
     kbd_usages: Vec<u16>,
+    /// Current bounded group backing the simple editor's key dropdown.
+    behavior_key_usages: Vec<u16>,
     /// Consumer-usage list backing media_dd / action_media_dd.
     consumer_usages: Vec<u16>,
+    /// Launchable macOS application bundles backing the App behavior picker.
+    installed_apps: Vec<InstalledApp>,
     updating: bool,
     image: Option<PathBuf>,
+    image_expected_version: Option<String>,
+    release: Option<ReleaseCatalog>,
+    active_update_banner: UpdateBanner,
+    app_banner_dismissed: bool,
+    app_downloading: bool,
+    app_download_progress: f64,
+    app_download: Option<PathBuf>,
+    firmware_downloading: bool,
+    firmware_download_progress: f64,
+    install_after_download: bool,
+    release_error: Option<String>,
     log: VecDeque<String>,
     /// Per-cell press-flash timers (encoder rotation, touch taps).
     flash_timers: Vec<(usize, Timer)>,
+    /// Re-check the stable GitHub release manifest while the app remains open.
+    release_timer: Timer,
     fw_banner_dismissed: bool,
     /// The strip's pen toggled into rename mode (the dropdown swaps for a
     /// text field until Enter/pen commits or Escape cancels).
@@ -1757,6 +2178,7 @@ pub struct App {
 impl LiveRegister for App {
     fn live_register(cx: &mut Cx) {
         crate::makepad_widgets::live_design(cx);
+        crate::app_picker::live_design(cx);
     }
 }
 
@@ -1780,7 +2202,21 @@ fn cell_for_slot(slot: usize) -> usize {
 
 /// The slots grouped under a dial cell, or the single key slot.
 fn slots_for_cell(cell: usize) -> &'static [usize] {
-    const KEY: [[usize; 1]; 13] = [[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12]];
+    const KEY: [[usize; 1]; 13] = [
+        [0],
+        [1],
+        [2],
+        [3],
+        [4],
+        [5],
+        [6],
+        [7],
+        [8],
+        [9],
+        [10],
+        [11],
+        [12],
+    ];
     const ENC: [usize; 3] = [13, 14, 15];
     const JOY: [usize; 6] = [16, 17, 18, 19, 20, 20 + 0]; // padded below
     const JOY_REAL: [usize; 5] = [16, 17, 18, 19, 20];
@@ -1798,26 +2234,82 @@ fn slots_for_cell(cell: usize) -> &'static [usize] {
 fn keycode_to_hid(kc: KeyCode) -> Option<u16> {
     use KeyCode::*;
     Some(match kc {
-        KeyA => 0x04, KeyB => 0x05, KeyC => 0x06, KeyD => 0x07, KeyE => 0x08,
-        KeyF => 0x09, KeyG => 0x0A, KeyH => 0x0B, KeyI => 0x0C, KeyJ => 0x0D,
-        KeyK => 0x0E, KeyL => 0x0F, KeyM => 0x10, KeyN => 0x11, KeyO => 0x12,
-        KeyP => 0x13, KeyQ => 0x14, KeyR => 0x15, KeyS => 0x16, KeyT => 0x17,
-        KeyU => 0x18, KeyV => 0x19, KeyW => 0x1A, KeyX => 0x1B, KeyY => 0x1C,
+        KeyA => 0x04,
+        KeyB => 0x05,
+        KeyC => 0x06,
+        KeyD => 0x07,
+        KeyE => 0x08,
+        KeyF => 0x09,
+        KeyG => 0x0A,
+        KeyH => 0x0B,
+        KeyI => 0x0C,
+        KeyJ => 0x0D,
+        KeyK => 0x0E,
+        KeyL => 0x0F,
+        KeyM => 0x10,
+        KeyN => 0x11,
+        KeyO => 0x12,
+        KeyP => 0x13,
+        KeyQ => 0x14,
+        KeyR => 0x15,
+        KeyS => 0x16,
+        KeyT => 0x17,
+        KeyU => 0x18,
+        KeyV => 0x19,
+        KeyW => 0x1A,
+        KeyX => 0x1B,
+        KeyY => 0x1C,
         KeyZ => 0x1D,
-        Key1 => 0x1E, Key2 => 0x1F, Key3 => 0x20, Key4 => 0x21, Key5 => 0x22,
-        Key6 => 0x23, Key7 => 0x24, Key8 => 0x25, Key9 => 0x26, Key0 => 0x27,
-        ReturnKey => 0x28, Escape => 0x29, Backspace => 0x2A, Tab => 0x2B,
-        Space => 0x2C, Minus => 0x2D, Equals => 0x2E, LBracket => 0x2F,
-        RBracket => 0x30, Backslash => 0x31, Semicolon => 0x33, Quote => 0x34,
-        Backtick => 0x35, Comma => 0x36, Period => 0x37, Slash => 0x38,
-        F1 => 0x3A, F2 => 0x3B, F3 => 0x3C, F4 => 0x3D, F5 => 0x3E, F6 => 0x3F,
-        F7 => 0x40, F8 => 0x41, F9 => 0x42, F10 => 0x43, F11 => 0x44, F12 => 0x45,
+        Key1 => 0x1E,
+        Key2 => 0x1F,
+        Key3 => 0x20,
+        Key4 => 0x21,
+        Key5 => 0x22,
+        Key6 => 0x23,
+        Key7 => 0x24,
+        Key8 => 0x25,
+        Key9 => 0x26,
+        Key0 => 0x27,
+        ReturnKey => 0x28,
+        Escape => 0x29,
+        Backspace => 0x2A,
+        Tab => 0x2B,
+        Space => 0x2C,
+        Minus => 0x2D,
+        Equals => 0x2E,
+        LBracket => 0x2F,
+        RBracket => 0x30,
+        Backslash => 0x31,
+        Semicolon => 0x33,
+        Quote => 0x34,
+        Backtick => 0x35,
+        Comma => 0x36,
+        Period => 0x37,
+        Slash => 0x38,
+        F1 => 0x3A,
+        F2 => 0x3B,
+        F3 => 0x3C,
+        F4 => 0x3D,
+        F5 => 0x3E,
+        F6 => 0x3F,
+        F7 => 0x40,
+        F8 => 0x41,
+        F9 => 0x42,
+        F10 => 0x43,
+        F11 => 0x44,
+        F12 => 0x45,
         // PrintScreen/ScrollLock/Pause/Insert are deliberately absent: the
         // synthesis side (actions::hid_to_enigo) cannot replay them, so
         // recording them would create a chord that silently does nothing.
-        Home => 0x4A, PageUp => 0x4B, Delete => 0x4C,
-        End => 0x4D, PageDown => 0x4E,
-        ArrowRight => 0x4F, ArrowLeft => 0x50, ArrowDown => 0x51, ArrowUp => 0x52,
+        Home => 0x4A,
+        PageUp => 0x4B,
+        Delete => 0x4C,
+        End => 0x4D,
+        PageDown => 0x4E,
+        ArrowRight => 0x4F,
+        ArrowLeft => 0x50,
+        ArrowDown => 0x51,
+        ArrowUp => 0x52,
         _ => return None,
     })
 }
@@ -1856,9 +2348,138 @@ impl App {
         while self.state.log.len() > 8 {
             self.state.log.pop_front();
         }
-        let text = self.state.log.iter().cloned().collect::<Vec<_>>().join("\n");
+        let text = self
+            .state
+            .log
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
         self.ui.label(id!(log_label)).set_text(cx, &text);
         self.ui.redraw(cx);
+    }
+
+    fn start_firmware_update(
+        &mut self,
+        cx: &mut Cx,
+        image: PathBuf,
+        expected_version: Option<String>,
+    ) {
+        self.state.updating = true;
+        self.state.install_after_download = false;
+        self.ui.view(id!(progress_block)).set_visible(cx, true);
+        self.ui.label(id!(phase_label)).set_text(cx, "Starting…");
+        self.ui.label(id!(pct_label)).set_text(cx, "0%");
+        self.ui
+            .view(id!(progress_fill))
+            .apply_over(cx, live! {width: 0});
+        self.refresh_status(cx);
+        if let Some(tx) = &self.state.device_tx {
+            let _ = tx.send(DeviceCmd::StartUpdate {
+                image,
+                expected_version,
+            });
+        }
+        self.ui.redraw(cx);
+    }
+
+    fn download_or_install_firmware(&mut self, cx: &mut Cx) {
+        if self.state.updating || self.state.firmware_downloading {
+            self.log_line(cx, "an update is already running".into());
+            return;
+        }
+        if let Some(image) = self.state.image.clone() {
+            self.start_firmware_update(cx, image, self.state.image_expected_version.clone());
+            return;
+        }
+        let expected_version = self
+            .state
+            .release
+            .as_ref()
+            .map(|catalog| catalog.firmware.version.clone())
+            .unwrap_or_else(|| LATEST_FW.to_string());
+        if self.select_bundled_firmware(cx, &expected_version) {
+            if let Some(image) = self.state.image.clone() {
+                self.start_firmware_update(cx, image, Some(expected_version));
+            }
+            return;
+        }
+        let Some(catalog) = self.state.release.as_ref() else {
+            self.ui.view(id!(progress_block)).set_visible(cx, true);
+            self.ui
+                .label(id!(phase_label))
+                .set_text(cx, "Choose a firmware .bin first.");
+            return;
+        };
+        let version = catalog.firmware.version.clone();
+        let asset = catalog.firmware.asset.clone();
+        self.state.firmware_downloading = true;
+        self.state.firmware_download_progress = 0.0;
+        self.state.install_after_download = true;
+        self.state.release_error = None;
+        self.ui.view(id!(progress_block)).set_visible(cx, true);
+        self.ui
+            .label(id!(phase_label))
+            .set_text(cx, &format!("Downloading firmware {version}…"));
+        self.ui.label(id!(pct_label)).set_text(cx, "0%");
+        self.ui
+            .view(id!(progress_fill))
+            .apply_over(cx, live! {width: 0});
+        release::spawn_download(DownloadKind::Firmware, version, asset);
+        self.refresh_status(cx);
+    }
+
+    fn select_bundled_firmware(&mut self, cx: &mut Cx, expected_version: &str) -> bool {
+        match release::bundled_firmware() {
+            Ok(Some((version, path))) if version == expected_version => {
+                self.state.image = Some(path.clone());
+                self.state.image_expected_version = Some(version.clone());
+                self.ui
+                    .label(id!(file_label))
+                    .set_text(cx, "openmicro-fw.bin");
+                self.ui.label(id!(file_meta)).set_text(
+                    cx,
+                    &format!("firmware {version} · bundled and SHA-256 verified"),
+                );
+                true
+            }
+            Ok(_) => false,
+            Err(error) => {
+                self.state.release_error = Some(error.clone());
+                self.log_line(cx, error);
+                false
+            }
+        }
+    }
+
+    fn download_or_open_app_update(&mut self, cx: &mut Cx) {
+        if let Some(path) = self.state.app_download.clone() {
+            if let Err(error) = open::that(&path) {
+                self.state.release_error = Some(format!("cannot open DMG: {error}"));
+            }
+            self.refresh_status(cx);
+            return;
+        }
+        if self.state.app_downloading {
+            return;
+        }
+        let Some(catalog) = self.state.release.as_ref() else {
+            return;
+        };
+        let Some(asset) = catalog.app_asset().cloned() else {
+            self.state.release_error = Some(format!(
+                "this release has no macOS artifact for {}",
+                std::env::consts::ARCH
+            ));
+            self.refresh_status(cx);
+            return;
+        };
+        let version = catalog.app.version.clone();
+        self.state.app_downloading = true;
+        self.state.app_download_progress = 0.0;
+        self.state.release_error = None;
+        release::spawn_download(DownloadKind::App, version, asset);
+        self.refresh_status(cx);
     }
 
     /// Persist config, re-derive interceptions, refresh everything visual.
@@ -1890,13 +2511,21 @@ impl App {
 
     // ------------------------------------------------------------- chrome
     fn refresh_profile_strip(&mut self, cx: &mut Cx) {
-        let names: Vec<String> = self.state.config.profiles.iter().map(|p| p.name.clone()).collect();
+        let names: Vec<String> = self
+            .state
+            .config
+            .profiles
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
         let dd = self.ui.drop_down(id!(profile_dd));
         dd.set_labels(cx, names.clone());
         dd.set_selected_item(cx, self.state.config.active_profile);
         let renaming = self.state.renaming_profile;
         self.ui.view(id!(prof_dd_wrap)).set_visible(cx, !renaming);
-        self.ui.view(id!(prof_rename_wrap)).set_visible(cx, renaming);
+        self.ui
+            .view(id!(prof_rename_wrap))
+            .set_visible(cx, renaming);
         self.ui
             .button(id!(prof_edit))
             .set_text(cx, if renaming { "" } else { "" });
@@ -1928,20 +2557,20 @@ impl App {
     fn refresh_status(&mut self, cx: &mut Cx) {
         let (dot, text, meta, status_text_color) =
             match (&self.state.last_conn, self.state.connected) {
-            (Some((version, serial)), true) => (
-                vec4(0.267, 0.820, 0.616, 1.0),
-                "Connected".to_string(),
-                format!("firmware {version} · serial {serial}"),
-                vec4(0.267, 0.820, 0.616, 1.0),
-            ),
-            _ => (
-                vec4(0.498, 0.522, 0.561, 1.0),
-                "Offline".to_string(),
-                // Without a pad, firmware/serial are useless — hidden.
-                String::new(),
-                vec4(0.725, 0.710, 0.678, 1.0),
-            ),
-        };
+                (Some((version, serial)), true) => (
+                    vec4(0.267, 0.820, 0.616, 1.0),
+                    "Connected".to_string(),
+                    format!("firmware {version} · serial {serial}"),
+                    vec4(0.267, 0.820, 0.616, 1.0),
+                ),
+                _ => (
+                    vec4(0.498, 0.522, 0.561, 1.0),
+                    "Offline".to_string(),
+                    // Without a pad, firmware/serial are useless — hidden.
+                    String::new(),
+                    vec4(0.725, 0.710, 0.678, 1.0),
+                ),
+            };
         let (fw_pill_bg, fw_pill_line, fw_pill_text) = if self.state.connected {
             (
                 vec4(0.071, 0.192, 0.153, 1.0),
@@ -1987,24 +2616,102 @@ impl App {
                 .apply_over(cx, live! {draw_bg: {ghost: (ghost)}});
         }
 
-        // Firmware banner: connected and running something OLDER — a pad
-        // running something newer than this app must not be offered a
-        // downgrade dressed up as an update.
+        // One release banner, with the host update taking priority. Once the
+        // app is current, the same surface offers a firmware update for a
+        // connected pad. Never present a downgrade.
+        let app_stale = self
+            .state
+            .release
+            .as_ref()
+            .map(|catalog| {
+                catalog.app_asset().is_some()
+                    && release::is_newer(&catalog.app.version, release::APP_VERSION)
+            })
+            .unwrap_or(false);
+        let latest_fw = self
+            .state
+            .release
+            .as_ref()
+            .map(|catalog| catalog.firmware.version.as_str())
+            .unwrap_or(LATEST_FW);
         let fw_stale = self
             .state
             .last_conn
             .as_ref()
-            .map(|(v, _)| self.state.connected && version_lt(v, LATEST_FW))
+            .map(|(v, _)| self.state.connected && release::is_newer(latest_fw, v))
             .unwrap_or(false);
-        let show_banner = fw_stale && !self.state.fw_banner_dismissed;
-        if show_banner {
-            let installed = self.state.last_conn.as_ref().map(|(v, _)| v.clone()).unwrap_or_default();
-            self.ui.label(id!(fw_banner.banner_text)).set_text(
-                cx,
-                &format!("Firmware {LATEST_FW} is available (installed: {installed}) — configurable keymap and live press feedback."),
-            );
+
+        self.state.active_update_banner = if app_stale && !self.state.app_banner_dismissed {
+            UpdateBanner::App
+        } else if fw_stale && !self.state.fw_banner_dismissed {
+            UpdateBanner::Firmware
+        } else {
+            UpdateBanner::None
+        };
+        match self.state.active_update_banner {
+            UpdateBanner::App => {
+                let catalog = self.state.release.as_ref().unwrap();
+                let text = if self.state.app_downloading {
+                    format!(
+                        "Downloading OpenMicro {}… {}%",
+                        catalog.app.version,
+                        (self.state.app_download_progress * 100.0).round() as u64
+                    )
+                } else if self.state.app_download.is_some() {
+                    format!(
+                        "OpenMicro {} is ready — the DMG has been downloaded and opened.",
+                        catalog.app.version
+                    )
+                } else if let Some(error) = &self.state.release_error {
+                    format!(
+                        "OpenMicro {} is available, but the download failed: {error}",
+                        catalog.app.version
+                    )
+                } else {
+                    format!(
+                        "OpenMicro {} is available (installed: {}).",
+                        catalog.app.version,
+                        release::APP_VERSION
+                    )
+                };
+                self.ui
+                    .label(id!(fw_banner.banner_text))
+                    .set_text(cx, &text);
+                self.ui.button(id!(fw_banner_btn)).set_text(
+                    cx,
+                    if self.state.app_download.is_some() {
+                        "Open DMG"
+                    } else if self.state.app_downloading {
+                        "Downloading…"
+                    } else {
+                        "Download update"
+                    },
+                );
+                self.ui
+                    .button(id!(fw_banner_btn))
+                    .set_enabled(cx, !self.state.app_downloading);
+            }
+            UpdateBanner::Firmware => {
+                let installed = self
+                    .state
+                    .last_conn
+                    .as_ref()
+                    .map(|(v, _)| v.clone())
+                    .unwrap_or_default();
+                self.ui.label(id!(fw_banner.banner_text)).set_text(
+                    cx,
+                    &format!("Firmware {latest_fw} is available (installed: {installed})."),
+                );
+                self.ui
+                    .button(id!(fw_banner_btn))
+                    .set_text(cx, "Update firmware");
+                self.ui.button(id!(fw_banner_btn)).set_enabled(cx, true);
+            }
+            UpdateBanner::None => {}
         }
-        self.ui.view(id!(fw_banner)).set_visible(cx, show_banner);
+        self.ui
+            .view(id!(fw_banner))
+            .set_visible(cx, self.state.active_update_banner != UpdateBanner::None);
 
         // Permission banner: only when an action actually needs it.
         let needs = self
@@ -2022,7 +2729,11 @@ impl App {
                 format!("serial {serial} · USB 1209:0001 · vendor interface 0xFF60"),
                 "Connected".to_string(),
             ),
-            None => ("—".into(), "waiting for the pad".into(), "Disconnected".into()),
+            None => (
+                "—".into(),
+                "waiting for the pad".into(),
+                "Disconnected".into(),
+            ),
         };
         self.ui.label(id!(fw_version)).set_text(cx, &version);
         self.ui.label(id!(fw_meta)).set_text(cx, &fw_meta);
@@ -2036,9 +2747,38 @@ impl App {
             .apply_over(cx, live! {draw_text: {color: (fw_pill_text)}});
         self.ui
             .button(id!(install_btn))
-            .set_enabled(cx, !self.state.updating);
+            .set_enabled(cx, !self.state.updating && !self.state.firmware_downloading);
         for id in [id!(choose_btn), id!(adv_btn), id!(dfu_btn)] {
-            self.ui.button(id).set_enabled(cx, !self.state.updating);
+            self.ui
+                .button(id)
+                .set_enabled(cx, !self.state.updating && !self.state.firmware_downloading);
+        }
+        if self.state.image.is_none() {
+            if let Some(catalog) = &self.state.release {
+                self.ui.label(id!(file_label)).set_text(
+                    cx,
+                    &format!("OpenMicro firmware {}", catalog.firmware.version),
+                );
+                self.ui.label(id!(file_meta)).set_text(
+                    cx,
+                    &format!(
+                        "release asset · {:.1} KiB · SHA-256 verified before install",
+                        catalog.firmware.asset.size as f64 / 1024.0
+                    ),
+                );
+                self.ui.button(id!(install_btn)).set_text(
+                    cx,
+                    if self.state.firmware_downloading {
+                        "Downloading…"
+                    } else {
+                        "Download & install"
+                    },
+                );
+            } else {
+                self.ui.button(id!(install_btn)).set_text(cx, "Install");
+            }
+        } else {
+            self.ui.button(id!(install_btn)).set_text(cx, "Install");
         }
         self.ui.label(id!(install_note)).set_text(
             cx,
@@ -2048,13 +2788,34 @@ impl App {
                 "No pad found — Install still works on a pad left in DFU mode."
             },
         );
+        let (rot_sync_color, rot_sync_text) = if self.state.connected {
+            (
+                vec4(0.267, 0.820, 0.616, 1.0),
+                "Changes are written to OpenMicro and saved in its flash memory.",
+            )
+        } else {
+            (
+                vec4(0.949, 0.667, 0.298, 1.0),
+                "Saved in this profile · connect OpenMicro to write these choices to the keyboard.",
+            )
+        };
+        self.ui
+            .view(id!(rot_sync_dot))
+            .apply_over(cx, live! {draw_bg: {color: (rot_sync_color)}});
+        self.ui
+            .label(id!(rot_sync_note))
+            .set_text(cx, rot_sync_text);
         self.ui.redraw(cx);
     }
 
     // ---------------------------------------------------------------- grid
     fn refresh_cell(&mut self, cx: &mut Cx, cell: usize) {
         let selected_cell = self.state.selected.map(cell_for_slot);
-        let active = if selected_cell == Some(cell) { 1.0 } else { 0.0 };
+        let active = if selected_cell == Some(cell) {
+            1.0
+        } else {
+            0.0
+        };
         if cell <= 12 {
             let input = self.input(cell).clone();
             let has_action = input.action != Action::None;
@@ -2075,8 +2836,12 @@ impl App {
                 );
             let warn = if warn { 1.0 } else { 0.0 };
             let cid = cap_id(cell);
-            let icon = lucide::icon_char(&input.icon).map(String::from).unwrap_or_default();
-            self.ui.label(&[cid, live_id!(cap_icon)]).set_text(cx, &icon);
+            let icon = lucide::icon_char(&input.icon)
+                .map(String::from)
+                .unwrap_or_default();
+            self.ui
+                .label(&[cid, live_id!(cap_icon)])
+                .set_text(cx, &icon);
             let label = if input.label.is_empty() {
                 "—".to_string()
             } else {
@@ -2092,7 +2857,7 @@ impl App {
             self.ui.view(&[cid]).redraw(cx);
         } else {
             let (vid, name) = match cell {
-                CELL_ENC => (id!(enc_cell), "ENCODER"),
+                CELL_ENC => (id!(enc_cell), "ROTATOR"),
                 CELL_JOY => (id!(joy_cell), "JOYSTICK"),
                 _ => (id!(touch_cell), "TOUCH PAD"),
             };
@@ -2160,6 +2925,375 @@ impl App {
     }
 
     // -------------------------------------------------------------- editor
+    fn refresh_rotator_editor(&mut self, cx: &mut Cx) {
+        let rotation = RotatorRotationPreset::infer(self.active_profile());
+        let press = RotatorPressPreset::infer(self.active_profile());
+
+        let mut rotation_labels: Vec<String> = RotatorRotationPreset::ALL
+            .iter()
+            .map(|preset| preset.label().to_string())
+            .collect();
+        let rotation_index = rotation
+            .and_then(|selected| {
+                RotatorRotationPreset::ALL
+                    .iter()
+                    .position(|preset| *preset == selected)
+            })
+            .unwrap_or_else(|| {
+                rotation_labels.push("Custom (existing)".to_string());
+                rotation_labels.len() - 1
+            });
+        let rotation_dd = self.ui.drop_down(id!(rot_rotation_dd));
+        rotation_dd.set_labels(cx, rotation_labels);
+        rotation_dd.set_selected_item(cx, rotation_index);
+
+        let mut press_labels: Vec<String> = RotatorPressPreset::ALL
+            .iter()
+            .map(|preset| preset.label().to_string())
+            .collect();
+        let press_index = press
+            .and_then(|selected| {
+                RotatorPressPreset::ALL
+                    .iter()
+                    .position(|preset| *preset == selected)
+            })
+            .unwrap_or_else(|| {
+                press_labels.push("Custom (existing)".to_string());
+                press_labels.len() - 1
+            });
+        let press_dd = self.ui.drop_down(id!(rot_press_dd));
+        press_dd.set_labels(cx, press_labels);
+        press_dd.set_selected_item(cx, press_index);
+
+        let (rotation_icon, rotation_detail) = match rotation {
+            Some(RotatorRotationPreset::Volume) => (
+                "volume-2",
+                "Clockwise raises volume · counter-clockwise lowers it.",
+            ),
+            Some(RotatorRotationPreset::Brightness) => (
+                "sun-medium",
+                "Clockwise brightens the screen · counter-clockwise dims it.",
+            ),
+            Some(RotatorRotationPreset::Tracks) => (
+                "skip-forward",
+                "Clockwise selects the next song · counter-clockwise selects the previous song.",
+            ),
+            Some(RotatorRotationPreset::VerticalArrows) => (
+                "arrow-up-down",
+                "Clockwise sends Arrow Down · counter-clockwise sends Arrow Up.",
+            ),
+            Some(RotatorRotationPreset::HorizontalArrows) => (
+                "arrow-left-right",
+                "Clockwise sends Arrow Right · counter-clockwise sends Arrow Left.",
+            ),
+            None => (
+                "rotate-cw",
+                "The existing clockwise and counter-clockwise mappings are preserved.",
+            ),
+        };
+        let (press_icon, press_detail) = match press {
+            Some(RotatorPressPreset::Mute) => {
+                ("volume-x", "Sends the system audio Mute command.")
+            }
+            Some(RotatorPressPreset::LockScreen) => (
+                "lock-keyhole",
+                "Sends the standard HID lock-screen command. Support depends on the operating system.",
+            ),
+            Some(RotatorPressPreset::Play) => {
+                ("play", "Sends the dedicated media Play command.")
+            }
+            Some(RotatorPressPreset::Enter) => {
+                ("corner-down-left", "Sends the standard Enter key.")
+            }
+            None => (
+                "mouse-pointer-click",
+                "The existing push-switch mapping is preserved.",
+            ),
+        };
+        let rotation_glyph = lucide::icon_char(rotation_icon)
+            .map(String::from)
+            .unwrap_or_default();
+        let press_glyph = lucide::icon_char(press_icon)
+            .map(String::from)
+            .unwrap_or_default();
+        self.ui
+            .label(id!(rot_rotation_icon))
+            .set_text(cx, &rotation_glyph);
+        self.ui
+            .label(id!(rot_press_icon))
+            .set_text(cx, &press_glyph);
+        self.ui
+            .label(id!(rot_rotation_detail))
+            .set_text(cx, rotation_detail);
+        self.ui
+            .label(id!(rot_press_detail))
+            .set_text(cx, press_detail);
+
+        let custom_note = match (rotation.is_none(), press.is_none()) {
+            (true, true) => {
+                "This profile has custom rotation and press mappings. Both stay untouched until you choose a preset."
+            }
+            (true, false) => {
+                "This profile has a custom rotation mapping. It stays untouched until you choose a preset."
+            }
+            (false, true) => {
+                "This profile has a custom press mapping. It stays untouched until you choose a preset."
+            }
+            (false, false) => "",
+        };
+        self.ui
+            .label(id!(rot_custom_note))
+            .set_text(cx, custom_note);
+        self.ui
+            .view(id!(rot_custom_note_wrap))
+            .set_visible(cx, !custom_note.is_empty());
+
+        let (sync_color, sync_note) = if self.state.connected {
+            (
+                vec4(0.267, 0.820, 0.616, 1.0),
+                "Changes are written to OpenMicro and saved in its flash memory.",
+            )
+        } else {
+            (
+                vec4(0.949, 0.667, 0.298, 1.0),
+                "Saved in this profile · connect OpenMicro to write these choices to the keyboard.",
+            )
+        };
+        self.ui
+            .view(id!(rot_sync_dot))
+            .apply_over(cx, live! {draw_bg: {color: (sync_color)}});
+        self.ui.label(id!(rot_sync_note)).set_text(cx, sync_note);
+    }
+
+    fn reload_installed_apps(&mut self, cx: &mut Cx, preserve_target: Option<&str>) {
+        self.state.installed_apps = behaviors::installed_apps();
+        if let Some(target) = preserve_target.filter(|target| !target.trim().is_empty()) {
+            if !self
+                .state
+                .installed_apps
+                .iter()
+                .any(|app| app.path == target)
+            {
+                let name = std::path::Path::new(target)
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Unavailable application");
+                self.state.installed_apps.push(InstalledApp {
+                    name: format!("{name} — unavailable"),
+                    path: target.to_string(),
+                });
+            }
+        }
+        if self.state.sheet == SheetKind::Applications {
+            self.refresh_app_picker_sheet(cx, false);
+        }
+    }
+
+    fn refresh_simple_editor(&mut self, cx: &mut Cx, slot: usize, set_inputs: bool) {
+        let input = self.input(slot).clone();
+        let behavior = if behaviors::behavior_is_consistent(&input, slot) {
+            input.behavior.clone()
+        } else {
+            None
+        };
+
+        // Keycap artwork is intentionally first, and the icon's internal
+        // Lucide name never appears in this editor.
+        let preview = lucide::icon_char(&input.icon)
+            .map(String::from)
+            .unwrap_or_default();
+        self.ui
+            .label(id!(simple_icon_preview))
+            .set_text(cx, &preview);
+        if set_inputs {
+            self.ui
+                .text_input(id!(simple_label_input))
+                .set_text(cx, &input.label);
+        }
+
+        let existing = behavior.is_none();
+        let mut behavior_labels = vec![
+            "Application shortcuts".to_string(),
+            "macOS".to_string(),
+            "Key stroke".to_string(),
+            "App".to_string(),
+        ];
+        if existing {
+            behavior_labels.insert(0, "Existing setup".to_string());
+        }
+        let behavior_index = match &behavior {
+            Some(ControlBehavior::ApplicationShortcut { .. }) => 0,
+            Some(ControlBehavior::MacOs { .. }) => 1,
+            Some(ControlBehavior::Keystroke) => 2,
+            Some(ControlBehavior::App { .. }) => 3,
+            None => 0,
+        } + usize::from(existing && behavior.is_some());
+        let behavior_dd = self.ui.drop_down(id!(behavior_dd));
+        behavior_dd.set_labels(cx, behavior_labels);
+        behavior_dd.set_selected_item(cx, behavior_index);
+
+        self.ui
+            .view(id!(behavior_existing))
+            .set_visible(cx, existing);
+        self.ui.view(id!(shortcut_block)).set_visible(
+            cx,
+            matches!(
+                behavior.as_ref(),
+                Some(ControlBehavior::ApplicationShortcut { .. })
+            ),
+        );
+        self.ui.view(id!(macos_block)).set_visible(
+            cx,
+            matches!(behavior.as_ref(), Some(ControlBehavior::MacOs { .. })),
+        );
+        self.ui.view(id!(behavior_keystroke_block)).set_visible(
+            cx,
+            matches!(behavior.as_ref(), Some(ControlBehavior::Keystroke)),
+        );
+        self.ui.view(id!(behavior_app_block)).set_visible(
+            cx,
+            matches!(behavior.as_ref(), Some(ControlBehavior::App { .. })),
+        );
+
+        if let Some(ControlBehavior::ApplicationShortcut {
+            application,
+            shortcut,
+        }) = &behavior
+        {
+            let app_index = behaviors::APPLICATION_SHORTCUTS
+                .iter()
+                .position(|preset| preset.id == application)
+                .unwrap_or(0);
+            self.ui
+                .drop_down(id!(shortcut_app_dd))
+                .set_selected_item(cx, app_index);
+            let app = &behaviors::APPLICATION_SHORTCUTS[app_index];
+            self.ui.drop_down(id!(shortcut_dd)).set_labels(
+                cx,
+                app.shortcuts
+                    .iter()
+                    .map(|preset| preset.label.to_string())
+                    .collect(),
+            );
+            let shortcut_index = app
+                .shortcuts
+                .iter()
+                .position(|preset| preset.id == shortcut)
+                .unwrap_or(0);
+            self.ui
+                .drop_down(id!(shortcut_dd))
+                .set_selected_item(cx, shortcut_index);
+            let preset = &app.shortcuts[shortcut_index];
+            self.ui.label(id!(shortcut_detail)).set_text(
+                cx,
+                &format!(
+                    "Default shortcut: {} · works when {} is active",
+                    behaviors::shortcut_chord_label(preset),
+                    app.label
+                ),
+            );
+        }
+
+        if let Some(ControlBehavior::MacOs { command }) = &behavior {
+            let index = behaviors::MACOS_PRESETS
+                .iter()
+                .position(|preset| preset.command == *command)
+                .unwrap_or(0);
+            self.ui
+                .drop_down(id!(macos_dd))
+                .set_selected_item(cx, index);
+            self.ui
+                .label(id!(macos_detail))
+                .set_text(cx, behaviors::MACOS_PRESETS[index].detail);
+        }
+
+        if matches!(behavior.as_ref(), Some(ControlBehavior::Keystroke)) {
+            self.ui
+                .check_box(id!(behavior_mod_ctrl))
+                .set_active(cx, input.emitted.mods & 0x01 != 0);
+            self.ui
+                .check_box(id!(behavior_mod_alt))
+                .set_active(cx, input.emitted.mods & 0x04 != 0);
+            self.ui
+                .check_box(id!(behavior_mod_gui))
+                .set_active(cx, input.emitted.mods & 0x08 != 0);
+            self.ui
+                .check_box(id!(behavior_mod_shift))
+                .set_active(cx, input.emitted.mods & 0x02 != 0);
+            let group_index =
+                keycodes::keyboard_group_index(input.emitted.code).unwrap_or_default();
+            let group = &keycodes::KEYBOARD_GROUPS[group_index];
+            self.state.behavior_key_usages = group.usages.to_vec();
+            self.ui
+                .drop_down(id!(behavior_key_group_dd))
+                .set_selected_item(cx, group_index);
+            self.ui.drop_down(id!(behavior_key_dd)).set_labels(
+                cx,
+                group
+                    .usages
+                    .iter()
+                    .map(|usage| {
+                        keycodes::keyboard_name(*usage)
+                            .unwrap_or("Unknown key")
+                            .to_string()
+                    })
+                    .collect(),
+            );
+            let key_index = group
+                .usages
+                .iter()
+                .position(|usage| *usage == input.emitted.code)
+                .unwrap_or(0);
+            self.ui
+                .drop_down(id!(behavior_key_dd))
+                .set_selected_item(cx, key_index);
+        }
+
+        if let Some(ControlBehavior::App { target }) = &behavior {
+            if !target.is_empty()
+                && !self
+                    .state
+                    .installed_apps
+                    .iter()
+                    .any(|app| app.path == *target)
+            {
+                let name = std::path::Path::new(target)
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Unavailable application");
+                self.state.installed_apps.push(InstalledApp {
+                    name: format!("{name} — unavailable"),
+                    path: target.clone(),
+                });
+            }
+            let app_name = self
+                .state
+                .installed_apps
+                .iter()
+                .find(|app| app.path == *target)
+                .map(|app| app.name.as_str())
+                .filter(|_| !target.is_empty())
+                .unwrap_or("Choose an application…");
+            self.ui
+                .button(id!(installed_app_choose))
+                .set_text(cx, app_name);
+            let note = if self.state.installed_apps.is_empty() {
+                "No applications found. Refresh after installing an app."
+            } else if target.is_empty() {
+                "Choose an application to open."
+            } else if !target.is_empty() && !std::path::Path::new(target).exists() {
+                "This application has moved or is no longer installed."
+            } else {
+                "Opens the selected application."
+            };
+            self.ui.label(id!(installed_apps_note)).set_text(cx, note);
+            self.ui.button(id!(installed_app_open)).set_enabled(
+                cx,
+                !target.is_empty() && std::path::Path::new(target).exists(),
+            );
+        }
+    }
+
     /// `set_inputs` guards the text fields: rewriting them on every change
     /// event would fight the caret.
     fn refresh_editor(&mut self, cx: &mut Cx, set_inputs: bool) {
@@ -2172,13 +3306,52 @@ impl App {
         self.ui.view(id!(editor)).set_visible(cx, true);
         self.ui.view(id!(editor_empty)).set_visible(cx, false);
         let input = self.input(slot).clone();
+        let is_rotator = (SLOT_ENC_CW..=SLOT_ENC_PRESS).contains(&slot);
+        let is_simple = slot < 13 || slot == SLOT_TOUCH_TAP;
+        self.ui.view(id!(editor_header)).set_visible(cx, !is_simple);
+        self.ui
+            .view(id!(editor_header_rule))
+            .set_visible(cx, !is_simple);
+        self.ui
+            .view(id!(rotator_editor))
+            .set_visible(cx, is_rotator);
+        self.ui.view(id!(simple_editor)).set_visible(cx, is_simple);
+        self.ui
+            .view(id!(standard_editor))
+            .set_visible(cx, !is_rotator && !is_simple);
+        if is_rotator {
+            let header_icon = lucide::icon_char("rotate-cw")
+                .map(String::from)
+                .unwrap_or_default();
+            self.ui.label(id!(ed_icon)).set_text(cx, &header_icon);
+            self.ui.label(id!(ed_title)).set_text(cx, "Rotator");
+            self.ui.label(id!(ed_pos)).set_text(cx, "Rotation + press");
+            self.ui.view(id!(ed_status)).set_visible(cx, false);
+            self.ui.view(id!(sub_row)).set_visible(cx, false);
+            self.refresh_rotator_editor(cx);
+            self.ui.redraw(cx);
+            return;
+        }
+
+        if is_simple {
+            self.refresh_simple_editor(cx, slot, set_inputs);
+            self.ui.redraw(cx);
+            return;
+        }
 
         // Header: identity + intercept status.
-        let icon = lucide::icon_char(&input.icon).map(String::from).unwrap_or_default();
+        self.ui.view(id!(ed_status)).set_visible(cx, true);
+        let icon = lucide::icon_char(&input.icon)
+            .map(String::from)
+            .unwrap_or_default();
         self.ui.label(id!(ed_icon)).set_text(cx, &icon);
         self.ui.label(id!(ed_title)).set_text(
             cx,
-            if input.label.is_empty() { "Unlabelled" } else { &input.label },
+            if input.label.is_empty() {
+                "Unlabelled"
+            } else {
+                &input.label
+            },
         );
         self.ui.label(id!(ed_pos)).set_text(cx, SLOT_NAMES[slot]);
         let status = self
@@ -2236,7 +3409,14 @@ impl App {
             .set_text(cx, status_text);
         self.ui.view(id!(ed_status)).apply_over(
             cx,
-            live! {draw_bg: {color: (status_bg), border_color: (status_line)}},
+            live! {
+                draw_bg: {
+                    color: (status_bg),
+                    border_size: 1.0,
+                    border_radius: 13.0,
+                    border_color: (status_line)
+                }
+            },
         );
         self.ui
             .label(id!(ed_status.pill_label))
@@ -2270,10 +3450,7 @@ impl App {
                     vec4(1.000, 0.765, 0.420, 1.0),
                 )
             } else {
-                (
-                    vec4(0.0, 0.0, 0.0, 0.0),
-                    vec4(0.573, 0.592, 0.627, 1.0),
-                )
+                (vec4(0.0, 0.0, 0.0, 0.0), vec4(0.573, 0.592, 0.627, 1.0))
             };
             self.ui
                 .button(&[LiveId::from_str(&format!("kind_{s}"))])
@@ -2304,7 +3481,12 @@ impl App {
             self.ui
                 .check_box(id!(mod_gui))
                 .set_active(cx, input.emitted.mods & 0x08 != 0);
-            match self.state.kbd_usages.iter().position(|&u| u == input.emitted.code) {
+            match self
+                .state
+                .kbd_usages
+                .iter()
+                .position(|&u| u == input.emitted.code)
+            {
                 Some(pos) => self.ui.drop_down(id!(key_dd)).set_selected_item(cx, pos),
                 // Off-table code (imported config): don't leave whatever the
                 // dropdown showed last — the raw code is called out below.
@@ -2336,9 +3518,7 @@ impl App {
             off_table_note.as_str()
         } else {
             match status {
-                SlotStatus::DeadOnThisOs => {
-                    "This keycode cannot trigger macOS host actions."
-                }
+                SlotStatus::DeadOnThisOs => "This keycode cannot trigger macOS host actions.",
                 SlotStatus::ConsumerCode => {
                     "Media codes go directly to the OS; use a keycode for host actions."
                 }
@@ -2388,7 +3568,11 @@ impl App {
                 self.ui.label(id!(ks_label)).set_text(cx, &text);
             }
             Action::Macro { steps } => {
-                let summary = format!("{} step{}", steps.len(), if steps.len() == 1 { "" } else { "s" });
+                let summary = format!(
+                    "{} step{}",
+                    steps.len(),
+                    if steps.len() == 1 { "" } else { "s" }
+                );
                 self.ui.label(id!(macro_summary)).set_text(cx, &summary);
             }
             Action::Run { command } => {
@@ -2440,7 +3624,9 @@ impl App {
 
         // LABEL
         if set_inputs {
-            self.ui.text_input(id!(label_input)).set_text(cx, &input.label);
+            self.ui
+                .text_input(id!(label_input))
+                .set_text(cx, &input.label);
         }
         let (preview, name, icon_note) = match lucide::icon_char(&input.icon) {
             Some(c) => (String::from(c), input.icon.clone(), String::new()),
@@ -2500,6 +3686,9 @@ impl App {
             .view(id!(fw_sheet))
             .set_visible(cx, kind == SheetKind::Firmware);
         self.ui
+            .view(id!(app_picker_sheet))
+            .set_visible(cx, kind == SheetKind::Applications);
+        self.ui
             .view(id!(icon_sheet))
             .set_visible(cx, kind == SheetKind::Icon);
         if kind == SheetKind::Settings {
@@ -2508,10 +3697,47 @@ impl App {
         if kind == SheetKind::Macro {
             self.refresh_macro_sheet(cx);
         }
+        if kind == SheetKind::Applications {
+            self.refresh_app_picker_sheet(cx, true);
+        }
         if kind == SheetKind::Icon {
             self.refresh_icon_sheet(cx, true);
         }
         self.ui.redraw(cx);
+    }
+
+    fn refresh_app_picker_sheet(&mut self, cx: &mut Cx, clear_search: bool) {
+        let selected = self
+            .state
+            .selected
+            .and_then(|slot| match &self.input(slot).behavior {
+                Some(ControlBehavior::App { target }) if !target.is_empty() => self
+                    .state
+                    .installed_apps
+                    .iter()
+                    .position(|app| app.path == *target),
+                _ => None,
+            });
+        let entries = self
+            .state
+            .installed_apps
+            .iter()
+            .map(|app| app.name.clone())
+            .collect();
+        let picker = self.ui.app_picker(id!(installed_app_picker));
+        picker.set_entries(cx, entries);
+        if clear_search {
+            picker.clear_search(cx);
+        }
+        picker.set_selected_item(cx, selected);
+        let count = self.state.installed_apps.len();
+        self.ui.label(id!(app_picker_meta)).set_text(
+            cx,
+            &format!(
+                "{count} application{} · search or scroll",
+                if count == 1 { "" } else { "s" }
+            ),
+        );
     }
 
     /// Rebuild the icon grid from the current query + page. `set_input`
@@ -2562,7 +3788,9 @@ impl App {
             )
         };
         self.ui.label(id!(icon_page_label)).set_text(cx, &label);
-        self.ui.button(id!(icon_prev)).set_enabled(cx, self.state.icon_page > 0);
+        self.ui
+            .button(id!(icon_prev))
+            .set_enabled(cx, self.state.icon_page > 0);
         self.ui
             .button(id!(icon_next))
             .set_enabled(cx, self.state.icon_page + 1 < pages);
@@ -2648,7 +3876,9 @@ impl App {
             dd.set_selected_item(cx, kind_idx);
             let is_ks = matches!(step, MacroStep::Keystroke { .. });
             let is_media = matches!(step, MacroStep::Media { .. });
-            self.ui.button(&[rid, live_id!(mr_rec)]).set_visible(cx, is_ks);
+            self.ui
+                .button(&[rid, live_id!(mr_rec)])
+                .set_visible(cx, is_ks);
             self.ui
                 .view(&[rid, live_id!(mr_label_wrap)])
                 .set_visible(cx, label.is_some());
@@ -2663,7 +3893,10 @@ impl App {
                 );
                 media.set_selected_item(
                     cx,
-                    MEDIA_OPS.iter().position(|(candidate, _)| candidate == op).unwrap_or(0),
+                    MEDIA_OPS
+                        .iter()
+                        .position(|(candidate, _)| candidate == op)
+                        .unwrap_or(0),
                 );
             }
             if let Some(l) = &label {
@@ -2679,7 +3912,9 @@ impl App {
                 .view(&[rid, live_id!(mr_arg_wrap)])
                 .set_visible(cx, show_arg);
             if let Some(a) = arg {
-                self.ui.text_input(&[rid, live_id!(mr_arg)]).set_text(cx, &a);
+                self.ui
+                    .text_input(&[rid, live_id!(mr_arg)])
+                    .set_text(cx, &a);
             }
         }
         self.ui.label(id!(macro_note)).set_text(
@@ -2711,7 +3946,12 @@ impl App {
         }
         self.state.renaming_profile = false;
         if commit {
-            let name = self.ui.text_input(id!(prof_rename)).text().trim().to_string();
+            let name = self
+                .ui
+                .text_input(id!(prof_rename))
+                .text()
+                .trim()
+                .to_string();
             if !name.is_empty() {
                 let a = self.state.config.active_profile;
                 self.state.config.profiles[a].name = name;
@@ -2757,6 +3997,40 @@ impl App {
     /// Widget handling for whichever sheet is open — the only live
     /// surface while one is (handle_actions returns early).
     fn handle_sheet_actions(&mut self, cx: &mut Cx, actions: &Actions) {
+        // ---- installed-application picker ----
+        if self.state.sheet == SheetKind::Applications {
+            if self.ui.button(id!(app_picker_cancel)).clicked(actions) {
+                self.open_sheet(cx, SheetKind::None);
+                return;
+            }
+            if self.ui.button(id!(app_picker_clear)).clicked(actions) {
+                if let Some(slot) = self.state.selected {
+                    behaviors::apply_app(self.input_mut(slot), slot, String::new());
+                    self.commit_simple_mapping(cx);
+                }
+                self.open_sheet(cx, SheetKind::None);
+                return;
+            }
+            if let Some(index) = self
+                .ui
+                .app_picker(id!(installed_app_picker))
+                .changed(actions)
+            {
+                if let (Some(slot), Some(target)) = (
+                    self.state.selected,
+                    self.state
+                        .installed_apps
+                        .get(index)
+                        .map(|app| app.path.clone()),
+                ) {
+                    behaviors::apply_app(self.input_mut(slot), slot, target);
+                    self.commit_simple_mapping(cx);
+                }
+                self.open_sheet(cx, SheetKind::None);
+                return;
+            }
+        }
+
         // ---- icon picker ----
         if self.ui.button(id!(icon_cancel)).clicked(actions) {
             self.open_sheet(cx, SheetKind::None);
@@ -2923,7 +4197,11 @@ impl App {
                 self.state.macro_draft[i].enabled = !self.state.macro_draft[i].enabled;
                 self.refresh_macro_sheet(cx);
             }
-            if let Some(kind) = self.ui.drop_down(&[rid, live_id!(mr_type)]).selected(actions) {
+            if let Some(kind) = self
+                .ui
+                .drop_down(&[rid, live_id!(mr_type)])
+                .selected(actions)
+            {
                 self.state.recording = RecordTarget::None;
                 let new = match kind {
                     0 => MacroStep::Keystroke { mods: 0, key: 0 },
@@ -2950,10 +4228,9 @@ impl App {
                 .drop_down(&[rid, live_id!(mr_media)])
                 .selected(actions)
             {
-                if let (Some((op, _)), MacroStep::Media { op: current }) = (
-                    MEDIA_OPS.get(op_idx),
-                    &mut self.state.macro_draft[i].step,
-                ) {
+                if let (Some((op, _)), MacroStep::Media { op: current }) =
+                    (MEDIA_OPS.get(op_idx), &mut self.state.macro_draft[i].step)
+                {
                     *current = *op;
                     self.refresh_macro_sheet(cx);
                 }
@@ -2962,7 +4239,11 @@ impl App {
                 self.state.recording = RecordTarget::MacroStep(i);
                 self.refresh_macro_sheet(cx);
             }
-            if let Some(text) = self.ui.text_input(&[rid, live_id!(mr_arg)]).changed(actions) {
+            if let Some(text) = self
+                .ui
+                .text_input(&[rid, live_id!(mr_arg)])
+                .changed(actions)
+            {
                 match &mut self.state.macro_draft[i].step {
                     MacroStep::Delay { ms } => *ms = text.trim().parse().unwrap_or(*ms),
                     MacroStep::Run { command } => *command = text,
@@ -3010,31 +4291,14 @@ impl App {
                     &format!("{:.1} KiB · {}", size as f64 / 1024.0, path.display()),
                 );
                 self.state.image = Some(path);
-                self.ui.redraw(cx);
+                self.state.image_expected_version = None;
+                self.state.install_after_download = false;
+                self.state.release_error = None;
+                self.refresh_status(cx);
             }
         }
         if self.ui.button(id!(install_btn)).clicked(actions) {
-            if self.state.updating {
-                self.log_line(cx, "an update is already running".into());
-            } else if let Some(image) = self.state.image.clone() {
-                self.state.updating = true;
-                self.ui.view(id!(progress_block)).set_visible(cx, true);
-                self.ui.label(id!(phase_label)).set_text(cx, "Starting…");
-                self.ui.label(id!(pct_label)).set_text(cx, "0%");
-                self.ui
-                    .view(id!(progress_fill))
-                    .apply_over(cx, live! {width: 0});
-                self.refresh_status(cx);
-                if let Some(tx) = &self.state.device_tx {
-                    let _ = tx.send(DeviceCmd::StartUpdate { image });
-                }
-                self.ui.redraw(cx);
-            } else {
-                self.ui.view(id!(progress_block)).set_visible(cx, true);
-                self.ui
-                    .label(id!(phase_label))
-                    .set_text(cx, "Choose a firmware .bin first.");
-            }
+            self.download_or_install_firmware(cx);
         }
         if self.ui.button(id!(adv_btn)).clicked(actions) {
             let visible = !self.ui.view(id!(adv_block)).visible();
@@ -3045,6 +4309,171 @@ impl App {
             if let Some(tx) = &self.state.device_tx {
                 let _ = tx.send(DeviceCmd::EnterDfuOnly);
             }
+        }
+    }
+
+    fn commit_simple_mapping(&mut self, cx: &mut Cx) {
+        let active = self.state.config.active_profile;
+        behaviors::normalize_hidden_triggers(&mut self.state.config.profiles[active]);
+        self.persist(cx);
+        self.refresh_editor(cx, true);
+        self.sync_device();
+    }
+
+    fn handle_simple_editor_actions(&mut self, cx: &mut Cx, actions: &Actions, slot: usize) {
+        if let Some(index) = self.ui.drop_down(id!(behavior_dd)).selected(actions) {
+            let existing = !behaviors::behavior_is_consistent(self.input(slot), slot);
+            if let Some(category) = index.checked_sub(usize::from(existing)) {
+                match category {
+                    0 => {
+                        let app = &behaviors::APPLICATION_SHORTCUTS[0];
+                        let shortcut = &app.shortcuts[0];
+                        behaviors::apply_application_shortcut(
+                            self.input_mut(slot),
+                            app.id,
+                            shortcut.id,
+                        );
+                    }
+                    1 => {
+                        behaviors::apply_macos(self.input_mut(slot), slot, MacOsControl::PlayPause)
+                    }
+                    2 => {
+                        let input = self.input(slot);
+                        let (mods, key) = if input.emitted.kind == SlotKind::Keyboard
+                            && input.action == Action::None
+                        {
+                            (input.emitted.mods, input.emitted.code)
+                        } else {
+                            (0, 0x2C)
+                        };
+                        behaviors::apply_keystroke(self.input_mut(slot), mods, key);
+                    }
+                    3 => behaviors::apply_app(self.input_mut(slot), slot, String::new()),
+                    _ => {}
+                }
+                self.commit_simple_mapping(cx);
+            }
+        }
+
+        if let Some(index) = self.ui.drop_down(id!(shortcut_app_dd)).selected(actions) {
+            if let Some(app) = behaviors::APPLICATION_SHORTCUTS.get(index) {
+                if let Some(shortcut) = app.shortcuts.first() {
+                    behaviors::apply_application_shortcut(
+                        self.input_mut(slot),
+                        app.id,
+                        shortcut.id,
+                    );
+                    self.commit_simple_mapping(cx);
+                }
+            }
+        }
+
+        if let Some(index) = self.ui.drop_down(id!(shortcut_dd)).selected(actions) {
+            let application = match &self.input(slot).behavior {
+                Some(ControlBehavior::ApplicationShortcut { application, .. }) => {
+                    Some(application.clone())
+                }
+                _ => None,
+            };
+            if let Some(application) = application {
+                if let Some(app) = behaviors::shortcut_application(&application) {
+                    if let Some(shortcut) = app.shortcuts.get(index) {
+                        behaviors::apply_application_shortcut(
+                            self.input_mut(slot),
+                            app.id,
+                            shortcut.id,
+                        );
+                        self.commit_simple_mapping(cx);
+                    }
+                }
+            }
+        }
+
+        if let Some(index) = self.ui.drop_down(id!(macos_dd)).selected(actions) {
+            if let Some(preset) = behaviors::MACOS_PRESETS.get(index) {
+                behaviors::apply_macos(self.input_mut(slot), slot, preset.command);
+                self.commit_simple_mapping(cx);
+            }
+        }
+
+        if matches!(
+            self.input(slot).behavior.as_ref(),
+            Some(ControlBehavior::Keystroke)
+        ) {
+            let mut mods = self.input(slot).emitted.mods;
+            let mut mods_changed = false;
+            for (id, bit) in [
+                (id!(behavior_mod_ctrl), 0x01u8),
+                (id!(behavior_mod_alt), 0x04),
+                (id!(behavior_mod_gui), 0x08),
+                (id!(behavior_mod_shift), 0x02),
+            ] {
+                if let Some(enabled) = self.ui.check_box(id).changed(actions) {
+                    if enabled {
+                        mods |= bit;
+                    } else {
+                        mods &= !bit;
+                    }
+                    mods_changed = true;
+                }
+            }
+            if mods_changed {
+                let key = self.input(slot).emitted.code;
+                behaviors::apply_keystroke(self.input_mut(slot), mods, key);
+                self.commit_simple_mapping(cx);
+            }
+            if let Some(index) = self
+                .ui
+                .drop_down(id!(behavior_key_group_dd))
+                .selected(actions)
+            {
+                if let Some(group) = keycodes::KEYBOARD_GROUPS.get(index) {
+                    let current = self.input(slot).emitted.code;
+                    if let Some(&key) = group
+                        .usages
+                        .iter()
+                        .find(|usage| **usage == current)
+                        .or_else(|| group.usages.first())
+                    {
+                        let mods = self.input(slot).emitted.mods;
+                        behaviors::apply_keystroke(self.input_mut(slot), mods, key);
+                        self.commit_simple_mapping(cx);
+                    }
+                }
+            }
+            if let Some(index) = self.ui.drop_down(id!(behavior_key_dd)).selected(actions) {
+                if let Some(&key) = self.state.behavior_key_usages.get(index) {
+                    let mods = self.input(slot).emitted.mods;
+                    behaviors::apply_keystroke(self.input_mut(slot), mods, key);
+                    self.commit_simple_mapping(cx);
+                }
+            }
+        }
+
+        if self.ui.button(id!(installed_app_choose)).clicked(actions) {
+            self.open_sheet(cx, SheetKind::Applications);
+        }
+        if self.ui.button(id!(installed_apps_refresh)).clicked(actions) {
+            let target = match &self.input(slot).behavior {
+                Some(ControlBehavior::App { target }) => Some(target.clone()),
+                _ => None,
+            };
+            self.reload_installed_apps(cx, target.as_deref());
+            self.refresh_editor(cx, true);
+        }
+        if self.ui.button(id!(installed_app_open)).clicked(actions) {
+            actions::execute(&self.input(slot).action.clone());
+        }
+
+        if let Some(text) = self.ui.text_input(id!(simple_label_input)).changed(actions) {
+            self.input_mut(slot).label = text;
+            self.persist(cx);
+            self.refresh_editor(cx, false);
+        }
+        if self.ui.button(id!(simple_icon_pick_btn)).clicked(actions) {
+            self.state.icon_query.clear();
+            self.state.icon_page = 0;
+            self.open_sheet(cx, SheetKind::Icon);
         }
     }
 }
@@ -3064,10 +4493,9 @@ const MEDIA_OPS: [(MediaOp, &str); 8] = [
 impl MatchEvent for App {
     fn handle_startup(&mut self, cx: &mut Cx) {
         self.state.config = config::load();
-        self.ui.view(id!(caption_bar)).set_visible(
-            cx,
-            cfg!(target_os = "macos") || cfg!(target_os = "windows"),
-        );
+        self.ui
+            .view(id!(caption_bar))
+            .set_visible(cx, cfg!(target_os = "macos") || cfg!(target_os = "windows"));
         // Open on a useful, complete inspector instead of an unfinished-
         // looking placeholder. The first key is always present.
         self.state.selected = Some(0);
@@ -3079,6 +4507,8 @@ impl MatchEvent for App {
             eprintln!("launch at login: {e}");
         }
         self.state.device_tx = Some(device::spawn_worker());
+        release::spawn_catalog_check();
+        self.state.release_timer = cx.start_interval(6.0 * 60.0 * 60.0);
 
         let mut intercept = Intercept::new();
         intercept.apply(&self.state.config.profiles[self.state.config.active_profile].clone());
@@ -3096,6 +4526,27 @@ impl MatchEvent for App {
             .map(|k| k.name.to_string())
             .collect();
         self.ui.drop_down(id!(key_dd)).set_labels(cx, kbd_labels);
+        self.ui.drop_down(id!(behavior_key_group_dd)).set_labels(
+            cx,
+            keycodes::KEYBOARD_GROUPS
+                .iter()
+                .map(|group| group.label.to_string())
+                .collect(),
+        );
+        let initial_key_group = &keycodes::KEYBOARD_GROUPS[0];
+        self.state.behavior_key_usages = initial_key_group.usages.to_vec();
+        self.ui.drop_down(id!(behavior_key_dd)).set_labels(
+            cx,
+            initial_key_group
+                .usages
+                .iter()
+                .map(|usage| {
+                    keycodes::keyboard_name(*usage)
+                        .unwrap_or("Unknown key")
+                        .to_string()
+                })
+                .collect(),
+        );
         self.state.consumer_usages = keycodes::CONSUMER_USAGES.iter().map(|(u, _)| *u).collect();
         let consumer_labels: Vec<String> = keycodes::CONSUMER_USAGES
             .iter()
@@ -3104,14 +4555,27 @@ impl MatchEvent for App {
         self.ui
             .drop_down(id!(media_dd))
             .set_labels(cx, consumer_labels);
-        self.ui.drop_down(id!(action_dd)).set_labels(
+        self.ui
+            .drop_down(id!(action_dd))
+            .set_labels(cx, ACTION_KINDS.iter().map(|s| s.to_string()).collect());
+        self.ui
+            .drop_down(id!(action_media_dd))
+            .set_labels(cx, MEDIA_OPS.iter().map(|(_, n)| n.to_string()).collect());
+        self.ui.drop_down(id!(shortcut_app_dd)).set_labels(
             cx,
-            ACTION_KINDS.iter().map(|s| s.to_string()).collect(),
+            behaviors::APPLICATION_SHORTCUTS
+                .iter()
+                .map(|preset| preset.label.to_string())
+                .collect(),
         );
-        self.ui.drop_down(id!(action_media_dd)).set_labels(
+        self.ui.drop_down(id!(macos_dd)).set_labels(
             cx,
-            MEDIA_OPS.iter().map(|(_, n)| n.to_string()).collect(),
+            behaviors::MACOS_PRESETS
+                .iter()
+                .map(|preset| preset.label.to_string())
+                .collect(),
         );
+        self.reload_installed_apps(cx, None);
 
         self.refresh_profile_strip(cx);
         self.refresh_grid(cx);
@@ -3151,6 +4615,9 @@ impl MatchEvent for App {
             self.state.sync_pending = false;
             self.persist(cx);
             self.sync_device();
+        }
+        if self.state.release_timer.is_timer(e).is_some() {
+            release::spawn_catalog_check();
         }
     }
 
@@ -3261,6 +4728,189 @@ impl MatchEvent for App {
                         self.refresh_status(cx);
                     }
                 }
+            } else if let Some(msg) = action.downcast_ref::<ReleaseMsg>() {
+                match msg {
+                    ReleaseMsg::Catalog(catalog) => {
+                        let app_changed = self
+                            .state
+                            .release
+                            .as_ref()
+                            .map(|current| current.app.version != catalog.app.version)
+                            .unwrap_or(true);
+                        let firmware_changed = self
+                            .state
+                            .release
+                            .as_ref()
+                            .map(|current| current.firmware.version != catalog.firmware.version)
+                            .unwrap_or(true);
+                        if app_changed {
+                            self.state.app_banner_dismissed = false;
+                            self.state.app_downloading = false;
+                            self.state.app_download = None;
+                            self.state.app_download_progress = 0.0;
+                        }
+                        if firmware_changed {
+                            self.state.fw_banner_dismissed = false;
+                            self.state.firmware_downloading = false;
+                            self.state.firmware_download_progress = 0.0;
+                            self.state.install_after_download = false;
+                            if !self.state.updating
+                                && self.state.image_expected_version.as_deref().is_some_and(
+                                    |version| version != catalog.firmware.version.as_str(),
+                                )
+                            {
+                                self.state.image = None;
+                                self.state.image_expected_version = None;
+                            }
+                        }
+                        self.state.release = Some(catalog.clone());
+                        self.state.release_error = None;
+                        self.refresh_status(cx);
+                    }
+                    ReleaseMsg::CatalogUnavailable(error) => {
+                        self.state.release_error = Some(error.clone());
+                        eprintln!("{error}");
+                    }
+                    ReleaseMsg::DownloadProgress {
+                        kind,
+                        version,
+                        fraction,
+                    } => {
+                        let is_current = match kind {
+                            DownloadKind::App => {
+                                self.state.release.as_ref().is_some_and(|catalog| {
+                                    catalog.app.version.as_str() == version.as_str()
+                                })
+                            }
+                            DownloadKind::Firmware => {
+                                self.state.release.as_ref().is_some_and(|catalog| {
+                                    catalog.firmware.version.as_str() == version.as_str()
+                                })
+                            }
+                        };
+                        if !is_current {
+                            continue;
+                        }
+                        let fraction = fraction.clamp(0.0, 1.0);
+                        match kind {
+                            DownloadKind::App => {
+                                self.state.app_download_progress = fraction;
+                                self.refresh_status(cx);
+                            }
+                            DownloadKind::Firmware => {
+                                self.state.firmware_download_progress = fraction;
+                                let track =
+                                    self.ui.view(id!(progress_track)).area().rect(cx).size.x;
+                                let track = if track > 1.0 { track } else { 500.0 };
+                                self.ui
+                                    .view(id!(progress_fill))
+                                    .apply_over(cx, live! {width: ((fraction * track).round())});
+                                self.ui.label(id!(pct_label)).set_text(
+                                    cx,
+                                    &format!("{}%", (fraction * 100.0).round() as u64),
+                                );
+                                self.ui.view(id!(progress_track)).redraw(cx);
+                            }
+                        }
+                    }
+                    ReleaseMsg::DownloadReady {
+                        kind,
+                        version,
+                        path,
+                    } => {
+                        let is_current = match kind {
+                            DownloadKind::App => {
+                                self.state.release.as_ref().is_some_and(|catalog| {
+                                    catalog.app.version.as_str() == version.as_str()
+                                })
+                            }
+                            DownloadKind::Firmware => {
+                                self.state.release.as_ref().is_some_and(|catalog| {
+                                    catalog.firmware.version.as_str() == version.as_str()
+                                })
+                            }
+                        };
+                        if !is_current {
+                            continue;
+                        }
+                        match kind {
+                            DownloadKind::App => {
+                                self.state.app_downloading = false;
+                                self.state.app_download_progress = 1.0;
+                                self.state.app_download = Some(path.clone());
+                                if let Err(error) = open::that(path) {
+                                    self.state.release_error =
+                                        Some(format!("cannot open downloaded DMG: {error}"));
+                                }
+                                self.refresh_status(cx);
+                            }
+                            DownloadKind::Firmware => {
+                                self.state.firmware_downloading = false;
+                                self.state.firmware_download_progress = 1.0;
+                                self.state.image = Some(path.clone());
+                                self.state.image_expected_version = Some(version.clone());
+                                self.ui.label(id!(file_label)).set_text(
+                                    cx,
+                                    path.file_name()
+                                        .and_then(|name| name.to_str())
+                                        .unwrap_or("OpenMicro firmware"),
+                                );
+                                self.ui.label(id!(file_meta)).set_text(
+                                    cx,
+                                    &format!(
+                                        "firmware {version} · downloaded and SHA-256 verified"
+                                    ),
+                                );
+                                if self.state.install_after_download {
+                                    self.start_firmware_update(
+                                        cx,
+                                        path.clone(),
+                                        Some(version.clone()),
+                                    );
+                                } else {
+                                    self.refresh_status(cx);
+                                }
+                            }
+                        }
+                    }
+                    ReleaseMsg::DownloadFailed {
+                        kind,
+                        version,
+                        error,
+                    } => {
+                        let is_current = match kind {
+                            DownloadKind::App => {
+                                self.state.release.as_ref().is_some_and(|catalog| {
+                                    catalog.app.version.as_str() == version.as_str()
+                                })
+                            }
+                            DownloadKind::Firmware => {
+                                self.state.release.as_ref().is_some_and(|catalog| {
+                                    catalog.firmware.version.as_str() == version.as_str()
+                                })
+                            }
+                        };
+                        if !is_current {
+                            continue;
+                        }
+                        self.state.release_error = Some(error.clone());
+                        match kind {
+                            DownloadKind::App => {
+                                self.state.app_downloading = false;
+                                self.refresh_status(cx);
+                            }
+                            DownloadKind::Firmware => {
+                                self.state.firmware_downloading = false;
+                                self.state.install_after_download = false;
+                                self.ui
+                                    .label(id!(phase_label))
+                                    .set_text(cx, &format!("Download failed — {error}"));
+                                self.log_line(cx, format!("firmware download failed: {error}"));
+                                self.refresh_status(cx);
+                            }
+                        }
+                    }
+                }
             } else if let Some(msg) = action.downcast_ref::<HotkeyMsg>() {
                 let slots: Vec<usize> = self
                     .state
@@ -3366,12 +5016,33 @@ impl MatchEvent for App {
 
         // ---- banners ----
         if self.ui.button(id!(fw_banner_btn)).clicked(actions) {
-            self.open_sheet(cx, SheetKind::Firmware);
+            match self.state.active_update_banner {
+                UpdateBanner::App => self.download_or_open_app_update(cx),
+                UpdateBanner::Firmware => {
+                    // A file chosen during an earlier Advanced recovery must
+                    // never silently replace the newly advertised release.
+                    self.state.image = None;
+                    self.state.image_expected_version = None;
+                    let expected_version = self
+                        .state
+                        .release
+                        .as_ref()
+                        .map(|catalog| catalog.firmware.version.clone())
+                        .unwrap_or_else(|| LATEST_FW.to_string());
+                    self.select_bundled_firmware(cx, &expected_version);
+                    self.open_sheet(cx, SheetKind::Firmware);
+                    self.refresh_status(cx);
+                }
+                UpdateBanner::None => {}
+            }
         }
         if self.ui.button(id!(fw_banner_later)).clicked(actions) {
-            self.state.fw_banner_dismissed = true;
-            self.ui.view(id!(fw_banner)).set_visible(cx, false);
-            self.ui.redraw(cx);
+            match self.state.active_update_banner {
+                UpdateBanner::App => self.state.app_banner_dismissed = true,
+                UpdateBanner::Firmware => self.state.fw_banner_dismissed = true,
+                UpdateBanner::None => {}
+            }
+            self.refresh_status(cx);
         }
         if self.ui.button(id!(perm_btn)).clicked(actions) {
             actions::open_permission_settings();
@@ -3393,211 +5064,251 @@ impl MatchEvent for App {
             self.select_slot(cx, SLOT_TOUCH_TAP);
         }
 
-        // ---- editor: sub-input, emitted code, action, label ----
+        // ---- editor: semantic rotator presets, or the standard slot editor ----
         if let Some(slot) = self.state.selected {
-            if let Some(idx) = self.ui.drop_down(id!(sub_dd)).selected(actions) {
-                let group = slots_for_cell(cell_for_slot(slot));
-                if let Some(&s) = group.get(idx) {
-                    if s != slot {
-                        self.select_slot(cx, s);
+            let is_rotator = (SLOT_ENC_CW..=SLOT_ENC_PRESS).contains(&slot);
+            let is_simple = slot < 13 || slot == SLOT_TOUCH_TAP;
+            if is_rotator {
+                let rotation_choice = self.ui.drop_down(id!(rot_rotation_dd)).selected(actions);
+                let press_choice = self.ui.drop_down(id!(rot_press_dd)).selected(actions);
+                let mut changed = false;
+                let profile_index = self.state.config.active_profile;
+
+                if let Some(preset) = rotation_choice
+                    .and_then(|idx| RotatorRotationPreset::ALL.get(idx))
+                    .copied()
+                {
+                    let profile = &mut self.state.config.profiles[profile_index];
+                    if RotatorRotationPreset::infer(profile) != Some(preset) {
+                        preset.apply_to(profile);
+                        changed = true;
                     }
                 }
-            }
-            for (seg, kind) in [
-                (0usize, SlotKind::None),
-                (1, SlotKind::Keyboard),
-                (2, SlotKind::Consumer),
-            ] {
-                if self
-                    .ui
-                    .button(&[LiveId::from_str(&format!("kind_{seg}"))])
-                    .clicked(actions)
+                if let Some(preset) = press_choice
+                    .and_then(|idx| RotatorPressPreset::ALL.get(idx))
+                    .copied()
                 {
-                    let input = self.input_mut(slot);
-                    if input.emitted.kind != kind {
-                        input.emitted.kind = kind;
-                        // Sane starting code for the new kind.
-                        input.emitted.code = match kind {
-                            SlotKind::None => 0,
-                            SlotKind::Keyboard => 0x68, // F13
-                            SlotKind::Consumer => 0xCD, // play/pause
-                        };
-                        if kind != SlotKind::Keyboard {
-                            input.emitted.mods = 0;
+                    let profile = &mut self.state.config.profiles[profile_index];
+                    if RotatorPressPreset::infer(profile) != Some(preset) {
+                        preset.apply_to(profile);
+                        changed = true;
+                    }
+                }
+                if changed {
+                    // Both directions are updated as one profile edit and one
+                    // device flash write, never as separate clockwise /
+                    // counter-clockwise operations.
+                    self.persist(cx);
+                    self.refresh_editor(cx, true);
+                    self.sync_device();
+                }
+            } else if is_simple {
+                self.handle_simple_editor_actions(cx, actions, slot);
+            } else {
+                if let Some(idx) = self.ui.drop_down(id!(sub_dd)).selected(actions) {
+                    let group = slots_for_cell(cell_for_slot(slot));
+                    if let Some(&s) = group.get(idx) {
+                        if s != slot {
+                            self.select_slot(cx, s);
                         }
+                    }
+                }
+                for (seg, kind) in [
+                    (0usize, SlotKind::None),
+                    (1, SlotKind::Keyboard),
+                    (2, SlotKind::Consumer),
+                ] {
+                    if self
+                        .ui
+                        .button(&[LiveId::from_str(&format!("kind_{seg}"))])
+                        .clicked(actions)
+                    {
+                        let input = self.input_mut(slot);
+                        if input.emitted.kind != kind {
+                            input.emitted.kind = kind;
+                            // Sane starting code for the new kind.
+                            input.emitted.code = match kind {
+                                SlotKind::None => 0,
+                                SlotKind::Keyboard => 0x68, // F13
+                                SlotKind::Consumer => 0xCD, // play/pause
+                            };
+                            if kind != SlotKind::Keyboard {
+                                input.emitted.mods = 0;
+                            }
+                            self.persist(cx);
+                            self.refresh_editor(cx, true);
+                            self.sync_device();
+                        }
+                    }
+                }
+                let mut mods_changed = false;
+                for (id, bit) in [
+                    (id!(mod_ctrl), 0x01u8),
+                    (id!(mod_shift), 0x02),
+                    (id!(mod_alt), 0x04),
+                    (id!(mod_gui), 0x08),
+                ] {
+                    if let Some(on) = self.ui.check_box(id).changed(actions) {
+                        let input = self.input_mut(slot);
+                        if on {
+                            input.emitted.mods |= bit;
+                        } else {
+                            input.emitted.mods &= !bit;
+                        }
+                        mods_changed = true;
+                    }
+                }
+                if mods_changed {
+                    self.persist(cx);
+                    self.refresh_editor(cx, true);
+                    self.sync_device();
+                }
+                if let Some(idx) = self.ui.drop_down(id!(key_dd)).selected(actions) {
+                    if let Some(&usage) = self.state.kbd_usages.get(idx) {
+                        self.input_mut(slot).emitted.code = usage;
                         self.persist(cx);
                         self.refresh_editor(cx, true);
                         self.sync_device();
                     }
                 }
-            }
-            let mut mods_changed = false;
-            for (id, bit) in [
-                (id!(mod_ctrl), 0x01u8),
-                (id!(mod_shift), 0x02),
-                (id!(mod_alt), 0x04),
-                (id!(mod_gui), 0x08),
-            ] {
-                if let Some(on) = self.ui.check_box(id).changed(actions) {
-                    let input = self.input_mut(slot);
-                    if on {
-                        input.emitted.mods |= bit;
-                    } else {
-                        input.emitted.mods &= !bit;
+                if let Some(idx) = self.ui.drop_down(id!(media_dd)).selected(actions) {
+                    if let Some(&usage) = self.state.consumer_usages.get(idx) {
+                        self.input_mut(slot).emitted.code = usage;
+                        self.persist(cx);
+                        self.refresh_editor(cx, true);
+                        self.sync_device();
                     }
-                    mods_changed = true;
                 }
-            }
-            if mods_changed {
-                self.persist(cx);
-                self.refresh_editor(cx, true);
-                self.sync_device();
-            }
-            if let Some(idx) = self.ui.drop_down(id!(key_dd)).selected(actions) {
-                if let Some(&usage) = self.state.kbd_usages.get(idx) {
-                    self.input_mut(slot).emitted.code = usage;
-                    self.persist(cx);
-                    self.refresh_editor(cx, true);
-                    self.sync_device();
-                }
-            }
-            if let Some(idx) = self.ui.drop_down(id!(media_dd)).selected(actions) {
-                if let Some(&usage) = self.state.consumer_usages.get(idx) {
-                    self.input_mut(slot).emitted.code = usage;
-                    self.persist(cx);
-                    self.refresh_editor(cx, true);
-                    self.sync_device();
-                }
-            }
-            if let Some(idx) = self.ui.drop_down(id!(action_dd)).selected(actions) {
-                self.state.recording = RecordTarget::None;
-                let current = self.input(slot).action.clone();
-                let new = match idx {
-                    0 => Action::None,
-                    1 => match current {
-                        Action::Keystroke { .. } => current,
-                        _ => Action::Keystroke { mods: 0, key: 0 },
-                    },
-                    2 => match current {
-                        Action::Macro { .. } => current,
-                        _ => Action::Macro { steps: Vec::new() },
-                    },
-                    3 => match current {
-                        Action::Run { .. } => current,
-                        _ => Action::Run {
-                            command: String::new(),
+                if let Some(idx) = self.ui.drop_down(id!(action_dd)).selected(actions) {
+                    self.state.recording = RecordTarget::None;
+                    let current = self.input(slot).action.clone();
+                    let new = match idx {
+                        0 => Action::None,
+                        1 => match current {
+                            Action::Keystroke { .. } => current,
+                            _ => Action::Keystroke { mods: 0, key: 0 },
                         },
-                    },
-                    4 => match current {
-                        Action::Open { .. } => current,
-                        _ => Action::Open {
-                            target: String::new(),
+                        2 => match current {
+                            Action::Macro { .. } => current,
+                            _ => Action::Macro { steps: Vec::new() },
                         },
-                    },
-                    5 => match current {
-                        Action::Media { .. } => current,
-                        _ => Action::Media {
-                            op: MediaOp::PlayPause,
+                        3 => match current {
+                            Action::Run { .. } => current,
+                            _ => Action::Run {
+                                command: String::new(),
+                            },
                         },
-                    },
-                    _ => Action::AppSettings,
-                };
-                if new != self.input(slot).action {
-                    self.input_mut(slot).action = new;
+                        4 => match current {
+                            Action::Open { .. } => current,
+                            _ => Action::Open {
+                                target: String::new(),
+                            },
+                        },
+                        5 => match current {
+                            Action::Media { .. } => current,
+                            _ => Action::Media {
+                                op: MediaOp::PlayPause,
+                            },
+                        },
+                        _ => Action::AppSettings,
+                    };
+                    if new != self.input(slot).action {
+                        self.input_mut(slot).action = new;
+                        self.persist(cx);
+                        self.refresh_editor(cx, true);
+                    }
+                }
+                if self.ui.button(id!(ks_record)).clicked(actions) {
+                    self.state.recording = RecordTarget::Action;
+                    self.refresh_editor(cx, false);
+                }
+                if self.ui.button(id!(ks_test)).clicked(actions) {
+                    let act = self.input(slot).action.clone();
+                    actions::execute(&act);
+                }
+                if self.ui.button(id!(macro_edit)).clicked(actions) {
+                    if let Action::Macro { steps } = &self.input(slot).action {
+                        self.state.macro_draft = steps.clone();
+                    }
+                    self.open_sheet(cx, SheetKind::Macro);
+                }
+                if self.ui.button(id!(macro_test)).clicked(actions) {
+                    let act = self.input(slot).action.clone();
+                    actions::execute(&act);
+                }
+                if let Some(text) = self.ui.text_input(id!(run_input)).changed(actions) {
+                    if let Action::Run { command } = &mut self.input_mut(slot).action {
+                        *command = text;
+                    }
                     self.persist(cx);
-                    self.refresh_editor(cx, true);
+                    self.refresh_editor(cx, false);
                 }
-            }
-            if self.ui.button(id!(ks_record)).clicked(actions) {
-                self.state.recording = RecordTarget::Action;
-                self.refresh_editor(cx, false);
-            }
-            if self.ui.button(id!(ks_test)).clicked(actions) {
-                let act = self.input(slot).action.clone();
-                actions::execute(&act);
-            }
-            if self.ui.button(id!(macro_edit)).clicked(actions) {
-                if let Action::Macro { steps } = &self.input(slot).action {
-                    self.state.macro_draft = steps.clone();
+                if self.ui.button(id!(run_test)).clicked(actions) {
+                    let act = self.input(slot).action.clone();
+                    actions::execute(&act);
+                    self.ui
+                        .label(id!(run_status))
+                        .set_text(cx, "launched (detached — check the result yourself)");
                 }
-                self.open_sheet(cx, SheetKind::Macro);
-            }
-            if self.ui.button(id!(macro_test)).clicked(actions) {
-                let act = self.input(slot).action.clone();
-                actions::execute(&act);
-            }
-            if let Some(text) = self.ui.text_input(id!(run_input)).changed(actions) {
-                if let Action::Run { command } = &mut self.input_mut(slot).action {
-                    *command = text;
-                }
-                self.persist(cx);
-                self.refresh_editor(cx, false);
-            }
-            if self.ui.button(id!(run_test)).clicked(actions) {
-                let act = self.input(slot).action.clone();
-                actions::execute(&act);
-                self.ui
-                    .label(id!(run_status))
-                    .set_text(cx, "launched (detached — check the result yourself)");
-            }
-            if let Some(text) = self.ui.text_input(id!(open_input)).changed(actions) {
-                if let Action::Open { target } = &mut self.input_mut(slot).action {
-                    *target = text;
-                }
-                self.persist(cx);
-                self.refresh_editor(cx, false);
-            }
-            if self.ui.button(id!(open_browse)).clicked(actions) {
-                let mut dialog = rfd::FileDialog::new();
-                if cfg!(target_os = "macos") {
-                    dialog = dialog.set_directory("/Applications");
-                }
-                if let Some(path) = dialog.pick_file() {
-                    let p = path.display().to_string();
+                if let Some(text) = self.ui.text_input(id!(open_input)).changed(actions) {
                     if let Action::Open { target } = &mut self.input_mut(slot).action {
-                        *target = p;
+                        *target = text;
                     }
                     self.persist(cx);
-                    self.refresh_editor(cx, true);
+                    self.refresh_editor(cx, false);
                 }
-            }
-            if self.ui.button(id!(open_test)).clicked(actions) {
-                let act = self.input(slot).action.clone();
-                actions::execute(&act);
-            }
-            if let Some(idx) = self.ui.drop_down(id!(action_media_dd)).selected(actions) {
-                if let Action::Media { op } = &mut self.input_mut(slot).action {
-                    *op = MEDIA_OPS[idx].0;
+                if self.ui.button(id!(open_browse)).clicked(actions) {
+                    let mut dialog = rfd::FileDialog::new();
+                    if cfg!(target_os = "macos") {
+                        dialog = dialog.set_directory("/Applications");
+                    }
+                    if let Some(path) = dialog.pick_file() {
+                        let p = path.display().to_string();
+                        if let Action::Open { target } = &mut self.input_mut(slot).action {
+                            *target = p;
+                        }
+                        self.persist(cx);
+                        self.refresh_editor(cx, true);
+                    }
                 }
-                self.persist(cx);
-                self.refresh_editor(cx, false);
-            }
-            if self.ui.button(id!(media_test)).clicked(actions) {
-                let act = self.input(slot).action.clone();
-                actions::execute(&act);
-            }
-            if let Some(text) = self.ui.text_input(id!(label_input)).changed(actions) {
-                self.input_mut(slot).label = text;
-                self.persist(cx);
-                self.refresh_editor(cx, false);
-            }
-            if self.ui.button(id!(icon_pick_btn)).clicked(actions) {
-                self.state.icon_query.clear();
-                self.state.icon_page = 0;
-                self.open_sheet(cx, SheetKind::Icon);
-            }
-            if let Some(v) = self.ui.slider(id!(thr_slider)).slided(actions) {
-                let a = self.state.config.active_profile;
-                self.state.config.profiles[a].analog.joy_threshold = v as u16;
-                self.ui
-                    .label(id!(thr_value))
-                    .set_text(cx, &format!("{}", v as u16));
-                // slided() fires per drag tick, and a device sync ends in a
-                // flash erase+program — debounce so a drag costs ONE write
-                // (~0.6 s after the hand stops), not hundreds.
-                self.state.sync_pending = true;
-                cx.stop_timer(self.state.sync_timer);
-                self.state.sync_timer = cx.start_timeout(0.6);
+                if self.ui.button(id!(open_test)).clicked(actions) {
+                    let act = self.input(slot).action.clone();
+                    actions::execute(&act);
+                }
+                if let Some(idx) = self.ui.drop_down(id!(action_media_dd)).selected(actions) {
+                    if let Action::Media { op } = &mut self.input_mut(slot).action {
+                        *op = MEDIA_OPS[idx].0;
+                    }
+                    self.persist(cx);
+                    self.refresh_editor(cx, false);
+                }
+                if self.ui.button(id!(media_test)).clicked(actions) {
+                    let act = self.input(slot).action.clone();
+                    actions::execute(&act);
+                }
+                if let Some(text) = self.ui.text_input(id!(label_input)).changed(actions) {
+                    self.input_mut(slot).label = text;
+                    self.persist(cx);
+                    self.refresh_editor(cx, false);
+                }
+                if self.ui.button(id!(icon_pick_btn)).clicked(actions) {
+                    self.state.icon_query.clear();
+                    self.state.icon_page = 0;
+                    self.open_sheet(cx, SheetKind::Icon);
+                }
+                if let Some(v) = self.ui.slider(id!(thr_slider)).slided(actions) {
+                    let a = self.state.config.active_profile;
+                    self.state.config.profiles[a].analog.joy_threshold = v as u16;
+                    self.ui
+                        .label(id!(thr_value))
+                        .set_text(cx, &format!("{}", v as u16));
+                    // slided() fires per drag tick, and a device sync ends in a
+                    // flash erase+program — debounce so a drag costs ONE write
+                    // (~0.6 s after the hand stops), not hundreds.
+                    self.state.sync_pending = true;
+                    cx.stop_timer(self.state.sync_timer);
+                    self.state.sync_timer = cx.start_timeout(0.6);
+                }
             }
         }
 
@@ -3605,7 +5316,6 @@ impl MatchEvent for App {
         if self.ui.button(id!(gear_btn)).clicked(actions) {
             self.open_sheet(cx, SheetKind::Settings);
         }
-
     }
 
     fn handle_key_down(&mut self, cx: &mut Cx, e: &KeyEvent) {
@@ -3652,25 +5362,22 @@ impl MatchEvent for App {
     }
 }
 
-/// "a.b.c" semver-style compare, lenient about junk (missing parts = 0).
-fn version_lt(a: &str, b: &str) -> bool {
-    let parse = |s: &str| -> [u64; 3] {
-        let mut out = [0u64; 3];
-        for (i, part) in s.split('.').take(3).enumerate() {
-            out[i] = part.trim().parse().unwrap_or(0);
-        }
-        out
-    };
-    parse(a) < parse(b)
-}
-
 /// Register (or remove) the app as a login item. Isolated so a platform
 /// where auto-launch misbehaves degrades to a settings-sheet error line.
 fn apply_launch_at_login(enable: bool) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    let app_path = exe
+        .parent()
+        .and_then(|macos| macos.parent())
+        .and_then(|contents| contents.parent())
+        .filter(|bundle| bundle.extension().is_some_and(|ext| ext == "app"))
+        .unwrap_or(&exe);
+    #[cfg(not(target_os = "macos"))]
+    let app_path = exe.as_path();
     let auto = auto_launch::AutoLaunchBuilder::new()
         .set_app_name("OpenMicro")
-        .set_app_path(&exe.display().to_string())
+        .set_app_path(&app_path.display().to_string())
         .build()
         .map_err(|e| e.to_string())?;
     if enable {

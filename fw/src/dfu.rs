@@ -27,6 +27,20 @@ pub fn check_and_enter() {
         let slot = addr_of_mut!(DFU_MAGIC).cast::<u32>();
         if slot.read_volatile() == MAGIC {
             slot.write_volatile(0);
+
+            // Cortex-M0 has no VTOR: exception vectors are always read from
+            // 0x0000_0000. Enable SYSCFG and map system flash there before
+            // handing control to the ROM bootloader (AN2606).
+            embassy_stm32::pac::RCC
+                .apb2enr()
+                .modify(|w| w.set_syscfgen(true));
+            let _ = embassy_stm32::pac::RCC.apb2enr().read();
+            embassy_stm32::pac::SYSCFG.cfgr1().modify(|w| {
+                w.set_mem_mode(embassy_stm32::pac::syscfg::vals::MemMode::SYSTEM_FLASH)
+            });
+            cortex_m::asm::dsb();
+            cortex_m::asm::isb();
+
             let sp = (SYSTEM_MEMORY as *const u32).read_volatile();
             let rv = ((SYSTEM_MEMORY + 4) as *const u32).read_volatile();
             cortex_m::asm::bootstrap(sp as *const u32, rv as *const u32);

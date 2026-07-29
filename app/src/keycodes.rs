@@ -152,6 +152,71 @@ pub static KEYBOARD_USAGES: &[KeyDef] = &[
     k(0x52, "Up", Some(0x7E), Some(Code::ArrowUp)),
 ];
 
+/// A bounded group for the keystroke picker.
+///
+/// Makepad's dropdown menu is not scrollable, so presenting all 90 keyboard
+/// usages in one popup pushes most of them off-screen. These groups keep every
+/// popup short while still exposing the complete keyboard-page catalog.
+pub struct KeyboardGroup {
+    pub label: &'static str,
+    pub usages: &'static [u16],
+}
+
+pub static KEYBOARD_GROUPS: &[KeyboardGroup] = &[
+    KeyboardGroup {
+        label: "Letters A–M",
+        usages: &[
+            0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+        ],
+    },
+    KeyboardGroup {
+        label: "Letters N–Z",
+        usages: &[
+            0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D,
+        ],
+    },
+    KeyboardGroup {
+        label: "Numbers",
+        usages: &[0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27],
+    },
+    KeyboardGroup {
+        label: "Common keys",
+        usages: &[0x28, 0x29, 0x2A, 0x2B, 0x2C],
+    },
+    KeyboardGroup {
+        label: "Symbols",
+        usages: &[
+            0x2D, 0x2E, 0x2F, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
+        ],
+    },
+    KeyboardGroup {
+        label: "Function F1–F12",
+        usages: &[
+            0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45,
+        ],
+    },
+    KeyboardGroup {
+        label: "Function F13–F24",
+        usages: &[
+            0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x6F, 0x70, 0x71, 0x72, 0x73,
+        ],
+    },
+    KeyboardGroup {
+        label: "Navigation",
+        usages: &[0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F, 0x50, 0x51, 0x52],
+    },
+    KeyboardGroup {
+        label: "System keys",
+        usages: &[0x46, 0x47, 0x48],
+    },
+];
+
+pub fn keyboard_group_index(usage: u16) -> Option<usize> {
+    KEYBOARD_GROUPS
+        .iter()
+        .position(|group| group.usages.contains(&usage))
+}
+
 /// Consumer-page usages the picker offers: (usage, display name).
 /// These need no per-platform aliases — the OS handles consumer usages from
 /// any HID device natively, so the pad emits them directly.
@@ -159,12 +224,15 @@ pub static CONSUMER_USAGES: &[(u16, &'static str)] = &[
     (0xE9, "Volume Up"),
     (0xEA, "Volume Down"),
     (0xE2, "Mute"),
+    (0xB0, "Play"),
     (0xCD, "Play/Pause"),
     (0xB5, "Next Track"),
     (0xB6, "Previous Track"),
     (0xB7, "Stop"),
     (0x6F, "Brightness Up"),
     (0x70, "Brightness Down"),
+    (0x029D, "Globe / Fn"),
+    (0x019E, "Lock Screen"),
 ];
 
 /// Full definition for a keyboard-page usage (linear scan: the table is
@@ -214,12 +282,15 @@ fn consumer_short_name(usage: u16) -> Option<&'static str> {
         0xE9 => "Vol +",
         0xEA => "Vol -",
         0xE2 => "Mute",
+        0xB0 => "Play",
         0xCD => "Play/Pause",
         0xB5 => "Next",
         0xB6 => "Prev",
         0xB7 => "Stop",
         0x6F => "Bright +",
         0x70 => "Bright -",
+        0x029D => "Globe",
+        0x019E => "Lock",
         _ => return None,
     })
 }
@@ -228,10 +299,10 @@ fn consumer_short_name(usage: u16) -> Option<&'static str> {
 /// (low nibble = left hand, high nibble = right; we show them the same).
 const MOD_PAIRS: [(u8, &str, &str); 4] = [
     // (left-hand bit, macOS symbol, textual name)
-    (0x01, "\u{2303}", "Ctrl"), // ⌃ Control
-    (0x04, "\u{2325}", "Alt"),  // ⌥ Option
+    (0x01, "\u{2303}", "Ctrl"),  // ⌃ Control
+    (0x04, "\u{2325}", "Alt"),   // ⌥ Option
     (0x02, "\u{21E7}", "Shift"), // ⇧ Shift
-    (0x08, "\u{2318}", "Win"),  // ⌘ Command / Win / Super
+    (0x08, "\u{2318}", "Win"),   // ⌘ Command / Win / Super
 ];
 
 /// Human-readable modifier prefix from the HID bitmask: "⌃⇧⌘" on macOS,
@@ -308,10 +379,49 @@ mod tests {
     }
 
     #[test]
+    fn picker_groups_cover_every_key_once_and_stay_short() {
+        let grouped: Vec<u16> = KEYBOARD_GROUPS
+            .iter()
+            .flat_map(|group| group.usages.iter().copied())
+            .collect();
+        assert!(KEYBOARD_GROUPS
+            .iter()
+            .all(|group| !group.usages.is_empty() && group.usages.len() <= 13));
+        assert_eq!(grouped.len(), KEYBOARD_USAGES.len());
+        for key in KEYBOARD_USAGES {
+            assert_eq!(
+                grouped.iter().filter(|usage| **usage == key.usage).count(),
+                1,
+                "usage 0x{:02X} must appear in exactly one picker group",
+                key.usage
+            );
+        }
+    }
+
+    #[test]
     fn lookups_cover_the_spec_examples() {
         assert_eq!(keyboard_name(0x68), Some("F13"));
         assert_eq!(keyboard_name(0x4B), Some("Page Up"));
         assert_eq!(consumer_name(0xE9), Some("Volume Up"));
+        assert_eq!(consumer_name(0xB0), Some("Play"));
+        assert_eq!(consumer_name(0x029D), Some("Globe / Fn"));
+        assert_eq!(consumer_name(0x019E), Some("Lock Screen"));
+        assert_eq!(
+            slot_label(&Slot {
+                kind: SlotKind::Consumer,
+                mods: 0,
+                code: 0x029D
+            }),
+            "Globe"
+        );
+        assert_eq!(
+            slot_label(&Slot {
+                kind: SlotKind::Consumer,
+                mods: 0,
+                code: 0x019E
+            }),
+            "Lock"
+        );
         assert_eq!(hotkey_code(0x68), Some(Code::F13));
         // F21-F24: registerable off-macOS, no virtual keycode on macOS.
         let f21 = keyboard_def(0x70).unwrap();

@@ -46,7 +46,8 @@ use embassy_stm32::{bind_interrupts, peripherals, usb, Config};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{with_timeout, Duration, Ticker, Timer};
-use embassy_usb::class::hid::{HidReaderWriter, State};
+use embassy_usb::class::hid::{HidReaderWriter, HidWriter, State};
+use embassy_usb::driver::{Driver as UsbDriver, EndpointError};
 // Bring-up logging over the SWD probe (RTT) + panic messages on the same
 // channel. `DEFMT_LOG=off` compiles every log statement out.
 use defmt::{debug, info, warn};
@@ -134,7 +135,32 @@ const SAVE_KEY: &[u8; 4] = b"SAVE";
 const RESET_KEY: &[u8; 4] = b"RST!";
 const EVENT_REPORT: u8 = 0x80;
 
-static KBD_CH: Channel<ThreadModeRawMutex, KeyboardReport, 8> = Channel::new();
+#[derive(Clone, Copy)]
+struct KeyboardTransition {
+    first: KeyboardReport,
+    second: Option<KeyboardReport>,
+}
+
+impl KeyboardTransition {
+    fn single(report: KeyboardReport) -> Self {
+        Self {
+            first: report,
+            second: None,
+        }
+    }
+
+    fn pair(first: KeyboardReport, second: KeyboardReport) -> Self {
+        Self {
+            first,
+            second: Some(second),
+        }
+    }
+}
+
+// A modifier-qualified key transition may need two reports (modifiers first,
+// then the key; the reverse on release). Queue the transition as one item so
+// overload can never split that ordering guarantee.
+static KBD_CH: Channel<ThreadModeRawMutex, KeyboardTransition, 16> = Channel::new();
 static CONSUMER_CH: Channel<ThreadModeRawMutex, MediaKeyboardReport, 8> = Channel::new();
 /// Bit i = key position i pressed — drives the per-key LED effect.
 static KEYSTATE: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);
@@ -159,20 +185,17 @@ fn post_event(src: u8, a: u8, b: u8) {
 static HELD: embassy_sync::blocking_mutex::Mutex<
     ThreadModeRawMutex,
     core::cell::RefCell<[Option<keymap::Slot>; keymap::SLOT_COUNT]>,
-> = embassy_sync::blocking_mutex::Mutex::new(core::cell::RefCell::new(
-    [None; keymap::SLOT_COUNT],
-));
+> = embassy_sync::blocking_mutex::Mutex::new(core::cell::RefCell::new([None; keymap::SLOT_COUNT]));
 
-/// try_send that never drops the NEWEST report: on a full channel the oldest
-/// entry is evicted first. Both channels carry absolute state (a keyboard
-/// report is the full held set; a consumer report replaces the previous
-/// usage), so newest-wins is always correct — while a plain try_send could
-/// drop a release and leave the host with a key or media usage stuck down.
-/// Single executor, no await between evict and re-send: cannot interleave.
-fn force_send_kbd(report: KeyboardReport) {
-    if KBD_CH.try_send(report).is_err() {
+/// try_send that never drops the NEWEST complete transition: on a full
+/// channel the oldest transition is evicted first. Every transition ends in
+/// the full current keyboard state, and a consumer report replaces the
+/// previous usage, so newest-wins avoids stranded releases. Single executor,
+/// no await between evict and re-send: this cannot interleave.
+fn force_send_kbd(transition: KeyboardTransition) {
+    if KBD_CH.try_send(transition).is_err() {
         let _ = KBD_CH.try_receive();
-        let _ = KBD_CH.try_send(report);
+        let _ = KBD_CH.try_send(transition);
     }
 }
 
@@ -184,6 +207,135 @@ fn force_send_consumer(usage: u16) {
     }
 }
 
+fn empty_keyboard_report() -> KeyboardReport {
+    KeyboardReport {
+        modifier: 0,
+        reserved: 0,
+        leds: 0,
+        keycodes: [0; 6],
+    }
+}
+
+fn keyboard_report(held: &[Option<keymap::Slot>; keymap::SLOT_COUNT]) -> KeyboardReport {
+    let mut report = empty_keyboard_report();
+    let mut n = 0;
+    for slot in held.iter().flatten() {
+        if slot.kind != keymap::KIND_KEYBOARD {
+            continue;
+        }
+        report.modifier |= slot.mods;
+        // Codes above u8 range never enter RAM (write_page rejects them);
+        // the cast is exact.
+        let code = slot.code as u8;
+        if code != 0 && n < 6 && !report.keycodes[..n].contains(&code) {
+            report.keycodes[n] = code;
+            n += 1;
+        }
+    }
+    report
+}
+
+fn same_keyboard_report(a: &KeyboardReport, b: &KeyboardReport) -> bool {
+    a.modifier == b.modifier && a.keycodes == b.keycodes
+}
+
+fn has_added_key(before: &KeyboardReport, after: &KeyboardReport) -> bool {
+    after
+        .keycodes
+        .iter()
+        .copied()
+        .filter(|code| *code != 0)
+        .any(|code| !before.keycodes.contains(&code))
+}
+
+fn has_removed_key(before: &KeyboardReport, after: &KeyboardReport) -> bool {
+    before
+        .keycodes
+        .iter()
+        .copied()
+        .filter(|code| *code != 0)
+        .any(|code| !after.keycodes.contains(&code))
+}
+
+fn retained_keycodes(before: &KeyboardReport, after: &KeyboardReport) -> [u8; 6] {
+    let mut retained = [0; 6];
+    let mut n = 0;
+    for code in before.keycodes.iter().copied().filter(|code| *code != 0) {
+        if after.keycodes.contains(&code) {
+            retained[n] = code;
+            n += 1;
+        }
+    }
+    retained
+}
+
+fn keyboard_transition(
+    before: KeyboardReport,
+    after: KeyboardReport,
+    pressed: bool,
+) -> Option<KeyboardTransition> {
+    if same_keyboard_report(&before, &after) {
+        return None;
+    }
+
+    let intermediate = if before.modifier != after.modifier {
+        if pressed && has_added_key(&before, &after) {
+            Some(KeyboardReport {
+                modifier: after.modifier,
+                reserved: 0,
+                leds: 0,
+                keycodes: before.keycodes,
+            })
+        } else if !pressed && has_removed_key(&before, &after) {
+            Some(KeyboardReport {
+                modifier: before.modifier,
+                reserved: 0,
+                leds: 0,
+                // At the 6KRO boundary, releasing one key can expose another
+                // that was previously truncated. Keep only keys visible in
+                // both states here so that newly exposed key is never pressed
+                // under the modifiers that are being retired.
+                keycodes: retained_keycodes(&before, &after),
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    match intermediate {
+        Some(first)
+            if !same_keyboard_report(&before, &first) && !same_keyboard_report(&first, &after) =>
+        {
+            Some(KeyboardTransition::pair(first, after))
+        }
+        _ => Some(KeyboardTransition::single(after)),
+    }
+}
+
+/// Queue modifier-qualified chords in the same order as a physical keyboard:
+/// modifier flags settle one USB frame before key-down, and key-up settles one
+/// frame before the modifier flags clear. macOS normally accepts an atomic
+/// report, but Carbon/Electron global shortcuts can miss a chord when its
+/// modifiers and key first appear in the very same input report.
+fn send_keyboard_transition(before: KeyboardReport, after: KeyboardReport, pressed: bool) {
+    if let Some(transition) = keyboard_transition(before, after, pressed) {
+        force_send_kbd(transition);
+    }
+}
+
+async fn write_keyboard_transition<'d, D: UsbDriver<'d>, const N: usize>(
+    writer: &mut HidWriter<'d, D, N>,
+    transition: &KeyboardTransition,
+) -> Result<(), EndpointError> {
+    writer.write_serialize(&transition.first).await?;
+    if let Some(second) = transition.second.as_ref() {
+        writer.write_serialize(second).await?;
+    }
+    Ok(())
+}
+
 /// Mark a slot held/released and emit the consequences: keyboard-kind slots
 /// rebuild the composite 6KRO report (modifiers OR-ed across every held slot —
 /// the documented impurity of modifier-qualified codes); consumer-kind slots
@@ -192,17 +344,22 @@ fn force_send_consumer(usage: u16) {
 fn set_held(slot_idx: usize, held: bool) {
     // Press dispatches on the slot's current meaning; release dispatches on
     // the snapshot stored at press time.
-    let (changed, s) = HELD.lock(|h| {
+    let (changed, s, before, after) = HELD.lock(|h| {
         let mut h = h.borrow_mut();
+        let before = keyboard_report(&h);
         if held {
             let s = keymap::slot(slot_idx);
             let changed = h[slot_idx].is_none();
             h[slot_idx] = Some(s);
-            (changed, s)
+            let after = keyboard_report(&h);
+            (changed, s, before, after)
         } else {
             match h[slot_idx].take() {
-                Some(s) => (true, s),
-                None => (false, keymap::Slot::none()),
+                Some(s) => {
+                    let after = keyboard_report(&h);
+                    (true, s, before, after)
+                }
+                None => (false, keymap::Slot::none(), before, before),
             }
         }
     });
@@ -229,29 +386,7 @@ fn set_held(slot_idx: usize, held: bool) {
         _ => {
             // KIND_NONE falls through here too: rebuilding the keyboard
             // report from the held snapshots is cheap and always correct.
-            let mut report = KeyboardReport {
-                modifier: 0,
-                reserved: 0,
-                leds: 0,
-                keycodes: [0; 6],
-            };
-            let mut n = 0;
-            HELD.lock(|h| {
-                for s in h.borrow().iter().flatten() {
-                    if s.kind != keymap::KIND_KEYBOARD {
-                        continue;
-                    }
-                    report.modifier |= s.mods;
-                    // Codes above u8 range never enter RAM (write_page
-                    // rejects them); the cast is exact.
-                    let code = s.code as u8;
-                    if code != 0 && n < 6 && !report.keycodes[..n].contains(&code) {
-                        report.keycodes[n] = code;
-                        n += 1;
-                    }
-                }
-            });
-            force_send_kbd(report);
+            send_keyboard_transition(before, after, held);
         }
     }
 }
@@ -399,10 +534,37 @@ async fn main(spawner: Spawner) {
     // USB device + report pumps + updater channel run forever on this task.
     let usb_fut = usb_dev.run();
     let pump = async {
+        let mut keyboard_needs_resync = false;
         loop {
+            if keyboard_needs_resync {
+                // A disabled endpoint means the host reset or unplugged us.
+                // Once it returns, discard stale transitions and reassert the
+                // current held state from a clean host-side baseline.
+                kbd_writer.ready().await;
+                while KBD_CH.try_receive().is_ok() {}
+                let current = HELD.lock(|h| keyboard_report(&h.borrow()));
+                let transition = keyboard_transition(empty_keyboard_report(), current, true)
+                    .unwrap_or_else(|| KeyboardTransition::single(current));
+                match write_keyboard_transition(&mut kbd_writer, &transition).await {
+                    Ok(()) => keyboard_needs_resync = false,
+                    Err(EndpointError::Disabled) => continue,
+                    Err(EndpointError::BufferOverflow) => {
+                        warn!("keyboard HID report overflow");
+                        keyboard_needs_resync = false;
+                    }
+                }
+                continue;
+            }
+
             match embassy_futures::select::select(KBD_CH.receive(), CONSUMER_CH.receive()).await {
-                embassy_futures::select::Either::First(report) => {
-                    let _ = kbd_writer.write_serialize(&report).await;
+                embassy_futures::select::Either::First(transition) => {
+                    match write_keyboard_transition(&mut kbd_writer, &transition).await {
+                        Ok(()) => {}
+                        Err(EndpointError::Disabled) => keyboard_needs_resync = true,
+                        Err(EndpointError::BufferOverflow) => {
+                            warn!("keyboard HID report overflow");
+                        }
+                    }
                 }
                 embassy_futures::select::Either::Second(report) => {
                     let _ = consumer_writer.write_serialize(&report).await;
@@ -439,8 +601,7 @@ async fn main(spawner: Spawner) {
                         CMD_VERSION => {
                             info!("app: version query -> {}", FW_VERSION);
                             reply[1] = FW_VERSION.len() as u8;
-                            reply[2..2 + FW_VERSION.len()]
-                                .copy_from_slice(FW_VERSION.as_bytes());
+                            reply[2..2 + FW_VERSION.len()].copy_from_slice(FW_VERSION.as_bytes());
                         }
                         CMD_ENTER_DFU if &buf[1..5] == ENTER_DFU_KEY => {
                             warn!("app: DFU reboot requested -> ROM bootloader");
@@ -460,11 +621,8 @@ async fn main(spawner: Spawner) {
                             }
                         }
                         CMD_SET_KEYMAP => {
-                            let ok = keymap::write_page(
-                                buf[1] as usize,
-                                buf[2] as usize,
-                                &buf[3..31],
-                            );
+                            let ok =
+                                keymap::write_page(buf[1] as usize, buf[2] as usize, &buf[3..31]);
                             info!(
                                 "app: keymap page {=u8} write -> {}",
                                 buf[1],
@@ -578,8 +736,7 @@ async fn scan_task(
                             post_event(0, pos as u8, raw as u8);
                             // LED feedback tracks the physical press whatever
                             // the slot emits (or even if it emits nothing).
-                            let mut state =
-                                KEYSTATE.load(core::sync::atomic::Ordering::Relaxed);
+                            let mut state = KEYSTATE.load(core::sync::atomic::Ordering::Relaxed);
                             if raw {
                                 state |= 1 << pos;
                             } else {

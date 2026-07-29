@@ -137,18 +137,74 @@ impl From<MacroStep> for MacroStepEntry {
 pub enum Action {
     #[default]
     None,
-    Keystroke { mods: u8, key: u16 },
-    Macro { steps: Vec<MacroStepEntry> },
-    Run { command: String },
-    Open { target: String },
-    Media { op: MediaOp },
+    Keystroke {
+        mods: u8,
+        key: u16,
+    },
+    Macro {
+        steps: Vec<MacroStepEntry>,
+    },
+    Run {
+        command: String,
+    },
+    Open {
+        target: String,
+    },
+    Media {
+        op: MediaOp,
+    },
     AppSettings, // open this app's settings sheet (the SETUP key default)
+}
+
+/// The user-facing meaning of a key or touch-pad tap.
+///
+/// `emitted` and `action` remain the execution representation used by the
+/// device and host. This semantic value lets the editor present one coherent
+/// behavior without exposing that implementation split. It is optional so
+/// configurations written by older versions keep working unchanged.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ControlBehavior {
+    ApplicationShortcut {
+        application: String,
+        shortcut: String,
+    },
+    MacOs {
+        command: MacOsControl,
+    },
+    Keystroke,
+    App {
+        target: String,
+    },
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MacOsControl {
+    BrightnessUp,
+    BrightnessDown,
+    MissionControl,
+    Applications,
+    Search,
+    Dictation,
+    Globe,
+    LockScreen,
+    Sleep,
+    VolumeUp,
+    VolumeDown,
+    Mute,
+    PlayPause,
+    NextTrack,
+    PreviousTrack,
+    EmojiPicker,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct InputConfig {
     pub label: String,
     pub icon: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behavior: Option<ControlBehavior>,
     pub emitted: Slot,
     pub action: Action,
 }
@@ -160,7 +216,9 @@ pub struct AnalogTuning {
 
 impl Default for AnalogTuning {
     fn default() -> Self {
-        AnalogTuning { joy_threshold: 1024 }
+        AnalogTuning {
+            joy_threshold: 1024,
+        }
     }
 }
 
@@ -184,6 +242,241 @@ impl Profile {
         }
         out
     }
+}
+
+/// The paired hardware behaviours offered for the rotary encoder.
+///
+/// The device protocol still stores clockwise and counter-clockwise as two
+/// independent slots. This semantic layer deliberately treats them as one
+/// setting so the UI cannot accidentally configure a one-sided rotation.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RotatorRotationPreset {
+    Volume,
+    Brightness,
+    Tracks,
+    VerticalArrows,
+    HorizontalArrows,
+}
+
+impl RotatorRotationPreset {
+    pub const ALL: [Self; 5] = [
+        Self::Volume,
+        Self::Brightness,
+        Self::Tracks,
+        Self::VerticalArrows,
+        Self::HorizontalArrows,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Volume => "Volume",
+            Self::Brightness => "Screen brightness",
+            Self::Tracks => "Track selection",
+            Self::VerticalArrows => "Arrow keys · up / down",
+            Self::HorizontalArrows => "Arrow keys · left / right",
+        }
+    }
+
+    pub const fn detail(self) -> &'static str {
+        match self {
+            Self::Volume => "Clockwise raises · counter-clockwise lowers",
+            Self::Brightness => "Clockwise brightens · counter-clockwise dims",
+            Self::Tracks => "Clockwise next · counter-clockwise previous",
+            Self::VerticalArrows => "Clockwise down · counter-clockwise up",
+            Self::HorizontalArrows => "Clockwise right · counter-clockwise left",
+        }
+    }
+
+    const fn slots(self) -> (Slot, Slot) {
+        match self {
+            Self::Volume => (
+                Slot {
+                    kind: SlotKind::Consumer,
+                    mods: 0,
+                    code: 0xE9,
+                },
+                Slot {
+                    kind: SlotKind::Consumer,
+                    mods: 0,
+                    code: 0xEA,
+                },
+            ),
+            Self::Brightness => (
+                Slot {
+                    kind: SlotKind::Consumer,
+                    mods: 0,
+                    code: 0x6F,
+                },
+                Slot {
+                    kind: SlotKind::Consumer,
+                    mods: 0,
+                    code: 0x70,
+                },
+            ),
+            Self::Tracks => (
+                Slot {
+                    kind: SlotKind::Consumer,
+                    mods: 0,
+                    code: 0xB5,
+                },
+                Slot {
+                    kind: SlotKind::Consumer,
+                    mods: 0,
+                    code: 0xB6,
+                },
+            ),
+            Self::VerticalArrows => (
+                Slot {
+                    kind: SlotKind::Keyboard,
+                    mods: 0,
+                    code: 0x51,
+                },
+                Slot {
+                    kind: SlotKind::Keyboard,
+                    mods: 0,
+                    code: 0x52,
+                },
+            ),
+            Self::HorizontalArrows => (
+                Slot {
+                    kind: SlotKind::Keyboard,
+                    mods: 0,
+                    code: 0x4F,
+                },
+                Slot {
+                    kind: SlotKind::Keyboard,
+                    mods: 0,
+                    code: 0x50,
+                },
+            ),
+        }
+    }
+
+    /// Recognise only the complete preset: both emitted usages and both
+    /// no-host-action states must match. Imported/custom pairs remain custom.
+    pub fn infer(profile: &Profile) -> Option<Self> {
+        let cw = profile.inputs.get(SLOT_ENC_CW)?;
+        let ccw = profile.inputs.get(SLOT_ENC_CCW)?;
+        Self::ALL.into_iter().find(|preset| {
+            let (cw_slot, ccw_slot) = preset.slots();
+            is_direct_slot(cw, cw_slot) && is_direct_slot(ccw, ccw_slot)
+        })
+    }
+
+    /// Apply the paired preset atomically at the profile level. No other
+    /// rotator input (notably its press slot) is touched.
+    pub fn apply_to(self, profile: &mut Profile) {
+        if profile.inputs.len() <= SLOT_ENC_CCW {
+            return;
+        }
+        let (cw, ccw) = match self {
+            Self::Volume => (
+                consumer_input("Vol +", "volume-2", 0xE9),
+                consumer_input("Vol −", "volume-1", 0xEA),
+            ),
+            Self::Brightness => (
+                consumer_input("Bright +", "sun", 0x6F),
+                consumer_input("Bright −", "sun", 0x70),
+            ),
+            Self::Tracks => (
+                consumer_input("Next", "skip-forward", 0xB5),
+                consumer_input("Previous", "skip-back", 0xB6),
+            ),
+            Self::VerticalArrows => (
+                keyboard_input("Down", "arrow-down", 0, 0x51),
+                keyboard_input("Up", "arrow-up", 0, 0x52),
+            ),
+            Self::HorizontalArrows => (
+                keyboard_input("Right", "arrow-right", 0, 0x4F),
+                keyboard_input("Left", "arrow-left", 0, 0x50),
+            ),
+        };
+        profile.inputs[SLOT_ENC_CW] = cw;
+        profile.inputs[SLOT_ENC_CCW] = ccw;
+    }
+}
+
+/// The hardware behaviour offered for pressing the rotary encoder.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RotatorPressPreset {
+    Mute,
+    LockScreen,
+    Play,
+    Enter,
+}
+
+impl RotatorPressPreset {
+    pub const ALL: [Self; 4] = [Self::Mute, Self::LockScreen, Self::Play, Self::Enter];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Mute => "Mute",
+            Self::LockScreen => "Lock screen",
+            Self::Play => "Play",
+            Self::Enter => "Enter",
+        }
+    }
+
+    pub const fn detail(self) -> &'static str {
+        match self {
+            Self::Mute => "Toggle system audio mute",
+            Self::LockScreen => "Lock the computer or start its screen saver",
+            Self::Play => "Start media playback",
+            Self::Enter => "Send the Enter key",
+        }
+    }
+
+    const fn slot(self) -> Slot {
+        match self {
+            Self::Mute => Slot {
+                kind: SlotKind::Consumer,
+                mods: 0,
+                code: 0xE2,
+            },
+            // USB HID Consumer page: AL Terminal Lock/Screensaver.
+            Self::LockScreen => Slot {
+                kind: SlotKind::Consumer,
+                mods: 0,
+                code: 0x019E,
+            },
+            // Literal Play, rather than the separate Play/Pause toggle (0xCD).
+            Self::Play => Slot {
+                kind: SlotKind::Consumer,
+                mods: 0,
+                code: 0xB0,
+            },
+            Self::Enter => Slot {
+                kind: SlotKind::Keyboard,
+                mods: 0,
+                code: 0x28,
+            },
+        }
+    }
+
+    /// Recognise only a direct device usage with no stale host action.
+    pub fn infer(profile: &Profile) -> Option<Self> {
+        let press = profile.inputs.get(SLOT_ENC_PRESS)?;
+        Self::ALL
+            .into_iter()
+            .find(|preset| is_direct_slot(press, preset.slot()))
+    }
+
+    /// Apply only the encoder press preset; the rotation pair is untouched.
+    pub fn apply_to(self, profile: &mut Profile) {
+        let Some(press) = profile.inputs.get_mut(SLOT_ENC_PRESS) else {
+            return;
+        };
+        *press = match self {
+            Self::Mute => consumer_input("Mute", "volume-x", 0xE2),
+            Self::LockScreen => consumer_input("Lock", "lock", 0x019E),
+            Self::Play => consumer_input("Play", "play", 0xB0),
+            Self::Enter => keyboard_input("Enter", "corner-down-left", 0, 0x28),
+        };
+    }
+}
+
+fn is_direct_slot(input: &InputConfig, emitted: Slot) -> bool {
+    input.emitted == emitted && input.action == Action::None
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -213,7 +506,12 @@ fn keyboard_input(label: &str, icon: &str, mods: u8, code: u16) -> InputConfig {
     InputConfig {
         label: label.to_string(),
         icon: icon.to_string(),
-        emitted: Slot { kind: SlotKind::Keyboard, mods, code },
+        behavior: None,
+        emitted: Slot {
+            kind: SlotKind::Keyboard,
+            mods,
+            code,
+        },
         action: Action::None,
     }
 }
@@ -222,7 +520,12 @@ fn consumer_input(label: &str, icon: &str, code: u16) -> InputConfig {
     InputConfig {
         label: label.to_string(),
         icon: icon.to_string(),
-        emitted: Slot { kind: SlotKind::Consumer, mods: 0, code },
+        behavior: None,
+        emitted: Slot {
+            kind: SlotKind::Consumer,
+            mods: 0,
+            code,
+        },
         action: Action::None,
     }
 }
@@ -231,6 +534,7 @@ fn unbound_input() -> InputConfig {
     InputConfig {
         label: String::new(),
         icon: String::new(),
+        behavior: None,
         emitted: Slot::default(),
         action: Action::None,
     }
@@ -273,6 +577,9 @@ pub fn default_codex_profile() -> Profile {
             keyboard_input(label, icon, mods, code)
         })
         .collect();
+    for input in inputs.iter_mut().take(12) {
+        input.behavior = Some(ControlBehavior::Keystroke);
+    }
     // SETUP opens this app's settings sheet (the PRD's one hardwired action).
     inputs[12].action = Action::AppSettings;
 
@@ -289,7 +596,11 @@ pub fn default_codex_profile() -> Profile {
     inputs.push(keyboard_input("Enter", "gamepad-2", 0, 0x28));
     // Touch pad: tap toggles playback. Swipe slots exist so configs stay
     // stable when multi-zone hardware lands; unbound until then.
-    inputs.push(consumer_input("Play/Pause", "play", 0xCD));
+    let mut touch = consumer_input("Play/Pause", "play", 0xCD);
+    touch.behavior = Some(ControlBehavior::MacOs {
+        command: MacOsControl::PlayPause,
+    });
+    inputs.push(touch);
     inputs.push(unbound_input());
     inputs.push(unbound_input());
 
@@ -317,16 +628,68 @@ fn sanitize(cfg: &mut AppConfig) {
         if profile.inputs.len() < SLOT_COUNT {
             let defaults = default_codex_profile();
             while profile.inputs.len() < SLOT_COUNT {
-                profile.inputs.push(defaults.inputs[profile.inputs.len()].clone());
+                profile
+                    .inputs
+                    .push(defaults.inputs[profile.inputs.len()].clone());
             }
         }
         // The firmware clamps SET_ANALOG to this range; clamping here keeps
         // app truth and device truth from fighting (an out-of-range value
         // would re-sync forever because the device reads back different).
         profile.analog.joy_threshold = profile.analog.joy_threshold.clamp(200, 1900);
+
+        // Add semantic metadata to older key/touch configurations without
+        // changing the compiled slot or action that already works. Ambiguous
+        // host automations deliberately remain `None` and appear as an
+        // existing setup until the user replaces them.
+        for slot in (0..KEY_SLOTS).chain(std::iter::once(SLOT_TOUCH_TAP)) {
+            let Some(input) = profile.inputs.get_mut(slot) else {
+                continue;
+            };
+            if input.behavior.is_none() {
+                input.behavior = infer_legacy_behavior(input);
+            }
+        }
     }
     if cfg.active_profile >= cfg.profiles.len() {
         cfg.active_profile = cfg.profiles.len() - 1;
+    }
+}
+
+fn infer_legacy_behavior(input: &InputConfig) -> Option<ControlBehavior> {
+    match (&input.action, input.emitted.kind) {
+        (Action::None, SlotKind::Keyboard) => Some(ControlBehavior::Keystroke),
+        (Action::None, SlotKind::Consumer) => {
+            let command = match input.emitted.code {
+                0x006F => MacOsControl::BrightnessUp,
+                0x0070 => MacOsControl::BrightnessDown,
+                0x029F => MacOsControl::MissionControl,
+                0x02A2 => MacOsControl::Applications,
+                0x0221 => MacOsControl::Search,
+                0x00D8 => MacOsControl::Dictation,
+                0x029D => MacOsControl::Globe,
+                0x00E9 => MacOsControl::VolumeUp,
+                0x00EA => MacOsControl::VolumeDown,
+                0x00E2 => MacOsControl::Mute,
+                0x00CD => MacOsControl::PlayPause,
+                0x00B5 => MacOsControl::NextTrack,
+                0x00B6 => MacOsControl::PreviousTrack,
+                0x00D9 => MacOsControl::EmojiPicker,
+                _ => return None,
+            };
+            Some(ControlBehavior::MacOs { command })
+        }
+        (Action::Open { target }, SlotKind::Keyboard)
+            if Path::new(target)
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("app")) =>
+        {
+            Some(ControlBehavior::App {
+                target: target.clone(),
+            })
+        }
+        _ => None,
     }
 }
 
@@ -376,8 +739,12 @@ fn migrate_legacy(legacy: LegacyConfig) -> AppConfig {
             // No old binding: keep the Codex default (notably AppSettings on
             // the SETUP key), which the old app hardwired outside the config.
             LegacyKind::None => continue,
-            LegacyKind::Run => Action::Run { command: binding.arg.clone() },
-            LegacyKind::Open => Action::Open { target: binding.arg.clone() },
+            LegacyKind::Run => Action::Run {
+                command: binding.arg.clone(),
+            },
+            LegacyKind::Open => Action::Open {
+                target: binding.arg.clone(),
+            },
         };
     }
     AppConfig {
@@ -541,8 +908,22 @@ mod tests {
         assert_eq!(p.inputs.len(), SLOT_COUNT);
         assert_eq!(p.name, "Codex");
         // p0 = FAST/F13 plain, p8 = PR/F13 shifted, p12 = SETUP -> AppSettings.
-        assert_eq!(p.inputs[0].emitted, Slot { kind: SlotKind::Keyboard, mods: 0, code: 0x68 });
-        assert_eq!(p.inputs[8].emitted, Slot { kind: SlotKind::Keyboard, mods: 0x02, code: 0x68 });
+        assert_eq!(
+            p.inputs[0].emitted,
+            Slot {
+                kind: SlotKind::Keyboard,
+                mods: 0,
+                code: 0x68
+            }
+        );
+        assert_eq!(
+            p.inputs[8].emitted,
+            Slot {
+                kind: SlotKind::Keyboard,
+                mods: 0x02,
+                code: 0x68
+            }
+        );
         assert_eq!(p.inputs[12].action, Action::AppSettings);
         // All 13 key slots emit distinct (mods, code) pairs — even the two
         // switches under the 2U MIC keycap, so the host can tell them apart.
@@ -554,7 +935,240 @@ mod tests {
         assert_eq!(p.inputs[SLOT_TOUCH_TAP].emitted.code, 0xCD);
         assert_eq!(p.inputs[SLOT_TOUCH_SWIPE_L].emitted.kind, SlotKind::None);
         assert_eq!(p.analog.joy_threshold, 1024);
-        assert_eq!(p.slots()[SLOT_ENC_CW], Slot { kind: SlotKind::Consumer, mods: 0, code: 0xE9 });
+        assert_eq!(
+            p.slots()[SLOT_ENC_CW],
+            Slot {
+                kind: SlotKind::Consumer,
+                mods: 0,
+                code: 0xE9
+            }
+        );
+    }
+
+    #[test]
+    fn all_rotation_presets_apply_as_exact_hid_pairs() {
+        assert_eq!(
+            RotatorRotationPreset::VerticalArrows.label(),
+            "Arrow keys · up / down"
+        );
+        assert_eq!(
+            RotatorRotationPreset::HorizontalArrows.label(),
+            "Arrow keys · left / right"
+        );
+        let cases = [
+            (
+                RotatorRotationPreset::Volume,
+                (SlotKind::Consumer, 0xE9, "Vol +", "volume-2"),
+                (SlotKind::Consumer, 0xEA, "Vol −", "volume-1"),
+            ),
+            (
+                RotatorRotationPreset::Brightness,
+                (SlotKind::Consumer, 0x6F, "Bright +", "sun"),
+                (SlotKind::Consumer, 0x70, "Bright −", "sun"),
+            ),
+            (
+                RotatorRotationPreset::Tracks,
+                (SlotKind::Consumer, 0xB5, "Next", "skip-forward"),
+                (SlotKind::Consumer, 0xB6, "Previous", "skip-back"),
+            ),
+            (
+                RotatorRotationPreset::VerticalArrows,
+                (SlotKind::Keyboard, 0x51, "Down", "arrow-down"),
+                (SlotKind::Keyboard, 0x52, "Up", "arrow-up"),
+            ),
+            (
+                RotatorRotationPreset::HorizontalArrows,
+                (SlotKind::Keyboard, 0x4F, "Right", "arrow-right"),
+                (SlotKind::Keyboard, 0x50, "Left", "arrow-left"),
+            ),
+        ];
+        for (preset, cw_expected, ccw_expected) in cases {
+            let mut profile = default_codex_profile();
+            let press_before = profile.inputs[SLOT_ENC_PRESS].clone();
+            // Applying a preset must replace stale presentation and host action
+            // state, not merely swap the emitted usage.
+            profile.inputs[SLOT_ENC_CW].label = "custom cw".into();
+            profile.inputs[SLOT_ENC_CW].action = Action::Run {
+                command: "old".into(),
+            };
+            profile.inputs[SLOT_ENC_CCW].icon = "custom-icon".into();
+            profile.inputs[SLOT_ENC_CCW].action = Action::Media { op: MediaOp::Mute };
+
+            preset.apply_to(&mut profile);
+
+            let cw = &profile.inputs[SLOT_ENC_CW];
+            let ccw = &profile.inputs[SLOT_ENC_CCW];
+            assert_eq!(
+                cw.emitted,
+                Slot {
+                    kind: cw_expected.0,
+                    mods: 0,
+                    code: cw_expected.1
+                }
+            );
+            assert_eq!(
+                ccw.emitted,
+                Slot {
+                    kind: ccw_expected.0,
+                    mods: 0,
+                    code: ccw_expected.1
+                }
+            );
+            assert_eq!((&*cw.label, &*cw.icon), (cw_expected.2, cw_expected.3));
+            assert_eq!((&*ccw.label, &*ccw.icon), (ccw_expected.2, ccw_expected.3));
+            assert_eq!(cw.action, Action::None);
+            assert_eq!(ccw.action, Action::None);
+            assert_eq!(profile.inputs[SLOT_ENC_PRESS], press_before);
+            assert_eq!(RotatorRotationPreset::infer(&profile), Some(preset));
+        }
+    }
+
+    #[test]
+    fn all_press_presets_apply_as_exact_hid_usages() {
+        assert_eq!(
+            RotatorPressPreset::ALL,
+            [
+                RotatorPressPreset::Mute,
+                RotatorPressPreset::LockScreen,
+                RotatorPressPreset::Play,
+                RotatorPressPreset::Enter,
+            ]
+        );
+        assert_eq!(RotatorPressPreset::Enter.label(), "Enter");
+        assert_eq!(RotatorPressPreset::Enter.detail(), "Send the Enter key");
+        let cases = [
+            (
+                RotatorPressPreset::Mute,
+                SlotKind::Consumer,
+                0xE2,
+                "Mute",
+                "volume-x",
+            ),
+            (
+                RotatorPressPreset::LockScreen,
+                SlotKind::Consumer,
+                0x019E,
+                "Lock",
+                "lock",
+            ),
+            (
+                RotatorPressPreset::Play,
+                SlotKind::Consumer,
+                0xB0,
+                "Play",
+                "play",
+            ),
+            (
+                RotatorPressPreset::Enter,
+                SlotKind::Keyboard,
+                0x28,
+                "Enter",
+                "corner-down-left",
+            ),
+        ];
+        for (preset, kind, code, label, icon) in cases {
+            let mut profile = default_codex_profile();
+            let rotation_before = [
+                profile.inputs[SLOT_ENC_CW].clone(),
+                profile.inputs[SLOT_ENC_CCW].clone(),
+            ];
+            profile.inputs[SLOT_ENC_PRESS].label = "custom press".into();
+            profile.inputs[SLOT_ENC_PRESS].action = Action::Open {
+                target: "old".into(),
+            };
+
+            preset.apply_to(&mut profile);
+
+            let press = &profile.inputs[SLOT_ENC_PRESS];
+            assert_eq!(
+                press.emitted,
+                Slot {
+                    kind,
+                    mods: 0,
+                    code
+                }
+            );
+            assert_eq!((&*press.label, &*press.icon), (label, icon));
+            assert_eq!(press.action, Action::None);
+            assert_eq!(
+                [
+                    profile.inputs[SLOT_ENC_CW].clone(),
+                    profile.inputs[SLOT_ENC_CCW].clone(),
+                ],
+                rotation_before
+            );
+            assert_eq!(RotatorPressPreset::infer(&profile), Some(preset));
+        }
+    }
+
+    #[test]
+    fn custom_rotator_mappings_are_preserved_until_a_preset_is_applied() {
+        let mut profile = default_codex_profile();
+        // One stale action makes an otherwise familiar pair custom.
+        profile.inputs[SLOT_ENC_CCW].action = Action::Run {
+            command: "custom".into(),
+        };
+        // A different emitted kind makes the press custom too.
+        profile.inputs[SLOT_ENC_PRESS] = keyboard_input("Custom", "keyboard", 0x08, 0x0F);
+        let before_inference = profile.clone();
+
+        assert_eq!(RotatorRotationPreset::infer(&profile), None);
+        assert_eq!(RotatorPressPreset::infer(&profile), None);
+        assert_eq!(
+            profile, before_inference,
+            "inference must never normalise custom data"
+        );
+
+        let custom_press = profile.inputs[SLOT_ENC_PRESS].clone();
+        RotatorRotationPreset::Brightness.apply_to(&mut profile);
+        assert_eq!(profile.inputs[SLOT_ENC_PRESS], custom_press);
+        assert_eq!(
+            RotatorRotationPreset::infer(&profile),
+            Some(RotatorRotationPreset::Brightness)
+        );
+
+        let custom_rotation = [
+            profile.inputs[SLOT_ENC_CW].clone(),
+            profile.inputs[SLOT_ENC_CCW].clone(),
+        ];
+        RotatorPressPreset::LockScreen.apply_to(&mut profile);
+        assert_eq!(
+            [
+                profile.inputs[SLOT_ENC_CW].clone(),
+                profile.inputs[SLOT_ENC_CCW].clone(),
+            ],
+            custom_rotation
+        );
+        assert_eq!(
+            RotatorPressPreset::infer(&profile),
+            Some(RotatorPressPreset::LockScreen)
+        );
+
+        RotatorRotationPreset::VerticalArrows.apply_to(&mut profile);
+        profile.inputs[SLOT_ENC_CW].action = Action::Media { op: MediaOp::Mute };
+        assert_eq!(
+            RotatorRotationPreset::infer(&profile),
+            None,
+            "a host action makes even an exact keyboard pair custom"
+        );
+        assert_eq!(profile.inputs[SLOT_ENC_CW].emitted.kind, SlotKind::Keyboard);
+        assert_eq!(profile.inputs[SLOT_ENC_CW].emitted.code, 0x51);
+        assert_eq!(profile.inputs[SLOT_ENC_CCW].emitted.code, 0x52);
+
+        RotatorPressPreset::Enter.apply_to(&mut profile);
+        profile.inputs[SLOT_ENC_PRESS].action = Action::Run {
+            command: "custom enter".into(),
+        };
+        assert_eq!(
+            RotatorPressPreset::infer(&profile),
+            None,
+            "a stale host action makes the exact Enter usage custom"
+        );
+        assert_eq!(
+            profile.inputs[SLOT_ENC_PRESS].emitted.kind,
+            SlotKind::Keyboard
+        );
+        assert_eq!(profile.inputs[SLOT_ENC_PRESS].emitted.code, 0x28);
     }
 
     #[test]
@@ -572,13 +1186,38 @@ mod tests {
         let mut cfg = parse_any(old).expect("legacy parses");
         sanitize(&mut cfg);
         let inputs = &cfg.profiles[0].inputs;
-        assert_eq!(inputs[0].action, Action::Run { command: "echo hi".into() });
+        assert_eq!(
+            inputs[0].action,
+            Action::Run {
+                command: "echo hi".into()
+            }
+        );
         assert_eq!(inputs[1].action, Action::None);
-        assert_eq!(inputs[2].action, Action::Open { target: "https://example.com".into() });
+        assert_eq!(
+            inputs[2].action,
+            Action::Open {
+                target: "https://example.com".into()
+            }
+        );
         // Old entry 10 (2U pair) lands on both slots 10 and 11; old 11 -> slot 12.
-        assert_eq!(inputs[10].action, Action::Open { target: "raycast://".into() });
-        assert_eq!(inputs[11].action, Action::Open { target: "raycast://".into() });
-        assert_eq!(inputs[12].action, Action::Run { command: "say done".into() });
+        assert_eq!(
+            inputs[10].action,
+            Action::Open {
+                target: "raycast://".into()
+            }
+        );
+        assert_eq!(
+            inputs[11].action,
+            Action::Open {
+                target: "raycast://".into()
+            }
+        );
+        assert_eq!(
+            inputs[12].action,
+            Action::Run {
+                command: "say done".into()
+            }
+        );
         // Emitted codes come from the new defaults, not the legacy file.
         assert_eq!(inputs[0].emitted.code, 0x68);
         assert!(cfg.launch_at_login && cfg.show_menubar);
@@ -595,7 +1234,11 @@ mod tests {
     fn sanitize_clamps_and_pads() {
         let mut cfg = AppConfig {
             active_profile: 7,
-            profiles: vec![Profile { name: "short".into(), inputs: vec![], analog: AnalogTuning::default() }],
+            profiles: vec![Profile {
+                name: "short".into(),
+                inputs: vec![],
+                analog: AnalogTuning::default(),
+            }],
             launch_at_login: false,
             show_menubar: false,
         };
@@ -609,6 +1252,78 @@ mod tests {
     }
 
     #[test]
+    fn current_json_without_behavior_migrates_without_changing_execution() {
+        let original = AppConfig::default();
+        let mut json = serde_json::to_value(&original).expect("serialize");
+        for profile in json["profiles"].as_array_mut().expect("profiles") {
+            for input in profile["inputs"].as_array_mut().expect("inputs") {
+                input.as_object_mut().expect("input").remove("behavior");
+            }
+        }
+        let mut parsed: AppConfig = serde_json::from_value(json).expect("old current schema");
+        let before: Vec<(Slot, Action, String, String)> = parsed.profiles[0]
+            .inputs
+            .iter()
+            .map(|input| {
+                (
+                    input.emitted,
+                    input.action.clone(),
+                    input.label.clone(),
+                    input.icon.clone(),
+                )
+            })
+            .collect();
+
+        sanitize(&mut parsed);
+
+        let after: Vec<(Slot, Action, String, String)> = parsed.profiles[0]
+            .inputs
+            .iter()
+            .map(|input| {
+                (
+                    input.emitted,
+                    input.action.clone(),
+                    input.label.clone(),
+                    input.icon.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(before, after, "migration must only add advisory metadata");
+        assert_eq!(
+            parsed.profiles[0].inputs[0].behavior,
+            Some(ControlBehavior::Keystroke)
+        );
+        assert_eq!(
+            parsed.profiles[0].inputs[SLOT_TOUCH_TAP].behavior,
+            Some(ControlBehavior::MacOs {
+                command: MacOsControl::PlayPause
+            })
+        );
+        assert_eq!(
+            parsed.profiles[0].inputs[SLOT_TOUCH_SWIPE_L],
+            original.profiles[0].inputs[SLOT_TOUCH_SWIPE_L]
+        );
+        assert_eq!(
+            parsed.profiles[0].inputs[SLOT_TOUCH_SWIPE_R],
+            original.profiles[0].inputs[SLOT_TOUCH_SWIPE_R]
+        );
+    }
+
+    #[test]
+    fn ambiguous_legacy_automation_stays_an_existing_setup() {
+        let mut cfg = AppConfig::default();
+        let input = &mut cfg.profiles[0].inputs[0];
+        input.behavior = None;
+        input.action = Action::Macro {
+            steps: vec![MacroStep::Delay { ms: 10 }.into()],
+        };
+        let before = input.clone();
+        sanitize(&mut cfg);
+        assert_eq!(cfg.profiles[0].inputs[0], before);
+        assert_eq!(cfg.profiles[0].inputs[0].behavior, None);
+    }
+
+    #[test]
     fn roundtrip_and_merge() {
         let cfg = AppConfig::default();
         let text = serde_json::to_string_pretty(&cfg).unwrap();
@@ -618,7 +1333,10 @@ mod tests {
         let mut into = AppConfig::default();
         let name = unique_name(&into.profiles, "Codex");
         assert_eq!(name, "Codex (imported)");
-        into.profiles.push(Profile { name, ..default_codex_profile() });
+        into.profiles.push(Profile {
+            name,
+            ..default_codex_profile()
+        });
         assert_eq!(unique_name(&into.profiles, "Codex"), "Codex (imported 2)");
     }
 }

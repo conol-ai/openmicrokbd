@@ -1,0 +1,662 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.versions.outputs.tag }}
+      app_version: ${{ steps.versions.outputs.app_version }}
+      firmware_version: ${{ steps.versions.outputs.firmware_version }}
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate tag, versions, and source branch
+        id: versions
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+
+          TAG="$GITHUB_REF_NAME"
+          if [[ "$GITHUB_REF_TYPE" != "tag" ||
+                ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "release tags must have the stable form vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+
+          APP_VERSION="$(
+            cargo metadata \
+              --manifest-path app/Cargo.toml \
+              --locked \
+              --no-deps \
+              --format-version 1 |
+              jq -er '.packages[] | select(.name == "openmicro-app") | .version'
+          )"
+          FIRMWARE_VERSION="$(
+            cargo metadata \
+              --manifest-path fw/Cargo.toml \
+              --locked \
+              --no-deps \
+              --format-version 1 |
+              jq -er '.packages[] | select(.name == "openmicro-fw") | .version'
+          )"
+
+          if [[ "$APP_VERSION" != "${TAG#v}" ]]; then
+            echo "tag $TAG does not match app version $APP_VERSION" >&2
+            exit 1
+          fi
+          if [[ ! "$FIRMWARE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "firmware version must have the stable form MAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+
+          DEFAULT_REF="refs/remotes/origin/$DEFAULT_BRANCH"
+          if ! git show-ref --verify --quiet "$DEFAULT_REF"; then
+            echo "checkout did not contain origin/$DEFAULT_BRANCH" >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "$DEFAULT_REF"; then
+            echo "tagged commit is not on the repository default branch" >&2
+            exit 1
+          fi
+
+          {
+            echo "tag=$TAG"
+            echo "app_version=$APP_VERSION"
+            echo "firmware_version=$FIRMWARE_VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+  firmware:
+    name: Build firmware
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the Rust firmware toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.92.0
+          targets: thumbv6m-none-eabi
+          components: llvm-tools-preview
+
+      - name: Build raw firmware and debug ELF
+        env:
+          FIRMWARE_VERSION: ${{ needs.validate.outputs.firmware_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          ./scripts/build-firmware.sh "$GITHUB_WORKSPACE/dist"
+
+          test -f "dist/openmicro-fw-$FIRMWARE_VERSION.bin"
+          test -f "dist/openmicro-fw-$FIRMWARE_VERSION.elf"
+
+      - name: Validate firmware memory bounds and vector table
+        env:
+          FIRMWARE_VERSION: ${{ needs.validate.outputs.firmware_version }}
+        run: |
+          set -euo pipefail
+          python3 - "dist/openmicro-fw-$FIRMWARE_VERSION.bin" <<'PY'
+          import pathlib
+          import struct
+          import sys
+
+          image_path = pathlib.Path(sys.argv[1])
+          image = image_path.read_bytes()
+          if not 192 <= len(image) <= 126 * 1024:
+              raise SystemExit(
+                  f"{image_path}: unsafe size {len(image)}; expected 192..129024 bytes"
+              )
+
+          stack_pointer, reset_vector = struct.unpack_from("<II", image)
+          reset_address = reset_vector & ~1
+          if stack_pointer & 3:
+              raise SystemExit(f"initial stack pointer is not aligned: 0x{stack_pointer:08x}")
+          if not 0x20000000 <= stack_pointer <= 0x20004000:
+              raise SystemExit(f"initial stack pointer is outside 16 KiB SRAM: 0x{stack_pointer:08x}")
+          if reset_vector & 1 == 0:
+              raise SystemExit(f"reset vector does not select Thumb state: 0x{reset_vector:08x}")
+          if not 0x08000000 <= reset_address < 0x0801F800:
+              raise SystemExit(
+                  f"reset vector is outside application flash: 0x{reset_vector:08x}"
+              )
+
+          print(
+              f"{image_path}: {len(image)} bytes, "
+              f"SP=0x{stack_pointer:08x}, reset=0x{reset_vector:08x}"
+          )
+          PY
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-firmware
+          path: |
+            dist/openmicro-fw-${{ needs.validate.outputs.firmware_version }}.bin
+            dist/openmicro-fw-${{ needs.validate.outputs.firmware_version }}.elf
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
+
+  macos:
+    name: Build macOS DMG (${{ matrix.arch }})
+    needs:
+      - validate
+      - firmware
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            macho_arch: arm64
+            runner: macos-15
+            rust_target: aarch64-apple-darwin
+            uname: arm64
+          - arch: x86_64
+            macho_arch: x86_64
+            runner: macos-15-intel
+            rust_target: x86_64-apple-darwin
+            uname: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    environment: release
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download firmware artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-firmware
+          path: dist/firmware
+          digest-mismatch: error
+
+      - name: Install the Rust app toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.92.0
+          targets: ${{ matrix.rust_target }}
+
+      - name: Test the host app
+        if: matrix.arch == 'aarch64'
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          set -euo pipefail
+          cargo test \
+            --manifest-path app/Cargo.toml \
+            --locked \
+            --lib \
+            --target "$RUST_TARGET"
+
+      - name: Prebuild the tagged app
+        env:
+          ARCH: ${{ matrix.arch }}
+          EXPECTED_UNAME: ${{ matrix.uname }}
+          FIRMWARE_VERSION: ${{ needs.validate.outputs.firmware_version }}
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          set -euo pipefail
+          if [[ "$(uname -m)" != "$EXPECTED_UNAME" ]]; then
+            echo "runner architecture $(uname -m) does not match $EXPECTED_UNAME" >&2
+            exit 1
+          fi
+
+          (
+            cd app
+            MACOSX_DEPLOYMENT_TARGET=11.0 \
+            MAKEPAD="apple_bundle,target_$ARCH" \
+            MAKEPAD_PACKAGE_DIR=. \
+            OPENMICRO_FIRMWARE_VERSION="$FIRMWARE_VERSION" \
+              cargo build --release --locked --target "$RUST_TARGET"
+          )
+
+      - name: Import Developer ID and notary credentials
+        env:
+          CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+          CERTIFICATE_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          API_PRIVATE_KEY_P8_BASE64: ${{ secrets.APPLE_API_PRIVATE_KEY_P8_BASE64 }}
+        run: |
+          set -euo pipefail
+
+          for required in \
+            CERTIFICATE_P12_BASE64 \
+            CERTIFICATE_P12_PASSWORD \
+            API_KEY_ID \
+            API_ISSUER_ID \
+            API_PRIVATE_KEY_P8_BASE64
+          do
+            if [[ -z "${!required:-}" ]]; then
+              echo "required release secret $required is not configured" >&2
+              exit 1
+            fi
+          done
+
+          CERTIFICATE_PATH="$RUNNER_TEMP/openmicro-developer-id.p12"
+          PRIVATE_KEY_PATH="$RUNNER_TEMP/AuthKey_${API_KEY_ID}.p8"
+          KEYCHAIN_PATH="$RUNNER_TEMP/openmicro-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+
+          {
+            echo "SIGNING_KEYCHAIN=$KEYCHAIN_PATH"
+            echo "NOTARY_PRIVATE_KEY=$PRIVATE_KEY_PATH"
+          } >> "$GITHUB_ENV"
+
+          printf '%s' "$CERTIFICATE_P12_BASE64" | base64 -D > "$CERTIFICATE_PATH"
+          printf '%s' "$API_PRIVATE_KEY_P8_BASE64" | base64 -D > "$PRIVATE_KEY_PATH"
+          chmod 600 "$CERTIFICATE_PATH" "$PRIVATE_KEY_PATH"
+          test -s "$CERTIFICATE_PATH"
+          test -s "$PRIVATE_KEY_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$CERTIFICATE_P12_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security default-keychain -d user -s "$KEYCHAIN_PATH"
+
+          SIGN_IDENTITY="$(
+            security find-identity -v -p codesigning "$KEYCHAIN_PATH" |
+              sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' |
+              head -n 1
+          )"
+          if [[ -z "$SIGN_IDENTITY" ]]; then
+            echo "the certificate does not contain a Developer ID Application identity" >&2
+            exit 1
+          fi
+
+          {
+            echo "MACOS_SIGN_IDENTITY=$SIGN_IDENTITY"
+            echo "NOTARY_KEY_ID=$API_KEY_ID"
+            echo "NOTARY_ISSUER_ID=$API_ISSUER_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Stage a fail-closed Developer ID bundle
+        env:
+          ARCH: ${{ matrix.arch }}
+          MACHO_ARCH: ${{ matrix.macho_arch }}
+          APP_VERSION: ${{ needs.validate.outputs.app_version }}
+          FIRMWARE_VERSION: ${{ needs.validate.outputs.firmware_version }}
+        run: |
+          set -euo pipefail
+          FIRMWARE_BIN="$GITHUB_WORKSPACE/dist/firmware/openmicro-fw-$FIRMWARE_VERSION.bin"
+          test -f "$FIRMWARE_BIN"
+
+          REQUIRE_SIGNING=1 \
+          MACOS_SIGN_IDENTITY="$MACOS_SIGN_IDENTITY" \
+          OPENMICRO_MACOS_ARCH="$ARCH" \
+            ./scripts/package-macos.sh "$GITHUB_WORKSPACE/dist/macos" "$FIRMWARE_BIN"
+
+          APP_BUNDLE="$GITHUB_WORKSPACE/dist/macos/macos-$ARCH/OpenMicro.app"
+          RESOURCES="$APP_BUNDLE/Contents/Resources"
+          EXECUTABLE="$APP_BUNDLE/Contents/MacOS/OpenMicro"
+          EMBEDDED_FIRMWARE="$RESOURCES/firmware/openmicro-fw.bin"
+          EMBEDDED_MANIFEST="$RESOURCES/firmware/manifest.json"
+
+          test -f "$RESOURCES/openmicro_app/resources/lucide.ttf"
+          test -f "$RESOURCES/makepad_widgets/resources/IBMPlexSans-Text.ttf"
+          test -f "$EMBEDDED_FIRMWARE"
+          plutil -lint "$APP_BUNDLE/Contents/Info.plist"
+          if [[ "$(
+            plutil -extract CFBundleShortVersionString raw \
+              "$APP_BUNDLE/Contents/Info.plist"
+          )" != "$APP_VERSION" ]]; then
+            echo "app bundle version does not match the release tag" >&2
+            exit 1
+          fi
+          jq -e \
+            --arg version "$FIRMWARE_VERSION" \
+            '.version == $version and
+             (.sha256 | test("^[0-9a-f]{64}$"))' \
+            "$EMBEDDED_MANIFEST" >/dev/null
+
+          if [[ "$(lipo -archs "$EXECUTABLE")" != "$MACHO_ARCH" ]]; then
+            echo "unexpected Mach-O architectures: $(lipo -archs "$EXECUTABLE")" >&2
+            exit 1
+          fi
+
+          EMBEDDED_SHA="$(shasum -a 256 "$EMBEDDED_FIRMWARE" | awk '{print $1}')"
+          MANIFEST_SHA="$(jq -er '.sha256' "$EMBEDDED_MANIFEST")"
+          if [[ "$EMBEDDED_SHA" != "$MANIFEST_SHA" ]]; then
+            echo "embedded firmware checksum does not match its manifest" >&2
+            exit 1
+          fi
+          if ! cmp -s "$FIRMWARE_BIN" "$EMBEDDED_FIRMWARE"; then
+            echo "app bundle does not contain the built firmware artifact" >&2
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+          codesign -dvvv "$APP_BUNDLE" 2>&1 |
+            grep -F "Authority=Developer ID Application:"
+          codesign -dvvv "$APP_BUNDLE" 2>&1 |
+            grep -E 'flags=.*\(runtime\)'
+
+      - name: Notarize, staple, and verify the final DMG
+        env:
+          ARCH: ${{ matrix.arch }}
+          APP_VERSION: ${{ needs.validate.outputs.app_version }}
+        run: |
+          set -euo pipefail
+          APP_BUNDLE="$GITHUB_WORKSPACE/dist/macos/macos-$ARCH/OpenMicro.app"
+          DMG_ROOT="$GITHUB_WORKSPACE/dist/macos/macos-$ARCH/dmg-root"
+          DMG="$GITHUB_WORKSPACE/dist/macos/OpenMicro-$APP_VERSION-macos-$ARCH.dmg"
+          APP_ZIP="$RUNNER_TEMP/OpenMicro-$APP_VERSION-$ARCH-notarize.zip"
+
+          notarize() {
+            local artifact="$1"
+            local label="$2"
+            local result="$RUNNER_TEMP/$label-notary-result.json"
+            local log="$RUNNER_TEMP/$label-notary-log.json"
+            local submission_id
+
+            if ! xcrun notarytool submit "$artifact" \
+              --key "$NOTARY_PRIVATE_KEY" \
+              --key-id "$NOTARY_KEY_ID" \
+              --issuer "$NOTARY_ISSUER_ID" \
+              --wait \
+              --output-format json > "$result"
+            then
+              cat "$result" >&2 || true
+              return 1
+            fi
+            jq -e '.status == "Accepted"' "$result"
+            submission_id="$(jq -er '.id' "$result")"
+            jq '{id, status, message}' "$result"
+
+            if ! xcrun notarytool log "$submission_id" \
+              --key "$NOTARY_PRIVATE_KEY" \
+              --key-id "$NOTARY_KEY_ID" \
+              --issuer "$NOTARY_ISSUER_ID" > "$log"
+            then
+              echo "warning: accepted notarization log could not be downloaded" >&2
+            fi
+          }
+
+          codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+          codesign -dvvv "$APP_BUNDLE" 2>&1 |
+            grep -F "Authority=Developer ID Application:"
+          codesign -dvvv "$APP_BUNDLE" 2>&1 |
+            grep -E 'flags=.*\(runtime\)'
+
+          rm -f "$APP_ZIP"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_BUNDLE" "$APP_ZIP"
+          notarize "$APP_ZIP" "app-$ARCH"
+          xcrun stapler staple "$APP_BUNDLE"
+          xcrun stapler validate "$APP_BUNDLE"
+          spctl --assess --type execute --verbose=4 "$APP_BUNDLE"
+
+          rm -rf "$DMG_ROOT"
+          mkdir -p "$DMG_ROOT"
+          ditto "$APP_BUNDLE" "$DMG_ROOT/OpenMicro.app"
+          ln -s /Applications "$DMG_ROOT/Applications"
+          rm -f "$DMG"
+          hdiutil create \
+            -volname "OpenMicro" \
+            -srcfolder "$DMG_ROOT" \
+            -fs HFS+ \
+            -format UDZO \
+            -ov \
+            "$DMG"
+          codesign \
+            --force \
+            --timestamp \
+            --keychain "$SIGNING_KEYCHAIN" \
+            --sign "$MACOS_SIGN_IDENTITY" \
+            "$DMG"
+          codesign --verify --strict --verbose=2 "$DMG"
+          hdiutil verify "$DMG"
+
+          notarize "$DMG" "dmg-$ARCH"
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+          codesign --verify --strict --verbose=2 "$DMG"
+          hdiutil verify "$DMG"
+          spctl \
+            --assess \
+            --type open \
+            --context context:primary-signature \
+            --verbose=4 \
+            "$DMG"
+
+          MOUNT_POINT="$RUNNER_TEMP/openmicro-$ARCH-mount"
+          mkdir -p "$MOUNT_POINT"
+          cleanup_mount() {
+            hdiutil detach "$MOUNT_POINT" >/dev/null 2>&1 || true
+          }
+          trap cleanup_mount EXIT
+          hdiutil attach "$DMG" -readonly -nobrowse -mountpoint "$MOUNT_POINT"
+          codesign --verify --deep --strict --verbose=2 "$MOUNT_POINT/OpenMicro.app"
+          test -L "$MOUNT_POINT/Applications"
+          test -f \
+            "$MOUNT_POINT/OpenMicro.app/Contents/Resources/openmicro_app/resources/lucide.ttf"
+          cleanup_mount
+          trap - EXIT
+
+      - name: Remove signing credentials
+        if: always()
+        run: |
+          security delete-keychain \
+            "${SIGNING_KEYCHAIN:-$RUNNER_TEMP/openmicro-signing.keychain-db}" \
+            >/dev/null 2>&1 || true
+          rm -f \
+            "$RUNNER_TEMP/openmicro-developer-id.p12" \
+            "${NOTARY_PRIVATE_KEY:-$RUNNER_TEMP/not-configured-private-key}"
+
+      - name: Upload notarized DMG
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-macos-${{ matrix.arch }}
+          path: dist/macos/OpenMicro-${{ needs.validate.outputs.app_version }}-macos-${{ matrix.arch }}.dmg
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
+
+  publish:
+    name: Publish GitHub release
+    needs:
+      - validate
+      - firmware
+      - macos
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Download verified build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+          digest-mismatch: error
+
+      - name: Generate updater manifest and checksums
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+          APP_VERSION: ${{ needs.validate.outputs.app_version }}
+          FIRMWARE_VERSION: ${{ needs.validate.outputs.firmware_version }}
+        run: |
+          set -euo pipefail
+          ARM_DMG="OpenMicro-$APP_VERSION-macos-aarch64.dmg"
+          INTEL_DMG="OpenMicro-$APP_VERSION-macos-x86_64.dmg"
+          FIRMWARE_BIN="openmicro-fw-$FIRMWARE_VERSION.bin"
+          FIRMWARE_ELF="openmicro-fw-$FIRMWARE_VERSION.elf"
+
+          for asset in "$ARM_DMG" "$INTEL_DMG" "$FIRMWARE_BIN" "$FIRMWARE_ELF"; do
+            if [[ ! -f "dist/$asset" ]]; then
+              echo "missing release asset: $asset" >&2
+              exit 1
+            fi
+          done
+
+          ARM_SHA="$(sha256sum "dist/$ARM_DMG" | awk '{print $1}')"
+          INTEL_SHA="$(sha256sum "dist/$INTEL_DMG" | awk '{print $1}')"
+          FIRMWARE_SHA="$(sha256sum "dist/$FIRMWARE_BIN" | awk '{print $1}')"
+          ARM_SIZE="$(stat -c '%s' "dist/$ARM_DMG")"
+          INTEL_SIZE="$(stat -c '%s' "dist/$INTEL_DMG")"
+          FIRMWARE_SIZE="$(stat -c '%s' "dist/$FIRMWARE_BIN")"
+          RELEASE_BASE="https://github.com/$GITHUB_REPOSITORY/releases"
+          ASSET_BASE="$RELEASE_BASE/download/$TAG"
+
+          jq -n \
+            --arg release_url "$RELEASE_BASE/tag/$TAG" \
+            --arg app_version "$APP_VERSION" \
+            --arg arm_name "$ARM_DMG" \
+            --arg arm_url "$ASSET_BASE/$ARM_DMG" \
+            --arg arm_sha "$ARM_SHA" \
+            --argjson arm_size "$ARM_SIZE" \
+            --arg intel_name "$INTEL_DMG" \
+            --arg intel_url "$ASSET_BASE/$INTEL_DMG" \
+            --arg intel_sha "$INTEL_SHA" \
+            --argjson intel_size "$INTEL_SIZE" \
+            --arg firmware_version "$FIRMWARE_VERSION" \
+            --arg firmware_name "$FIRMWARE_BIN" \
+            --arg firmware_url "$ASSET_BASE/$FIRMWARE_BIN" \
+            --arg firmware_sha "$FIRMWARE_SHA" \
+            --argjson firmware_size "$FIRMWARE_SIZE" \
+            '{
+              schema: 1,
+              product: "openmicrokbd",
+              release_url: $release_url,
+              app: {
+                version: $app_version,
+                macos: {
+                  aarch64: {
+                    name: $arm_name,
+                    url: $arm_url,
+                    sha256: $arm_sha,
+                    size: $arm_size
+                  },
+                  x86_64: {
+                    name: $intel_name,
+                    url: $intel_url,
+                    sha256: $intel_sha,
+                    size: $intel_size
+                  }
+                }
+              },
+              firmware: {
+                version: $firmware_version,
+                board: "openmicro-stm32f072cb",
+                protocol: 2,
+                name: $firmware_name,
+                url: $firmware_url,
+                sha256: $firmware_sha,
+                size: $firmware_size
+              }
+            }' > dist/release-manifest.json
+          jq -e \
+            '.schema == 1 and
+             .product == "openmicrokbd" and
+             .firmware.board == "openmicro-stm32f072cb" and
+             .firmware.protocol == 2' \
+            dist/release-manifest.json >/dev/null
+
+          (
+            cd dist
+            sha256sum \
+              "$ARM_DMG" \
+              "$INTEL_DMG" \
+              "$FIRMWARE_BIN" \
+              "$FIRMWARE_ELF" \
+              release-manifest.json \
+              > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+
+      - name: Attest release artifacts
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: dist/*
+
+      - name: Create a draft, attach every asset, then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if RELEASE_JSON="$(
+            gh release view "$TAG" --json isDraft,assets 2>/dev/null
+          )"
+          then
+            if [[ "$(jq -r '.isDraft' <<< "$RELEASE_JSON")" != "true" ]]; then
+              echo "release $TAG is already published; refusing to mutate it" >&2
+              exit 1
+            fi
+            declare -A EXPECTED_ASSETS=()
+            while IFS= read -r path; do
+              EXPECTED_ASSETS["$(basename "$path")"]=1
+            done < <(find dist -maxdepth 1 -type f -print)
+            while IFS= read -r asset; do
+              if [[ -z "${EXPECTED_ASSETS[$asset]+present}" ]]; then
+                echo "removing stale draft asset: $asset"
+                gh release delete-asset "$TAG" "$asset" --yes
+              fi
+            done < <(jq -r '.assets[].name' <<< "$RELEASE_JSON")
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --verify-tag \
+              --draft \
+              --generate-notes \
+              --title "OpenMicro $TAG"
+          fi
+
+          gh release edit "$TAG" --draft=false --latest
+          RELEASE_JSON="$(gh release view "$TAG" --json isDraft,url)"
+          if [[ "$(jq -r '.isDraft' <<< "$RELEASE_JSON")" != "false" ]]; then
+            echo "release $TAG did not publish successfully" >&2
+            exit 1
+          fi
+          jq -r '.url' <<< "$RELEASE_JSON"

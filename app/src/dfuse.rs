@@ -12,6 +12,8 @@ use std::time::Duration;
 
 const DFU_VID: u16 = 0x0483;
 const DFU_PID: u16 = 0xdf11;
+/// Final 2 KiB page (0x0801_F800..) stores the device keymap/config.
+const MAX_FIRMWARE_LEN: usize = 126 * 1024;
 
 const FLASH_BASE: u32 = 0x0800_0000;
 const PAGE_SIZE: usize = 2048;
@@ -27,12 +29,25 @@ const STATE_DFU_ERROR: u8 = 10;
 
 const TIMEOUT: Duration = Duration::from_secs(3);
 
-pub fn find_bootloader() -> Option<Device<GlobalContext>> {
-    rusb::devices().ok()?.iter().find(|d| {
-        d.device_descriptor()
+pub fn find_bootloader() -> Result<Option<Device<GlobalContext>>, String> {
+    let devices = rusb::devices().map_err(|e| format!("enumerate USB devices: {e}"))?;
+    let mut found = None;
+    for device in devices.iter() {
+        let matches = device
+            .device_descriptor()
             .map(|desc| desc.vendor_id() == DFU_VID && desc.product_id() == DFU_PID)
-            .unwrap_or(false)
-    })
+            .unwrap_or(false);
+        if matches {
+            if found.is_some() {
+                return Err(
+                    "more than one STM32 ROM DFU device is connected; disconnect the unrelated device"
+                        .into(),
+                );
+            }
+            found = Some(device);
+        }
+    }
+    Ok(found)
 }
 
 struct Dfu {
@@ -150,6 +165,13 @@ pub fn flash(
     image: &[u8],
     mut progress: impl FnMut(&str, f64),
 ) -> Result<(), String> {
+    if image.len() > MAX_FIRMWARE_LEN {
+        return Err(format!(
+            "firmware is {} bytes; maximum before the reserved config page is {}",
+            image.len(),
+            MAX_FIRMWARE_LEN
+        ));
+    }
     let dfu = Dfu::open(device)?;
 
     // A previous failed attempt can leave the state machine in dfuERROR.

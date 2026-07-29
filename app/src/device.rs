@@ -62,21 +62,40 @@ const SAVE_TIMEOUT: Duration = Duration::from_millis(1500);
 /// Posted to the UI: presence, live input events, and keymap traffic.
 #[derive(Debug, Clone)]
 pub enum DeviceMsg {
-    Connected { version: String, serial: String },
+    Connected {
+        version: String,
+        serial: String,
+    },
     Disconnected,
     Event(PadEvent),
-    Keymap { slots: [Slot; SLOT_COUNT], joy_threshold: u16 },
-    SyncDone { ok: bool, detail: String },
+    Keymap {
+        slots: [Slot; SLOT_COUNT],
+        joy_threshold: u16,
+    },
+    SyncDone {
+        ok: bool,
+        detail: String,
+    },
 }
 
 /// One decoded input event from the pad ([0x80, src, a, b] on the wire).
 #[derive(Clone, Copy, Debug)]
 pub enum PadEvent {
-    Key { index: u8, pressed: bool },
-    Encoder { cw: bool },
-    EncoderButton { pressed: bool },
+    Key {
+        index: u8,
+        pressed: bool,
+    },
+    Encoder {
+        cw: bool,
+    },
+    EncoderButton {
+        pressed: bool,
+    },
     /// dir: 0 up, 1 down, 2 left, 3 right, 4 press.
-    Joystick { dir: u8, active: bool },
+    Joystick {
+        dir: u8,
+        active: bool,
+    },
     Touch,
 }
 
@@ -95,9 +114,17 @@ pub enum UpdateMsg {
 
 /// UI -> worker commands.
 pub enum DeviceCmd {
-    StartUpdate { image: PathBuf },
+    StartUpdate {
+        image: PathBuf,
+        /// Release downloads name the version they are expected to boot.
+        /// Manual recovery images leave this unset.
+        expected_version: Option<String>,
+    },
     EnterDfuOnly,
-    SyncKeymap { slots: [Slot; SLOT_COUNT], joy_threshold: u16 },
+    SyncKeymap {
+        slots: [Slot; SLOT_COUNT],
+        joy_threshold: u16,
+    },
     ReadKeymap,
     FactoryReset,
 }
@@ -123,7 +150,10 @@ enum SessionEnd {
     /// Read error or the device silently vanished — Disconnected, re-search.
     Lost,
     /// UI asked for a firmware update; the update path re-opens the device.
-    RunUpdate(PathBuf),
+    RunUpdate {
+        image: PathBuf,
+        expected_version: Option<String>,
+    },
     /// UI asked for DFU only; sent on a fresh handle after ours is closed.
     EnterDfu,
     /// The command channel closed — the app is shutting down.
@@ -145,7 +175,10 @@ fn worker(mut api: HidApi, rx: mpsc::Receiver<DeviceCmd>) {
         match end {
             SessionEnd::Lost => {}
             SessionEnd::EnterDfu => enter_dfu_standalone(&mut api),
-            SessionEnd::RunUpdate(image) => run_update(&mut api, &image),
+            SessionEnd::RunUpdate {
+                image,
+                expected_version,
+            } => run_update(&mut api, &image, expected_version.as_deref()),
             SessionEnd::Quit => return,
         }
     }
@@ -153,7 +186,10 @@ fn worker(mut api: HidApi, rx: mpsc::Receiver<DeviceCmd>) {
 
 /// Search for the pad every ~800 ms, still serving UI commands (they mostly
 /// fail politely while unplugged). Returns None when the channel closes.
-fn wait_for_device(api: &mut HidApi, rx: &mpsc::Receiver<DeviceCmd>) -> Option<(HidDevice, String)> {
+fn wait_for_device(
+    api: &mut HidApi,
+    rx: &mpsc::Receiver<DeviceCmd>,
+) -> Option<(HidDevice, String)> {
     loop {
         // Probe first so a plugged-in pad connects without the initial wait.
         let _ = api.refresh_devices();
@@ -174,7 +210,10 @@ fn wait_for_device(api: &mut HidApi, rx: &mpsc::Receiver<DeviceCmd>) -> Option<(
 /// it can resume a pad already sitting in the DFU bootloader.
 fn handle_cmd_offline(api: &mut HidApi, cmd: DeviceCmd) {
     match cmd {
-        DeviceCmd::StartUpdate { image } => run_update(api, &image),
+        DeviceCmd::StartUpdate {
+            image,
+            expected_version,
+        } => run_update(api, &image, expected_version.as_deref()),
         DeviceCmd::EnterDfuOnly => enter_dfu_standalone(api),
         DeviceCmd::SyncKeymap { .. } | DeviceCmd::FactoryReset => {
             Cx::post_action(DeviceMsg::SyncDone {
@@ -193,9 +232,10 @@ fn hello(dev: &HidDevice, serial: String) {
     let version = query_version(dev).unwrap_or_else(|| "?".into());
     Cx::post_action(DeviceMsg::Connected { version, serial });
     match read_keymap(dev) {
-        Ok((slots, joy_threshold)) => {
-            Cx::post_action(DeviceMsg::Keymap { slots, joy_threshold })
-        }
+        Ok((slots, joy_threshold)) => Cx::post_action(DeviceMsg::Keymap {
+            slots,
+            joy_threshold,
+        }),
         Err(e) => Cx::post_action(DeviceMsg::SyncDone {
             ok: false,
             detail: format!("keymap read failed: {e}"),
@@ -211,9 +251,20 @@ fn session(api: &mut HidApi, rx: &mpsc::Receiver<DeviceCmd>, dev: &HidDevice) ->
         // (a) Commands first so a sync isn't starved by a chatty event stream.
         loop {
             match rx.try_recv() {
-                Ok(DeviceCmd::StartUpdate { image }) => return SessionEnd::RunUpdate(image),
+                Ok(DeviceCmd::StartUpdate {
+                    image,
+                    expected_version,
+                }) => {
+                    return SessionEnd::RunUpdate {
+                        image,
+                        expected_version,
+                    }
+                }
                 Ok(DeviceCmd::EnterDfuOnly) => return SessionEnd::EnterDfu,
-                Ok(DeviceCmd::SyncKeymap { slots, joy_threshold }) => {
+                Ok(DeviceCmd::SyncKeymap {
+                    slots,
+                    joy_threshold,
+                }) => {
                     let (ok, detail) = match sync_keymap(dev, &slots, joy_threshold) {
                         Ok(()) => (true, "keymap written · saved to flash".to_string()),
                         Err(e) => (false, e),
@@ -221,9 +272,10 @@ fn session(api: &mut HidApi, rx: &mpsc::Receiver<DeviceCmd>, dev: &HidDevice) ->
                     Cx::post_action(DeviceMsg::SyncDone { ok, detail });
                 }
                 Ok(DeviceCmd::ReadKeymap) => match read_keymap(dev) {
-                    Ok((slots, joy_threshold)) => {
-                        Cx::post_action(DeviceMsg::Keymap { slots, joy_threshold })
-                    }
+                    Ok((slots, joy_threshold)) => Cx::post_action(DeviceMsg::Keymap {
+                        slots,
+                        joy_threshold,
+                    }),
                     Err(e) => Cx::post_action(DeviceMsg::SyncDone {
                         ok: false,
                         detail: format!("keymap read failed: {e}"),
@@ -232,7 +284,10 @@ fn session(api: &mut HidApi, rx: &mpsc::Receiver<DeviceCmd>, dev: &HidDevice) ->
                 Ok(DeviceCmd::FactoryReset) => {
                     match factory_reset(dev).and_then(|()| read_keymap(dev)) {
                         Ok((slots, joy_threshold)) => {
-                            Cx::post_action(DeviceMsg::Keymap { slots, joy_threshold });
+                            Cx::post_action(DeviceMsg::Keymap {
+                                slots,
+                                joy_threshold,
+                            });
                             Cx::post_action(DeviceMsg::SyncDone {
                                 ok: true,
                                 detail: "factory defaults restored".into(),
@@ -276,7 +331,12 @@ fn session(api: &mut HidApi, rx: &mpsc::Receiver<DeviceCmd>, dev: &HidDevice) ->
 /// the command byte; reports with the top bit set are input events that raced
 /// the reply — those are decoded and posted, never dropped, and the read
 /// continues until the real reply or the deadline.
-fn command(dev: &HidDevice, cmd: &[u8], reply: &mut [u8; 32], timeout: Duration) -> Result<usize, String> {
+fn command(
+    dev: &HidDevice,
+    cmd: &[u8],
+    reply: &mut [u8; 32],
+    timeout: Duration,
+) -> Result<usize, String> {
     debug_assert!(!cmd.is_empty() && cmd.len() <= 32);
     let mut out = [0u8; 33];
     out[1..1 + cmd.len()].copy_from_slice(cmd);
@@ -328,10 +388,16 @@ fn decode_event(buf: &[u8]) -> Option<PadEvent> {
     }
     let (a, b) = (buf[2], buf[3]);
     match buf[1] {
-        0 => Some(PadEvent::Key { index: a, pressed: b != 0 }),
+        0 => Some(PadEvent::Key {
+            index: a,
+            pressed: b != 0,
+        }),
         1 => Some(PadEvent::Encoder { cw: a != 0 }),
         2 => Some(PadEvent::EncoderButton { pressed: a != 0 }),
-        3 => Some(PadEvent::Joystick { dir: a, active: b != 0 }),
+        3 => Some(PadEvent::Joystick {
+            dir: a,
+            active: b != 0,
+        }),
         4 => Some(PadEvent::Touch),
         _ => None,
     }
@@ -378,7 +444,9 @@ fn read_keymap(dev: &HidDevice) -> Result<([Slot; SLOT_COUNT], u16), String> {
         let count = reply[2] as usize;
         let base = page as usize * PAGE_SLOTS;
         if base + count > SLOT_COUNT || 3 + count * 4 > n {
-            return Err(format!("GET_KEYMAP page {page}: implausible slot count {count}"));
+            return Err(format!(
+                "GET_KEYMAP page {page}: implausible slot count {count}"
+            ));
         }
         for (i, chunk) in reply[3..3 + count * 4].chunks_exact(4).enumerate() {
             slots[base + i] = slot_from_wire(chunk);
@@ -393,7 +461,11 @@ fn read_keymap(dev: &HidDevice) -> Result<([Slot; SLOT_COUNT], u16), String> {
 }
 
 /// Push the whole keymap + analog tuning to RAM, then SAVE to flash.
-fn sync_keymap(dev: &HidDevice, slots: &[Slot; SLOT_COUNT], joy_threshold: u16) -> Result<(), String> {
+fn sync_keymap(
+    dev: &HidDevice,
+    slots: &[Slot; SLOT_COUNT],
+    joy_threshold: u16,
+) -> Result<(), String> {
     for page in 0..KEYMAP_PAGES {
         let base = page as usize * PAGE_SLOTS;
         let count = PAGE_SLOTS.min(SLOT_COUNT - base);
@@ -410,7 +482,12 @@ fn sync_keymap(dev: &HidDevice, slots: &[Slot; SLOT_COUNT], joy_threshold: u16) 
     let mut reply = [0u8; 32];
     let n = command(dev, &[CMD_SET_ANALOG, lo, hi], &mut reply, REPLY_TIMEOUT)?;
     expect_ack(n, &reply, "SET_ANALOG")?;
-    let n = command(dev, &[CMD_SAVE, b'S', b'A', b'V', b'E'], &mut reply, SAVE_TIMEOUT)?;
+    let n = command(
+        dev,
+        &[CMD_SAVE, b'S', b'A', b'V', b'E'],
+        &mut reply,
+        SAVE_TIMEOUT,
+    )?;
     expect_ack(n, &reply, "SAVE")
 }
 
@@ -462,7 +539,12 @@ fn query_version(dev: &HidDevice) -> Option<String> {
 
 fn enter_dfu(dev: &HidDevice) -> Result<(), String> {
     let mut reply = [0u8; 32];
-    let n = command(dev, &[CMD_ENTER_DFU, b'D', b'F', b'U', b'!'], &mut reply, REPLY_TIMEOUT)?;
+    let n = command(
+        dev,
+        &[CMD_ENTER_DFU, b'D', b'F', b'U', b'!'],
+        &mut reply,
+        REPLY_TIMEOUT,
+    )?;
     if n >= 2 && reply[1] == 0x01 {
         Ok(())
     } else {
@@ -488,7 +570,7 @@ fn enter_dfu_standalone(api: &mut HidApi) {
 
 /// The whole update: sanity-check the image, drop the device into the ROM
 /// bootloader, flash over DFU, wait for the app to come back.
-fn run_update(api: &mut HidApi, image_path: &PathBuf) {
+fn run_update(api: &mut HidApi, image_path: &PathBuf, expected_version: Option<&str>) {
     let phase = |s: &str| Cx::post_action(UpdateMsg::Phase(s.to_string()));
     let log = |s: String| Cx::post_action(UpdateMsg::Log(s));
     let fail = |s: String| Cx::post_action(UpdateMsg::Failed(s));
@@ -498,18 +580,26 @@ fn run_update(api: &mut HidApi, image_path: &PathBuf) {
         Ok(b) => b,
         Err(e) => return fail(format!("cannot read image: {e}")),
     };
-    if image.len() < 192 || image.len() > 128 * 1024 {
+    const MAX_FIRMWARE_LEN: usize = 126 * 1024;
+    if image.len() < 192 || image.len() > MAX_FIRMWARE_LEN {
         return fail(format!(
-            "image is {} bytes — not a plausible 128K-flash firmware",
-            image.len()
+            "image is {} bytes — firmware must fit below the reserved config page (max {})",
+            image.len(),
+            MAX_FIRMWARE_LEN
         ));
     }
     let sp = u32::from_le_bytes(image[0..4].try_into().unwrap());
-    // Reset vector carries the thumb bit; mask it for the range check.
-    let rv = u32::from_le_bytes(image[4..8].try_into().unwrap()) & !1;
-    if !(0x2000_0000..=0x2000_8000).contains(&sp) || !(0x0800_0000..0x0802_0000).contains(&rv) {
+    let rv_raw = u32::from_le_bytes(image[4..8].try_into().unwrap());
+    // Cortex-M reset handlers must carry the Thumb bit. The F072CB has 16 KiB
+    // SRAM and application flash stops before the config page at 0x0801_F800.
+    let rv = rv_raw & !1;
+    if sp & 0x3 != 0
+        || !(0x2000_0000..=0x2000_4000).contains(&sp)
+        || rv_raw & 1 == 0
+        || !(0x0800_0000..0x0801_F800).contains(&rv)
+    {
         return fail(format!(
-            "not an OpenMicro firmware image (SP={sp:08x} RV={rv:08x}) — expected a raw .bin for 0x08000000"
+            "not an OpenMicro firmware image (SP={sp:08x} RV={rv_raw:08x}) — expected a Thumb vector table for 0x08000000"
         ));
     }
     log(format!(
@@ -521,30 +611,45 @@ fn run_update(api: &mut HidApi, image_path: &PathBuf) {
         image.len()
     ));
 
-    // -- get the device into the bootloader (or find it already there) --
-    if dfuse::find_bootloader().is_none() {
-        phase("Rebooting the pad into DFU mode…");
-        match open_raw(api) {
-            Some(dev) => {
-                if let Err(e) = enter_dfu(&dev) {
-                    return fail(format!("enter DFU: {e}"));
-                }
-            }
-            None => {
-                return fail(
-                    "device not found (and no DFU bootloader present) — plug the pad in".into(),
-                )
+    // -- get this pad into the bootloader (or resume one already there) --
+    //
+    // A generic STM32 ROM bootloader has no OpenMicro product identity. If a
+    // normal pad and any 0483:df11 device are both present, never guess: that
+    // DFU device could be unrelated hardware. A lone pre-existing DFU device
+    // is accepted only as the user's explicit recovery target.
+    let raw = open_raw(api);
+    let bootloader = match dfuse::find_bootloader() {
+        Ok(device) => device,
+        Err(e) => return fail(e),
+    };
+    match (raw, bootloader.is_some()) {
+        (Some(_), true) => {
+            return fail(
+                "an OpenMicro pad and a separate STM32 DFU device are both connected; disconnect the unrelated DFU device"
+                    .into(),
+            )
+        }
+        (Some(dev), false) => {
+            phase("Rebooting the pad into DFU mode…");
+            if let Err(e) = enter_dfu(&dev) {
+                return fail(format!("enter DFU: {e}"));
             }
         }
-    } else {
-        log("DFU bootloader already present — resuming".into());
+        (None, true) => log("DFU bootloader already present — resuming recovery".into()),
+        (None, false) => {
+            return fail(
+                "device not found (and no DFU bootloader present) — plug the pad in".into(),
+            )
+        }
     }
 
     phase("Waiting for the DFU bootloader…");
     let deadline = Instant::now() + Duration::from_secs(8);
     let dfu = loop {
-        if let Some(d) = dfuse::find_bootloader() {
-            break d;
+        match dfuse::find_bootloader() {
+            Ok(Some(device)) => break device,
+            Ok(None) => {}
+            Err(e) => return fail(e),
         }
         if Instant::now() > deadline {
             return fail("DFU bootloader (0483:df11) never enumerated".into());
@@ -567,6 +672,13 @@ fn run_update(api: &mut HidApi, image_path: &PathBuf) {
         std::thread::sleep(Duration::from_millis(300));
         if let Some(dev) = open_raw(api) {
             let version = query_version(&dev).unwrap_or_else(|| "?".into());
+            if let Some(expected) = expected_version {
+                if version != expected {
+                    return fail(format!(
+                        "pad returned after flashing, but reports firmware {version} (expected {expected})"
+                    ));
+                }
+            }
             Cx::post_action(UpdateMsg::Done { version });
             // The handle is dropped here; the worker's reconnect cycle will
             // re-open the pad and re-post Connected + Keymap.
@@ -575,5 +687,22 @@ fn run_update(api: &mut HidApi, image_path: &PathBuf) {
         if Instant::now() > deadline {
             return fail("flashed OK, but the device did not re-enumerate".into());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lock_screen_consumer_usage_roundtrips_little_endian() {
+        let lock = Slot {
+            kind: SlotKind::Consumer,
+            mods: 0,
+            code: 0x019E,
+        };
+        let wire = slot_to_wire(lock);
+        assert_eq!(wire, [2, 0, 0x9E, 0x01]);
+        assert_eq!(slot_from_wire(&wire), lock);
     }
 }

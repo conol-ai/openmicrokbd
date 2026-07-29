@@ -118,7 +118,7 @@ any IN report starting `0x80` is an unsolicited input event, not a reply:
 
 | OUT report | Effect |
 |---|---|
-| `[0x01, …]` | Replies `[0x01, len, "0.2.0"…]` — running firmware version |
+| `[0x01, …]` | Replies `[0x01, len, "0.2.1"…]` — running firmware version |
 | `[0x02, 'D','F','U','!']` | Acks `[0x02, 0x01]`, then reboots into the ROM DFU bootloader |
 | `[0x03, page]` | Replies `[0x03, page, count, count×4 slot bytes]` — read keymap (4 pages of ≤7 slots; slot = kind, mods, code LE; kind 0 none / 1 keyboard / 2 consumer) |
 | `[0x04, page, count, slots…]` | Acks `[0x04, ok]` — write keymap page to RAM, live immediately |

@@ -36,14 +36,21 @@ This board was designed in **CoHDL**, a hardware description language newly deve
 ## Building
 
 ```sh
-# Firmware (thumbv6m target; flash over SWD or USB DFU — see fw/README.md)
-cd fw && cargo build --release
+# Production firmware binary + debug ELF
+scripts/build-firmware.sh dist
 
-# Companion app
-cd app && cargo run --release
+# Native macOS app bundle + DMG (the app is ad-hoc signed for local testing)
+scripts/package-macos.sh dist dist/openmicro-fw-<firmware-version>.bin
+
+# Or run the companion app from source
+cd app && cargo run --release --locked
 ```
 
 Rebuilding the PCB from `src/` requires the CoHDL compiler, which is being prepared for open source — the generated netlist/BOM/footprints are checked in under `out/` in the meantime.
+
+Signed releases build both Intel and Apple Silicon DMGs plus firmware through
+GitHub Actions. See [`RELEASING.md`](RELEASING.md) for versioning, Apple
+signing/notarization secrets, the required device smoke test, and the tag flow.
 
 ## Production files
 
