@@ -55,6 +55,11 @@ pub footprint QFP50P900X900X160_48N {
     pad 46: P_LQFP48_Lead_V at (-1.75mm, -4.1625mm)
     pad 47: P_LQFP48_Lead_V at (-2.25mm, -4.1625mm)
     pad 48: P_LQFP48_Lead_V at (-2.75mm, -4.1625mm)
+    // RFC-031: pin 1 is the top of the LEFT lead column, so the dot lands
+    // outboard of it — an assembler cannot orient a 48-lead QFP without it.
+    silkscreen {
+        pin_1_marker near pad 1 shape dot
+    }
     courtyard { shape: rect, at: (0mm, 0mm), size: (9.4mm, 9.4mm) }
     silkscreen_ref { at: (0mm, -5.2mm) }
 }
@@ -74,8 +79,12 @@ pub footprint QFP50P900X900X160_48N {
 //   pad 1        (0, -5.9)     <- page (5.90, 0),  O1.20 drill
 //   pad 2        (5, -3.8)     <- page (3.80, 5.00)
 //   mount_hole 1 O5.00 at (0,0)   the recommended centre-pole hole
-//   mount_hole 2 the 2.00 x 1.50 OBROUND leg hole -> here 1.5 wide x 2.0 tall
-//                at (-5, 5.15) <- page (-5.15, -5.00); RFC-023 oval
+//   pad 3       the 2.00 x 1.50 OBROUND leg hole -> here 1.5 wide x 2.0 tall
+//                at (-5, 5.15) <- page (-5.15, -5.00). PLATED, not a bare hole:
+//                the leg is metal, so soldering it carries keypress force into
+//                the board instead of leaving the two contacts to take it. It
+//                is an electrically dead anchor — the device declares it
+//                `optional`, connected to nothing.
 //   light window (0, +4.93)    <- page (-4.93, 0); no land here — the separate
 //                reverse-mount SK6812MINI-E is placed centred on this point.
 //
@@ -89,7 +98,7 @@ pub footprint FP_SW_Choc_V2 {
     pad 1: P_Choc_Contact at (0mm, -5.9mm)
     pad 2: P_Choc_Contact at (5mm, -3.8mm)
     mount_hole 1: non_plated at (0mm, 0mm) diameter 5mm
-    mount_hole 2: non_plated shape: oval at (-5mm, 5.15mm) size: (1.5mm, 2mm)
+    pad 3: P_Choc_Leg at (-5mm, 5.15mm)
     courtyard { shape: rect, at: (0mm, 0mm), size: (15.5mm, 15.5mm) }
 }
 
@@ -98,6 +107,12 @@ pub footprint FP_SW_Choc_V2 {
 pub footprint FP_D_SOD_123 {
     pad 1: P_SOD123_Term at (-1.65mm, 0mm)
     pad 2: P_SOD123_Term at (1.65mm, 0mm)
+    // RFC-031: pad 1 is the cathode (the band on the real part), so the silk
+    // band goes there — a diode fitted backwards is the classic reversal this
+    // mark exists to prevent.
+    silkscreen {
+        polarity_marker cathode_pin 1 shape band
+    }
     courtyard { shape: rect, at: (0mm, 0mm), size: (4.2mm, 1.6mm) }
     silkscreen_ref { at: (0mm, -1.3mm) }
 }
@@ -110,44 +125,61 @@ pub footprint FP_SOT_23_6 {
     pad 4: P_SOT23_6_Lead at (1.1375mm, 0.95mm)
     pad 5: P_SOT23_6_Lead at (1.1375mm, 0mm)
     pad 6: P_SOT23_6_Lead at (1.1375mm, -0.95mm)
+    // RFC-031: SOT-23-6 is rotationally ambiguous by eye — pin 1 is the
+    // left column's first lead.
+    silkscreen {
+        pin_1_marker near pad 1 shape dot
+    }
     courtyard { shape: rect, at: (0mm, 0mm), size: (3.6mm, 3.2mm) }
     silkscreen_ref { at: (0mm, -2mm) }
 }
 
-// SK6812MINI-E reverse-mount RGB LED (KiCad
+// SK6812MINI-E REVERSE-MOUNT RGB LED (KiCad
 // LED_SMD:LED_SK6812MINI-E_3.2x2.8mm_P1.5mm_ReverseMount). Pads:
 // 1=VDD 2=DOUT 3=GND 4=DIN.
+//
+// Reverse-mount means the die faces the BOARD, not the sky: the part is
+// soldered to one side and its light leaves through a cutout in the PCB. So the
+// land pattern is only half the footprint — without the `window` the LED shines
+// into copper and laminate. The 3.4 x 3.0mm aperture is KiCad's own for this
+// part (its Edge.Cuts outline); the SK6812MINI-E datasheet Rev. 02 states no
+// cutout dimension anywhere, so this is convention, not a datasheet number.
+//
+// The four lands sit OUTSIDE the aperture (x = ±2.725, aperture half-width
+// 1.7), which is what makes the part solderable over a hole at all.
 pub footprint FP_LED_SK6812MINI_E {
     pad 1: P_SK6812_Pad at (-2.725mm, 0.75mm)
     pad 2: P_SK6812_Pad at (-2.725mm, -0.75mm)
     pad 3: P_SK6812_Pad at (2.725mm, -0.75mm)
     pad 4: P_SK6812_Pad at (2.725mm, 0.75mm)
+    window { shape: rect, at: (0mm, 0mm), size: (3.4mm, 3mm) }
     courtyard { shape: rect, at: (0mm, 0mm), size: (3.6mm, 3.2mm) }
     silkscreen_ref { at: (0mm, -2mm) }
 }
 
-// Panasonic EVQ-P7A side-actuated SMD light-touch switch (datasheet
-// ATK0000CE20). Two electrical terminals, each spanning BOTH columns of one
-// ROW (not one column): terminal A = pads 1,2 (top row, y=-0.72); terminal B
-// = pads 3,4 (bottom row, y=+0.72). Column pitch 3.6mm, row pitch 1.44mm.
-// Grouping by column instead would short A to B, disabling the switch.
-pub footprint FP_SW_Reset {
-    pad 1: P_ResetSw at (-1.8mm, -0.72mm)
-    pad 2: P_ResetSw at (1.8mm, -0.72mm)
-    pad 3: P_ResetSw at (-1.8mm, 0.72mm)
-    pad 4: P_ResetSw at (1.8mm, 0.72mm)
-    courtyard { shape: rect, at: (0mm, 0mm), size: (5.5mm, 4.1mm) }
-    silkscreen_ref { at: (0mm, -2.5mm) }
-}
-
-// 1x4 2.54mm pin header (SWD debug: SWDIO/SWCLK/GND/3V3).
-pub footprint FP_Header_1x4 {
-    pad 1: P_Header254 at (-3.81mm, 0mm)
-    pad 2: P_Header254 at (-1.27mm, 0mm)
-    pad 3: P_Header254 at (1.27mm, 0mm)
-    pad 4: P_Header254 at (3.81mm, 0mm)
-    courtyard { shape: rect, at: (0mm, 0mm), size: (10.9mm, 2.6mm) }
-    silkscreen_ref { at: (0mm, -2mm) }
+// 2x3 2.54mm SMT female socket — the debug/serial port. Land pattern from
+// KiCad's PinSocket_2x03_P2.54mm_Vertical_SMD (3mm x 1mm lands, rows 2.52mm
+// either side of centre, 2.54mm pitch), TRANSPOSED from KiCad's own frame so
+// the three positions run along x and the two rows along y — i.e. the part
+// sits on the board the way the pinout is written down:
+//
+//     pad 1 GND  | pad 3 SWCLK | pad 5 SWDIO      (odd row,  y = -2.52)
+//     pad 2 GND  | pad 4 TXD   | pad 6 RXD        (even row, y = +2.52)
+//
+// Numbering is the standard 2xN convention — odd row / even row, pins 1 and 2
+// sharing the first column — so a ribbon cable lands where a reader expects.
+pub footprint FP_Socket_2x3_254_SMD {
+    pad 1: P_Socket254_Pad at (-2.54mm, -2.52mm)
+    pad 3: P_Socket254_Pad at (0mm, -2.52mm)
+    pad 5: P_Socket254_Pad at (2.54mm, -2.52mm)
+    pad 2: P_Socket254_Pad at (-2.54mm, 2.52mm)
+    pad 4: P_Socket254_Pad at (0mm, 2.52mm)
+    pad 6: P_Socket254_Pad at (2.54mm, 2.52mm)
+    silkscreen {
+        pin_1_marker near pad 1 shape dot
+    }
+    courtyard { shape: rect, at: (0mm, 0mm), size: (8.1mm, 8.3mm) }
+    silkscreen_ref { at: (0mm, -5mm) }
 }
 
 // Capacitive-touch sense pad — a bare copper area sensed by the STM32.
@@ -178,24 +210,54 @@ pub footprint FP_Encoder_EC11 {
     silkscreen_ref { at: (7mm, -5mm) }
 }
 
-// Alps RKJXV122400R analog ThumbPointer (dual 10k pot + center-push switch),
-// through-hole. Demo-grade land approximated from the datasheet: the two pots'
-// terminals are PERPENDICULAR — the X pot a horizontal row, the Y pot a
-// vertical column, each at 2.5mm pitch, clustered around the central boss (not
-// one collinear row). The central boss holes (4.0mm, 3.5mm) and four mounting
-// legs (1.5mm) are non-electrical mechanical holes added at fab (CoHDL has no
-// non-plated plating). Wiper = the center terminal of each pot. Pins:
-// 1=X_END_A 2=X_WIPER 3=X_END_B 4=Y_END_A 5=Y_WIPER 6=Y_END_B 7=SW_A 8=SW_B.
+// Alps RKJXV122400R ThumbPointer — two potentiometers plus a centre-push
+// switch, through-hole. Geometry from the Alps "Mounting Hole Dimensions"
+// drawing (Drawing No.1, viewed from the mounting side, tolerance ±0.1).
+// The drawing is the authority here: an earlier revision overrode two of its
+// coordinates with values read off the manufacturer's STEP model, and the
+// STEP transcription proved wrong (see docs/compliance-report.md, 2026-07-29).
+// The drawing separates its features by labelling: everything drilled says
+// "hole" with a tolerance; the hatched ø4 / ø3.5 / 4-ø2.6 carry NO "hole"
+// label and are the legend's "Prohibited wiring area" — surface keep-outs
+// where the part's bosses rest ON the board — so they get no drill (CoHDL has
+// no copper-keep-out construct; the router must honour them by hand).
+//
+// Origin = the lever axis (the drawing's ø4 keep-out centre). The drawing is a
+// top view, so its "up" is -y here. Ten terminals in three groups:
+//   VR1  three ø1 holes on a column 8.73 to the right, 2.5 pitch — the
+//        drawing's plain 1/2/3, named A1/A2/A3 here
+//   VR2  three ø1 holes on a row 8.73 above the axis, 2.5 pitch — the
+//        drawing's CIRCLED ①/②/③, named B1/B2/B3 here
+//   SW1  four ø1.2 holes at x = ±3.25 (the "6.5" span), rows 4.5 apart and
+//        symmetric about the switch dome's ø3.5 keep-out at y = +8 (the
+//        drawing's "8"), so rows at 5.75 / 10.25 — the drawing's a/b/c/d,
+//        named SA/SB/SC/SD here
+// (pad numbers are `[A-Z][A-Z0-9]*`, so the drawing's circled numerals and
+// lowercase switch letters get this transliteration.)
+// Plus the metal frame's four ø1.5 legs at (±6.325, ±5) — the drawing's
+// "12.65" and "10" chains, half each — as PLATED, SOLDERED pads L1-L4 (the
+// datasheet: "Solder all metal inserted fixing including terminals & metal
+// lugs"), on the device's electrically dead MNT pin; and two ø1.6 ±0.05
+// locating-boss holes on the axis at (±4.3, 0) (the "8.6" chain), which stay
+// true mount_holes — a plastic peg enters each, nothing to solder.
 pub footprint FP_Joystick_RKJXV {
-    pad 1: P_Header254 at (-2.5mm, 0mm)
-    pad 2: P_Header254 at (0mm, 0mm)
-    pad 3: P_Header254 at (2.5mm, 0mm)
-    pad 4: P_Header254 at (5mm, -2.5mm)
-    pad 5: P_Header254 at (5mm, 0mm)
-    pad 6: P_Header254 at (5mm, 2.5mm)
-    pad 7: P_Header254 at (0mm, 6mm)
-    pad 8: P_Header254 at (2.5mm, 6mm)
-    courtyard { shape: rect, at: (1.25mm, 0mm), size: (18.2mm, 21.7mm) }
+    pad B3: P_Joy_VrPin at (-2.5mm, -8.73mm)
+    pad B2: P_Joy_VrPin at (0mm, -8.73mm)
+    pad B1: P_Joy_VrPin at (2.5mm, -8.73mm)
+    pad A3: P_Joy_VrPin at (8.73mm, -2.5mm)
+    pad A2: P_Joy_VrPin at (8.73mm, 0mm)
+    pad A1: P_Joy_VrPin at (8.73mm, 2.5mm)
+    pad SA: P_Joy_SwPin at (-3.25mm, 5.75mm)
+    pad SC: P_Joy_SwPin at (3.25mm, 5.75mm)
+    pad SB: P_Joy_SwPin at (-3.25mm, 10.25mm)
+    pad SD: P_Joy_SwPin at (3.25mm, 10.25mm)
+    pad L1: P_Joy_Leg at (-6.325mm, -5mm)
+    pad L2: P_Joy_Leg at (6.325mm, -5mm)
+    pad L3: P_Joy_Leg at (-6.325mm, 5mm)
+    pad L4: P_Joy_Leg at (6.325mm, 5mm)
+    mount_hole 1: non_plated at (-4.3mm, 0mm) diameter 1.6mm
+    mount_hole 2: non_plated at (4.3mm, 0mm) diameter 1.6mm
+    courtyard { shape: rect, at: (1.25mm, 0.5mm), size: (18.2mm, 22.4mm) }
     silkscreen_ref { at: (1.25mm, -11.5mm) }
 }
 

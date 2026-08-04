@@ -9,9 +9,10 @@ from the routed board at [`../pcb/openmicro.kicad_pcb`](../pcb/) with KiCad 10.0
 | `gerbers/` | The same files unzipped, for review and diffing |
 | `openmicro-bom.csv` | Assembly BOM — `Manufacturer,Comment,Designator,Footprint`, where **Comment is the MPN** (copy of [`../out/openmicro-bom.csv`](../out/openmicro-bom.csv), emitted by `cohdl build`) |
 | `openmicro-smt.csv` | SMT pick-and-place (CPL), JLC/Altium-style columns — mm units, board lower-left origin, Y-up (copy of [`../out/openmicro-smt.csv`](../out/openmicro-smt.csv)) |
+| `openmicro-pos-all.csv` | Position file for **every** footprint — same columns as the CPL, nothing excluded (through-hole, mount holes, copper-only features) — for fixtures and inspection |
 
 The CPL deliberately lists **SMD parts only**: the Choc keyswitches (SW3–SW15),
-EC11 encoder (SW1), SWD header (J2), mount holes (H1–H4) and the bare-copper
+EC11 encoder (SW1), RKJXV joystick (J1), mount holes (H1–H4) and the bare-copper
 touch pad (TP1) are through-hole or copper-only features and are hand-populated
 or nothing at all. They still appear in the BOM for sourcing. Pick-and-place
 rotations follow KiCad orientation; assembly houses apply their own per-part
@@ -20,17 +21,17 @@ parts there).
 
 ## Board status (DRC, KiCad 10.0.4)
 
-Zones refilled; **0 unconnected items, 0 copper-to-copper clearance
-violations**. Remaining flags, all reviewed and accepted:
+Zones refilled; **0 unconnected items**. Remaining flags, all reviewed and
+accepted:
 
-- 199× via annular width 0.0977 mm vs the board's 0.1 mm rule — 2.3 µm under
-  our own conservative rule, comfortably above JLC's 0.075 mm capability.
-- Tracks 0.17–0.5 mm from the Choc switches' locating holes (NPTH) — tight but
-  standard for Choc boards; JLC's copper-to-NPTH minimum is 0.2 mm and only a
-  handful of segments sit slightly inside that with drill-tolerance risk only.
-- USB-C shield pads (J3) on the board edge — edge-mount connector, by design.
-- 14× courtyard overlaps — the per-key LED/diode sit under the switches, by design.
-- Silkscreen-over-mask warnings — cosmetic.
+- 63× pad-to-pad clearance 0.2000 mm vs the board's 0.2032 mm (8 mil) rule —
+  3.2 µm under, and every pair is *within* a single package (the STM32's
+  0.5 mm-pitch QFP-48 pads, U3, and the USB-C receptacle's pin grid, J3):
+  fixed package geometry, far above JLC's 0.127 mm capability.
+- 89× copper near Edge.Cuts — the 8 perimeter underglow LEDs are reverse-mount
+  parts whose footprints carry their own board cutout, so their pads border an
+  edge by construction; the rest is the edge-mount USB-C (J3).
+- Silkscreen warnings (over copper / near edge / overlaps) — cosmetic.
 
 ## Fab parameters
 
@@ -53,8 +54,9 @@ kicad-cli pcb export gerbers -o fab/gerbers/ \
 kicad-cli pcb export drill -o fab/gerbers/ --excellon-separate-th pcb/openmicro.kicad_pcb
 
 # BOM (CoHDL compiler) and CPL (smt_pos.py, run with KiCad's bundled python)
-cohdl build .                     # -> out/openmicro-bom.csv
+cohdl build                       # -> out/openmicro-bom.csv
 smt_pos.py pcb/openmicro.kicad_pcb out/openmicro-smt.csv
+smt_pos.py --all pcb/openmicro.kicad_pcb fab/openmicro-pos-all.csv
 ```
 
 The BOM comes from the CoHDL source (`src/`); the CPL and gerbers from the

@@ -17,18 +17,40 @@ board routable. If the `.cohdl` changes, update the table at the top of
 
 | Function | Pins |
 |---|---|
-| Matrix rows (out, drive-high) | ROW0 `PA9` · ROW1 `PB3` · ROW2 `PB6` · ROW3 `PB5` |
-| Matrix cols (in, pull-down) | COL0 `PB8` · COL1 `PB7` · COL2 `PA15` · COL3 `PA10` |
-| Rotary encoder | A `PC13` · B `PC14` · push `PC15` |
-| Joystick | X `PB1`/ADC_IN9 · Y `PB0`/ADC_IN8 · push `PA8` |
+| Matrix rows (out, drive-high) | ROW0 `PA9` · ROW1 `PA10` · ROW2 `PB3` · ROW3 `PB8` |
+| Matrix cols (in, pull-down) | COL0 `PB4` · COL1 `PB5` · COL2 `PC14` · COL3 `PC13` |
+| Rotary encoder | A `PB12` · B `PB13` · push `PB15` |
+| Joystick | X `PB1`/ADC_IN9 · Y `PA0`/ADC_IN0 · push `PA15` |
 | Touch pad | `PB9` (RC charge-time sensing) |
-| RGB data | per-key chain (13× SK6812MINI-E) `PB4` · underglow ring (16×) `PA0` |
+| RGB data | per-key chain (13× SK6812MINI-E) `PA8` · underglow ring (8×) `PB14` |
 | USB FS | DM `PA11` · DP `PA12` |
 | SWD (J2) | SWDIO `PA13` · SWCLK `PA14` |
 
 Clocking: HSI48 with CRS sync from USB SOF drives both the core (48 MHz —
 the WS2812 bit-bang cycle counts assume it) and the USB peripheral. The
 8 MHz HSE crystal on the board is fitted belt-and-braces but not required.
+
+### Prototype boards (`--features proto`)
+
+Boards fabbed before the 2026-07-28 GPIO re-derivation use the older pin map
+and a 16-LED underglow ring. Build with the `proto` feature to target them —
+default builds are for the current (v23) board, and the two are **not**
+interchangeable:
+
+| Function | Pins (prototype) |
+|---|---|
+| Matrix rows (out, drive-high) | ROW0 `PA9` · ROW1 `PB3` · ROW2 `PB6` · ROW3 `PB5` |
+| Matrix cols (in, pull-down) | COL0 `PB8` · COL1 `PB7` · COL2 `PA15` · COL3 `PA10` |
+| Rotary encoder | A `PC13` · B `PC14` · push `PC15` |
+| Joystick | X `PB1`/ADC_IN9 · Y `PB0`/ADC_IN8 · push `PA8` |
+| RGB data | per-key chain (13×) `PB4` · underglow ring (16×) `PA0` |
+
+Touch, USB, and SWD are identical on both revisions.
+
+```sh
+cargo build --release --features proto            # from fw/, or:
+FW_FEATURES=proto scripts/build-firmware.sh dist  # -> dist/openmicro-fw-<version>-proto.bin
+```
 
 ## What it does
 
@@ -67,7 +89,7 @@ device** (`keymap.rs`):
   (`SET_ANALOG`, persisted with the keymap).
 - **LEDs**: pressed keys light white over an idle rainbow; the underglow
   ring rotates hue. Brightness is capped in `ws2812.rs` (`scaled(n/64)`)
-  to keep all 29 LEDs inside the 500 mA VBUS budget.
+  to keep all 21 LEDs inside the 500 mA VBUS budget.
 
 ## Building
 

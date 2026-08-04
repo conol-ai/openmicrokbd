@@ -5,6 +5,12 @@ edition = "2021"
 license = "MIT"
 description = "OpenMicro macropad firmware (STM32F072CBT6, embassy)"
 
+[features]
+# Prototype boards fabbed before the 2026-07-28 GPIO re-derivation: the old
+# pin map (encoder on PC13-PC15, per-key chain on PB4) and a 16-LED underglow
+# ring. Default build targets the current (v23) board.
+proto = []
+
 [dependencies]
 embassy-stm32 = { version = "0.2", features = [
     "stm32f072cb",

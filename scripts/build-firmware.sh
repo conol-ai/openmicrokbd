@@ -4,6 +4,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUTPUT_DIR="${1:-$REPO_ROOT/dist}"
+# FW_FEATURES=proto builds for the prototype board (pre-v23 pin map); the
+# feature list is appended to the artifact names so revisions can't be mixed up.
+FW_FEATURES="${FW_FEATURES:-}"
+VARIANT="${FW_FEATURES:+-${FW_FEATURES//,/-}}"
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -22,7 +26,7 @@ fi
 
 (
     cd "$REPO_ROOT/fw"
-    DEFMT_LOG=off cargo build --release --locked
+    DEFMT_LOG=off cargo build --release --locked ${FW_FEATURES:+--features "$FW_FEATURES"}
 )
 
 ELF="$REPO_ROOT/fw/target/thumbv6m-none-eabi/release/openmicro-fw"
@@ -40,8 +44,8 @@ if [[ ! -x "$RUST_OBJCOPY" ]]; then
     exit 1
 fi
 
-BIN="$OUTPUT_DIR/openmicro-fw-$FW_VERSION.bin"
-DEBUG_ELF="$OUTPUT_DIR/openmicro-fw-$FW_VERSION.elf"
+BIN="$OUTPUT_DIR/openmicro-fw-$FW_VERSION$VARIANT.bin"
+DEBUG_ELF="$OUTPUT_DIR/openmicro-fw-$FW_VERSION$VARIANT.elf"
 "$RUST_OBJCOPY" -O binary "$ELF" "$BIN"
 cp "$ELF" "$DEBUG_ELF"
 

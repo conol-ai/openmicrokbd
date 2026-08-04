@@ -6,6 +6,6 @@
   (fp_rect (start -7.75 -7.75) (end 7.75 7.75) (layer "F.CrtYd") (stroke (width 0.05) (type solid)) (fill none))
   (pad "1" thru_hole circle (at 0 -5.9) (size 2.2 2.2) (drill 1.2) (layers "*.Cu" "*.Mask"))
   (pad "2" thru_hole circle (at 5 -3.8) (size 2.2 2.2) (drill 1.2) (layers "*.Cu" "*.Mask"))
+  (pad "3" thru_hole oval (at -5 5.15) (size 2.1 2.6) (drill oval 1.5 2) (layers "*.Cu" "*.Mask"))
   (pad "" np_thru_hole circle (at 0 0) (size 5 5) (drill 5) (layers "*.Cu" "*.Mask"))
-  (pad "" np_thru_hole oval (at -5 5.15) (size 1.5 2) (drill oval 1.5 2) (layers "*.Cu" "*.Mask"))
 )

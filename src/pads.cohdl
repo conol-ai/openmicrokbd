@@ -29,6 +29,21 @@ pub pad P_Choc_Contact {
     drill: 1.2mm
 }
 
+// Kailh Choc V2 FIXING LEG — the switch's third leg (phosphor bronze C5191,
+// qty 1 per the CPG1353 parts list), soldered rather than merely cleared so it
+// carries keypress force into the board. The datasheet's leg hole is a
+// 2.0 x 1.5mm oblong, so this is a plated SLOT; the copper adds a 0.3mm ring,
+// deliberately narrower than the 0.5mm the contacts use, because the reverse-
+// mount LED's land sits 0.85mm away and a 0.5mm ring would close that to
+// 0.35mm.
+pub pad P_Choc_Leg {
+    shape: oval
+    size: (2.1mm, 2.6mm)
+    layer: through_all
+    plating: plated_through_hole
+    drill: (1.5mm, 2mm)
+}
+
 // 1N4148W small-signal diode terminal, SOD-123 (KiCad Diode_SMD:D_SOD-123).
 pub pad P_SOD123_Term {
     shape: rect
@@ -76,22 +91,51 @@ pub pad P_EC11_MP {
     drill: 2.8mm
 }
 
-// Panasonic EVQ-P7A side-actuated SMD light-touch switch terminal (datasheet
-// ATK0000CE20 — land 1.4x1.05mm, 3.6mm column / 1.44mm row pitch).
-pub pad P_ResetSw {
+// 2.54mm SMT socket-strip land (2x3 debug socket). Geometry from KiCad's
+// Connector_PinSocket_2.54mm:PinSocket_2x03_P2.54mm_Vertical_SMD: a 3mm x 1mm
+// land, long axis pointing OUTWARD from the body because an SMT socket's
+// contacts splay out sideways to be reflowed. Transposed relative to KiCad's
+// own frame (see FP_Socket_2x3_254_SMD) so the part's three columns run along
+// x, matching the pinout as it is drawn on paper.
+pub pad P_Socket254_Pad {
     shape: rect
-    size: (1.4mm, 1.05mm)
+    size: (1mm, 3mm)
     layer: top_copper
     plating: smd
 }
 
-// 2.54mm 1x4 pin-header hole (SWD debug) — plated 1.0mm hole, 1.7mm pad.
-pub pad P_Header254 {
+// Alps RKJXV122400R potentiometer terminal — the drawing's `6-ø1 +0.1/0 hole`
+// (three per potentiometer), in a 1.7mm pad.
+pub pad P_Joy_VrPin {
     shape: circle
     size: (1.7mm)
     layer: through_all
     plating: plated_through_hole
     drill: 1mm
+}
+
+// Alps RKJXV122400R centre-push switch terminal — the drawing's
+// `4-ø1.2 +0.1/0 hole`. Wider hole than the potentiometer pins, so its own pad.
+pub pad P_Joy_SwPin {
+    shape: circle
+    size: (1.9mm)
+    layer: through_all
+    plating: plated_through_hole
+    drill: 1.2mm
+}
+
+// Alps RKJXV122400R metal frame leg — the drawing's `4-ø1.5 +0.1/0 hole`.
+// PLATED and soldered, not a bare mounting hole: the datasheet's soldering
+// caution says outright "Solder all metal inserted fixing including terminals
+// & metal lugs into a substrate", and these four lugs are what carry stick
+// load into the board (the same reasoning as the Choc V2 fixing leg above).
+// 0.35mm ring, the family convention of the other RKJXV pads.
+pub pad P_Joy_Leg {
+    shape: circle
+    size: (2.2mm)
+    layer: through_all
+    plating: plated_through_hole
+    drill: 1.5mm
 }
 
 // Capacitive-touch sense pad — a plain ROUND SMD copper area (no component;

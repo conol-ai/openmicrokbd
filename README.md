@@ -23,13 +23,14 @@ This board was designed in **CoHDL**, a hardware description language newly deve
 | [`pcb/`](pcb/) | The routed board — `openmicro.kicad_pcb` + KiCad project (design rules) |
 | [`fab/`](fab/) | Manufacturing package: Gerber/drill zip, assembly BOM, SMT placement CSV — see [`fab/README.md`](fab/README.md) |
 | [`mechanical/`](mechanical/) | Board outline (DXF) |
+| [`docs/`](docs/) | Manufacturer datasheets for every active, connector, and electromechanical part in the BOM, with sourcing/verification notes — see [`docs/README.md`](docs/README.md) |
 
 ## Hardware
 
-- **MCU:** STM32F072CBT6 (Cortex-M0), 8 MHz HSE crystal, SWD header
+- **MCU:** STM32F072CBT6 (Cortex-M0), 8 MHz HSE crystal, 2×3 SWD debug socket
 - **Keys:** 13× Kailh Choc V2 low-profile switches on a 19.05 mm grid (square 4×4-cell frame, matching the Codex Micro layout), 1N4148W per-key matrix diodes
 - **Inputs:** EC11 rotary encoder, RKJXV analog joystick, capacitive touch pad
-- **Lighting:** 13× per-key SK6812MINI-E (reverse-mount, one WS2812 chain) + 16× perimeter underglow SK6812MINI-E (second chain)
+- **Lighting:** 13× per-key SK6812MINI-E (reverse-mount, one WS2812 chain) + 8× perimeter underglow SK6812MINI-E (second chain)
 - **USB:** Type-C wired, USBLC6 ESD protection, AP2112 3.3 V LDO
 - PCB laid out from the CoHDL-generated constraints; manufacturing handoff via IPC-2581
 

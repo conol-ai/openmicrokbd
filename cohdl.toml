@@ -1,5 +1,11 @@
 [package]
 name = "openmicro"
+version = "0.1.0"
+license = "MIT"
 
 [design]
 top = "OpenMicro"
+
+[dependencies]
+passive = "0.1.1"
+std = "0.2.1"

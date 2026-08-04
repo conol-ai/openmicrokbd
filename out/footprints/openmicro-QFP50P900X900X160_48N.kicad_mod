@@ -5,6 +5,7 @@
   (attr smd)
   (fp_text reference "REF**" (at 0 -5.2) (layer "F.SilkS"))
   (fp_rect (start -4.7 -4.7) (end 4.7 4.7) (layer "F.CrtYd") (stroke (width 0.05) (type solid)) (fill none))
+  (fp_circle (center -5.4 -2.75) (end -5.2 -2.75) (layer "F.SilkS") (stroke (width 0.1) (type solid)) (fill solid))
   (pad "1" smd rect (at -4.1625 -2.75) (size 1.475 0.3) (layers "F.Cu" "F.Paste" "F.Mask"))
   (pad "2" smd rect (at -4.1625 -2.25) (size 1.475 0.3) (layers "F.Cu" "F.Paste" "F.Mask"))
   (pad "3" smd rect (at -4.1625 -1.75) (size 1.475 0.3) (layers "F.Cu" "F.Paste" "F.Mask"))

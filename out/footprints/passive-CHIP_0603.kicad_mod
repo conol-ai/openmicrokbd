@@ -1,0 +1,10 @@
+(footprint "passive::CHIP_0603"
+  (version 20240108)
+  (generator "cohdl")
+  (layer "F.Cu")
+  (attr smd)
+  (fp_text reference "REF**" (at 0 -1.43) (layer "F.SilkS"))
+  (fp_rect (start -1.48 -0.73) (end 1.48 0.73) (layer "F.CrtYd") (stroke (width 0.05) (type solid)) (fill none))
+  (pad "1" smd rect (at -0.825 0) (size 0.8 0.95) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "2" smd rect (at 0.825 0) (size 0.8 0.95) (layers "F.Cu" "F.Paste" "F.Mask"))
+)

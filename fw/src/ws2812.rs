@@ -1,7 +1,7 @@
 //! Bit-banged WS2812/SK6812 driver (GRB, 800 kHz) for the two LED chains.
 //!
 //! The SK6812MINI-E timing tolerance (±150 ns) makes a cycle-counted bit-bang
-//! at 48 MHz perfectly adequate; each chain refresh (< 1 ms for 29 LEDs total)
+//! at 48 MHz perfectly adequate; each chain refresh (< 1 ms for 21 LEDs total)
 //! runs inside a critical section so the waveform is never stretched by an
 //! interrupt. USB survives this: the FS peripheral buffers a full frame in
 //! hardware and 1 ms of deferred IRQ handling is within its tolerance — the
@@ -22,7 +22,7 @@ impl Grb {
     pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Grb { g, r, b }
     }
-    /// Scale all channels by `num/64` — the brightness cap that keeps 29 LEDs
+    /// Scale all channels by `num/64` — the brightness cap that keeps 21 LEDs
     /// inside the 500 mA VBUS budget (see the board's #[high_current] note).
     pub fn scaled(self, num: u8) -> Self {
         let s = |c: u8| ((c as u16 * num as u16) / 64) as u8;

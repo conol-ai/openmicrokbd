@@ -5,7 +5,7 @@
       "Application": "Pcbnew",
       "Version": "10.0.4"
     },
-    "CreationDate": "2026-07-21T11:09:54+08:00"
+    "CreationDate": "2026-07-30T09:24:51+08:00"
   },
   "GeneralSpecs": {
     "ProjectId": {
@@ -25,38 +25,38 @@
   "DesignRules": [
     {
       "Layers": "Outer",
-      "PadToPad": 0.15,
-      "PadToTrack": 0.15,
-      "TrackToTrack": 0.15,
-      "MinLineWidth": 0.1502
+      "PadToPad": 0.2032,
+      "PadToTrack": 0.2032,
+      "TrackToTrack": 0.2032,
+      "MinLineWidth": 0.2034
     },
     {
       "Layers": "Inner",
-      "PadToPad": 0.15,
-      "PadToTrack": 0.15,
-      "TrackToTrack": 0.15,
-      "TrackToRegion": 0.15,
-      "RegionToRegion": 0.15
+      "PadToPad": 0.2032,
+      "PadToTrack": 0.2032,
+      "TrackToTrack": 0.2032,
+      "TrackToRegion": 0.2032,
+      "RegionToRegion": 0.2032
     }
   ],
   "FilesAttributes": [
     {
-      "Path": "openmicro-F_Cu.gtl",
+      "Path": "openmicro-Top Layer.gtl",
       "FileFunction": "Copper,L1,Top",
       "FilePolarity": "Positive"
     },
     {
-      "Path": "openmicro-In1_Cu.g1",
+      "Path": "openmicro-Ground Layer 1.g1",
       "FileFunction": "Copper,L2,Inr",
       "FilePolarity": "Positive"
     },
     {
-      "Path": "openmicro-In2_Cu.g2",
+      "Path": "openmicro-Ground Layer 2.g2",
       "FileFunction": "Copper,L3,Inr",
       "FilePolarity": "Positive"
     },
     {
-      "Path": "openmicro-B_Cu.gbl",
+      "Path": "openmicro-Bottom Layer.gbl",
       "FileFunction": "Copper,L4,Bot",
       "FilePolarity": "Positive"
     },
@@ -71,22 +71,22 @@
       "FilePolarity": "Positive"
     },
     {
-      "Path": "openmicro-F_Silkscreen.gto",
+      "Path": "openmicro-Top Overlay.gto",
       "FileFunction": "Legend,Top",
       "FilePolarity": "Positive"
     },
     {
-      "Path": "openmicro-B_Silkscreen.gbo",
+      "Path": "openmicro-Board Layer Stack Bottom Overlay.gbo",
       "FileFunction": "Legend,Bot",
       "FilePolarity": "Positive"
     },
     {
-      "Path": "openmicro-F_Mask.gts",
+      "Path": "openmicro-Top Solder.gts",
       "FileFunction": "SolderMask,Top",
       "FilePolarity": "Negative"
     },
     {
-      "Path": "openmicro-B_Mask.gbs",
+      "Path": "openmicro-Board Layer Stack Bottom Solder.gbs",
       "FileFunction": "SolderMask,Bot",
       "FilePolarity": "Negative"
     },

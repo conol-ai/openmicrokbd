@@ -6,17 +6,16 @@ out/differential_pairs.csv
 out/footprints/openmicro-FP_Crystal_3225.kicad_mod
 out/footprints/openmicro-FP_D_SOD_123.kicad_mod
 out/footprints/openmicro-FP_Encoder_EC11.kicad_mod
-out/footprints/openmicro-FP_Header_1x4.kicad_mod
 out/footprints/openmicro-FP_Joystick_RKJXV.kicad_mod
 out/footprints/openmicro-FP_LED_SK6812MINI_E.kicad_mod
 out/footprints/openmicro-FP_MountingHole_M2.kicad_mod
 out/footprints/openmicro-FP_SOT_23_6.kicad_mod
 out/footprints/openmicro-FP_SW_Choc_V2.kicad_mod
-out/footprints/openmicro-FP_SW_Reset.kicad_mod
+out/footprints/openmicro-FP_Socket_2x3_254_SMD.kicad_mod
 out/footprints/openmicro-FP_TouchPad.kicad_mod
 out/footprints/openmicro-QFP50P900X900X160_48N.kicad_mod
-out/footprints/std-CHIP_0402.kicad_mod
-out/footprints/std-CHIP_0603.kicad_mod
+out/footprints/passive-CHIP_0402.kicad_mod
+out/footprints/passive-CHIP_0603.kicad_mod
 out/footprints/std-FP_USB_C_Receptacle_HRO_TYPE_C_31_M_12.kicad_mod
 out/footprints/std-SOT5P95X290X160N.kicad_mod
 out/ground_nets.csv
@@ -24,6 +23,5 @@ out/high_current_nets.csv
 out/openmicro-bom.csv
 out/openmicro-layout.json
 out/openmicro.net
-out/openmicro.xml
 out/single_ended_impedance_signals.csv
 out/switching_converters.csv

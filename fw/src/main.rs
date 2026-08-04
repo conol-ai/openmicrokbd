@@ -1,19 +1,29 @@
 //! OpenMicro macropad firmware — STM32F072CBT6 + embassy.
 //!
-//! Pin map is the CoHDL design's (examples/openmicro/src/openmicro_parts.cohdl,
+//! Pin map is the CoHDL design's (src/openmicro_parts.cohdl,
 //! the position-aware GPIO assignment) — if the .cohdl changes, this table is
 //! the one to update:
 //!
-//!   ROW0..3  = PA9  PB3  PB6  PB5   (outputs, drive high per scan step)
-//!   COL0..3  = PB8  PB7  PA15 PA10  (inputs, pull-down; diode cathode -> COL)
-//!   ENC_A/B  = PC13 PC14 (quadrature, pull-up, common to GND)
-//!   ENC_SW   = PC15      (pull-up, active low)
-//!   JOY_X/Y  = PB1/ADC_IN9  PB0/ADC_IN8
-//!   JOY_SW   = PA8       (pull-up, active low)
+//!   ROW0..3  = PA9  PA10 PB3  PB8   (outputs, drive high per scan step)
+//!   COL0..3  = PB4  PB5  PC14 PC13  (inputs, pull-down; diode cathode -> COL)
+//!   ENC_A/B  = PB12 PB13 (quadrature, pull-up, common to GND)
+//!   ENC_SW   = PB15      (pull-up, active low)
+//!   JOY_X/Y  = PB1/ADC_IN9  PA0/ADC_IN0
+//!   JOY_SW   = PA15      (pull-up, active low)
 //!   TOUCH    = PB9       (RC charge-time sensing, no external R)
-//!   LED_KEY  = PB4       (13x SK6812MINI-E per-key chain)
-//!   LED_UG   = PA0       (16x SK6812MINI-E underglow ring)
+//!   LED_KEY  = PA8       (13x SK6812MINI-E per-key chain)
+//!   LED_UG   = PB14      (8x SK6812MINI-E perimeter underglow ring)
+//!
+//! COL2/COL3 sit on PC14/PC13, which are behind the VBAT power switch and can
+//! only source a few mA. That is fine here and deliberate: in COL2ROW the
+//! columns are only ever READ. Do not move an output onto them.
 //!   USB      = PA11/PA12 (FS device; HSI48 + CRS, crystal not required)
+//!
+//! The `proto` Cargo feature selects the PROTOTYPE pin map instead — boards
+//! fabbed before the 2026-07-28 GPIO re-derivation: rows PA9 PB3 PB6 PB5,
+//! cols PB8 PB7 PA15 PA10, encoder PC13/PC14/PC15, joystick push PA8,
+//! JOY_Y PB0/ADC_IN8, per-key chain PB4, 16-LED underglow ring on PA0.
+//! Touch, USB, and SWD are identical on both revisions.
 //!
 //! HID map: every input's emitted code is CONFIGURABLE and stored in flash
 //! (keymap.rs) — all 13 keys are independent positions (including the pair
@@ -60,6 +70,22 @@ bind_interrupts!(struct Irqs {
     USB => usb::InterruptHandler<peripherals::USB>;
     ADC1_COMP => embassy_stm32::adc::InterruptHandler<peripherals::ADC1>;
 });
+
+// ---- board revision (see the pin-map tables in the module docs) ----
+// JOY_Y is the one pin that crosses an ADC channel between revisions, so it
+// is the one place the peripheral TYPE differs; everything else is erased
+// into Output/Input/ExtiInput at construction.
+#[cfg(not(feature = "proto"))]
+type JoyYPin = peripherals::PA0;
+#[cfg(feature = "proto")]
+type JoyYPin = peripherals::PB0;
+
+/// Underglow ring length: 2 per side on the current board, 4 per side on the
+/// prototype. The hue step derives from this — count x step must stay 256.
+#[cfg(not(feature = "proto"))]
+const UG_LEN: usize = 8;
+#[cfg(feature = "proto")]
+const UG_LEN: usize = 16;
 
 /// matrix position -> key slot index (-1 = no switch there). All 13 keys are
 /// independent — the two switches under the 2U keycap are positions 10 and 11.
@@ -489,12 +515,28 @@ async fn main(spawner: Spawner) {
     let (mut raw_reader, mut raw_writer) = raw_hid.split();
 
     // ---- matrix pins ----
+    #[cfg(not(feature = "proto"))]
+    let rows = [
+        Output::new(p.PA9, Level::Low, Speed::Low),
+        Output::new(p.PA10, Level::Low, Speed::Low),
+        Output::new(p.PB3, Level::Low, Speed::Low),
+        Output::new(p.PB8, Level::Low, Speed::Low),
+    ];
+    #[cfg(feature = "proto")]
     let rows = [
         Output::new(p.PA9, Level::Low, Speed::Low),
         Output::new(p.PB3, Level::Low, Speed::Low),
         Output::new(p.PB6, Level::Low, Speed::Low),
         Output::new(p.PB5, Level::Low, Speed::Low),
     ];
+    #[cfg(not(feature = "proto"))]
+    let cols = [
+        Input::new(p.PB4, Pull::Down),
+        Input::new(p.PB5, Pull::Down),
+        Input::new(p.PC14, Pull::Down),
+        Input::new(p.PC13, Pull::Down),
+    ];
+    #[cfg(feature = "proto")]
     let cols = [
         Input::new(p.PB8, Pull::Down),
         Input::new(p.PB7, Pull::Down),
@@ -507,22 +549,43 @@ async fn main(spawner: Spawner) {
     // transitions away, and the LED bit-bang blanks interrupts for ~870 us
     // every 33 ms. EXTI latches its pending bit, so an edge landing in that
     // window is still serviced once interrupts return.
-    let enc_a = ExtiInput::new(p.PC13, p.EXTI13, Pull::Up);
-    let enc_b = ExtiInput::new(p.PC14, p.EXTI14, Pull::Up);
-    let enc_sw = Input::new(p.PC15, Pull::Up);
-    let joy_sw = Input::new(p.PA8, Pull::Up);
+    #[cfg(not(feature = "proto"))]
+    let (enc_a, enc_b, enc_sw, joy_sw) = (
+        ExtiInput::new(p.PB12, p.EXTI12, Pull::Up),
+        ExtiInput::new(p.PB13, p.EXTI13, Pull::Up),
+        Input::new(p.PB15, Pull::Up),
+        Input::new(p.PA15, Pull::Up),
+    );
+    #[cfg(feature = "proto")]
+    let (enc_a, enc_b, enc_sw, joy_sw) = (
+        ExtiInput::new(p.PC13, p.EXTI13, Pull::Up),
+        ExtiInput::new(p.PC14, p.EXTI14, Pull::Up),
+        Input::new(p.PC15, Pull::Up),
+        Input::new(p.PA8, Pull::Up),
+    );
 
     // ---- joystick ADC ----
     let adc = Adc::new(p.ADC1, Irqs);
     let joy_x = p.PB1;
+    #[cfg(not(feature = "proto"))]
+    let joy_y = p.PA0;
+    #[cfg(feature = "proto")]
     let joy_y = p.PB0;
 
     // ---- touch (RC charge-time on PB9) ----
     let touch = Flex::new(p.PB9);
 
     // ---- LED chains ----
-    let led_key = Output::new(p.PB4, Level::Low, Speed::VeryHigh);
-    let led_ug = Output::new(p.PA0, Level::Low, Speed::VeryHigh);
+    #[cfg(not(feature = "proto"))]
+    let (led_key, led_ug) = (
+        Output::new(p.PA8, Level::Low, Speed::VeryHigh),
+        Output::new(p.PB14, Level::Low, Speed::VeryHigh),
+    );
+    #[cfg(feature = "proto")]
+    let (led_key, led_ug) = (
+        Output::new(p.PB4, Level::Low, Speed::VeryHigh),
+        Output::new(p.PA0, Level::Low, Speed::VeryHigh),
+    );
 
     spawner.must_spawn(scan_task(rows, cols, enc_sw, joy_sw));
     spawner.must_spawn(encoder_task(enc_a, enc_b));
@@ -833,7 +896,7 @@ async fn encoder_task(mut enc_a: ExtiInput<'static>, mut enc_b: ExtiInput<'stati
 async fn adc_task(
     mut adc: Adc<'static, peripherals::ADC1>,
     mut joy_x: peripherals::PB1,
-    mut joy_y: peripherals::PB0,
+    mut joy_y: JoyYPin,
 ) {
     info!("adc_task: entered");
     let mut ticker = Ticker::every(Duration::from_millis(20));
@@ -988,8 +1051,8 @@ async fn touch_task(mut pad: Flex<'static>) {
 }
 
 /// 30 Hz LED renderer: pressed keys light white, idle keys a dim rainbow;
-/// the underglow ring runs a slow hue rotation. Brightness is capped to stay
-/// inside the 500 mA VBUS budget.
+/// the perimeter underglow ring runs a slow hue rotation. Brightness is capped
+/// to stay inside the 500 mA VBUS budget.
 #[embassy_executor::task]
 async fn led_task(mut led_key: Output<'static>, mut led_ug: Output<'static>) {
     info!("led_task: entered");
@@ -1015,9 +1078,11 @@ async fn led_task(mut led_key: Output<'static>, mut led_ug: Output<'static>) {
                 hue(phase.wrapping_add((i as u8) * 20)).scaled(6)
             };
         }
-        let mut ring = [ws2812::Grb::default(); 16];
+        // The hue step is 256/UG_LEN so the ring carries exactly one full
+        // wheel around the board regardless of revision.
+        let mut ring = [ws2812::Grb::default(); UG_LEN];
         for (i, px) in ring.iter_mut().enumerate() {
-            *px = hue(phase.wrapping_add((i as u8) * 16)).scaled(8);
+            *px = hue(phase.wrapping_add((i as u8) * (256 / UG_LEN) as u8)).scaled(8);
         }
         ws2812::write(&mut led_key, &keys);
         ws2812::write(&mut led_ug, &ring);
