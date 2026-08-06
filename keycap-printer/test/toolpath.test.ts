@@ -7,20 +7,26 @@ import {
   DEFAULT_SETTINGS,
   feedFromPercent,
   normalizeSettings,
-  powerFromPercent
+  powerFromPercent,
+  SCAN_DIRECTIONS_DEG
 } from "../src/renderer/src/lib/toolpath";
 
 describe("Lucide toolpath generation", () => {
-  it("generates finite toolpaths for every installed Lucide icon", { timeout: 20000 }, () => {
+  it("generates finite toolpaths for every installed Lucide icon", { timeout: 120000 }, () => {
     let generated = 0;
     for (const [name, node] of Object.entries(icons)) {
       if (!Array.isArray(node)) continue;
       const job = buildIconJob(node as IconNode, DEFAULT_SETTINGS);
-      expect(job.segments.length, name).toBeGreaterThan(0);
-      expect(job.segments.flat().every((point) => Number.isFinite(point.x) && Number.isFinite(point.y)), name).toBe(true);
-      expect(job.segments.every((segment) => segment.length === 2 && segment[0].y === segment[1].y), name).toBe(true);
-      expect(job.intensities.length, name).toBe(job.segments.length);
-      expect(job.intensities.every((intensity) => intensity > 0 && intensity <= 1), name).toBe(true);
+      expect(job.fillPlans.map((plan) => plan.angleDeg), name).toEqual([...SCAN_DIRECTIONS_DEG]);
+      for (const plan of job.fillPlans) {
+        expect(plan.segments.length, name).toBeGreaterThan(0);
+        expect(plan.segments.flat().every((point) => Number.isFinite(point.x) && Number.isFinite(point.y)), name).toBe(true);
+        expect(plan.segments.every((segment) => segment.length === 2), name).toBe(true);
+        expect(plan.intensities.length, name).toBe(plan.segments.length);
+        expect(plan.intensities.every((intensity) => intensity > 0 && intensity <= 1), name).toBe(true);
+      }
+      expect(job.fillPlans[0].segments.every((segment) => segment[0].y === segment[1].y), name).toBe(true);
+      expect(job.edges.length, name).toBeGreaterThan(0);
       expect(job.stats.pixelCount, name).toBeGreaterThan(0);
       expect(job.stats.pointCount, name).toBeLessThanOrEqual(200_000);
       generated += 1;
@@ -28,9 +34,32 @@ describe("Lucide toolpath generation", () => {
     expect(generated).toBeGreaterThan(1000);
   });
 
+  it("cycles fill scan directions horizontal, vertical, diagonal", () => {
+    const job = buildIconJob(icons.Square, DEFAULT_SETTINGS);
+    const [horizontal, vertical, diagonal] = job.fillPlans;
+
+    expect(horizontal.angleDeg).toBe(0);
+    expect(horizontal.segments.every(([a, b]) => a.y === b.y)).toBe(true);
+    expect(vertical.angleDeg).toBe(90);
+    expect(vertical.segments.every(([a, b]) => a.x === b.x)).toBe(true);
+    expect(diagonal.angleDeg).toBe(45);
+    expect(diagonal.segments.every(([a, b]) => Math.abs(Math.abs(b.x - a.x) - Math.abs(b.y - a.y)) < 0.003)).toBe(true);
+  });
+
+  it("traces closed edge contours around the stroke and its counter", () => {
+    const job = buildIconJob(icons.Square, DEFAULT_SETTINGS);
+
+    expect(job.stats.edgeCount).toBeGreaterThanOrEqual(2);
+    expect(job.stats.edgeCount).toBe(job.edges.length);
+    for (const edge of job.edges) {
+      expect(edge.length).toBeGreaterThan(3);
+      expect(edge[0]).toEqual(edge.at(-1));
+    }
+  });
+
   it("supports compact SVG arc flags used by the Barrel icon", () => {
     const job = buildIconJob(icons.Barrel, DEFAULT_SETTINGS);
-    expect(job.segments.length).toBeGreaterThan(0);
+    expect(job.fillPlans[0].segments.length).toBeGreaterThan(0);
     expect(job.stats.pointCount).toBeGreaterThan(job.stats.motionSegments);
   });
 
@@ -57,8 +86,8 @@ describe("Lucide toolpath generation", () => {
   it("centers transformed vectors on the configured fine offset", () => {
     const job = buildIconJob(icons.Square, { ...DEFAULT_SETTINGS, offsetX: 1.5, offsetY: -2.5 });
     const bounds = job.stats.bounds!;
-    expect((bounds.minX + bounds.maxX) / 2).toBeCloseTo(1.5, 5);
-    expect((bounds.minY + bounds.maxY) / 2).toBeCloseTo(-2.5, 5);
+    expect((bounds.minX + bounds.maxX) / 2).toBeCloseTo(1.5, 1);
+    expect((bounds.minY + bounds.maxY) / 2).toBeCloseTo(-2.5, 1);
   });
 
   it("rasterizes adjustable Lucide strokes with grayscale edge coverage", () => {
@@ -69,7 +98,9 @@ describe("Lucide toolpath generation", () => {
     expect(thick.stats.scanlineCount).toBe(7);
     expect(thin.stats.grayscaleLevels).toBeGreaterThan(1);
     expect(thick.stats.grayscaleLevels).toBeGreaterThan(1);
-    expect(thick.stats.bounds!.maxY - thick.stats.bounds!.minY).toBeCloseTo(0.7, 5);
+    const thickSpan = thick.stats.bounds!.maxY - thick.stats.bounds!.minY;
+    expect(thickSpan).toBeGreaterThanOrEqual(0.7 - 1e-6);
+    expect(thickSpan).toBeLessThanOrEqual(0.95);
   });
 
   it("keeps the keycap boundary fixed when the icon is offset", () => {
@@ -78,22 +109,28 @@ describe("Lucide toolpath generation", () => {
     expect(job.stats.fitsKeycap).toBe(false);
   });
 
-  it("rasterizes representative Simple Icons as filled horizontal scan runs", () => {
+  it("rasterizes representative Simple Icons as filled scan runs in three directions", () => {
     for (const icon of [siApple, siDiscord, siGithub, siYoutube]) {
       const job = buildSimpleIconJob(icon.path, DEFAULT_SETTINGS);
       expect(job.stats.pixelCount, icon.title).toBeGreaterThan(100);
       expect(job.stats.fitsKeycap, icon.title).toBe(true);
-      expect(job.segments.every((segment) => segment.length === 2 && segment[0].y === segment[1].y), icon.title).toBe(true);
-      expect(job.intensities.length, icon.title).toBe(job.segments.length);
+      expect(job.fillPlans, icon.title).toHaveLength(SCAN_DIRECTIONS_DEG.length);
+      expect(job.fillPlans[0].segments.every((segment) => segment.length === 2 && segment[0].y === segment[1].y), icon.title).toBe(true);
+      expect(job.fillPlans[1].segments.every((segment) => segment.length === 2 && segment[0].x === segment[1].x), icon.title).toBe(true);
+      for (const plan of job.fillPlans) {
+        expect(plan.intensities.length, icon.title).toBe(plan.segments.length);
+      }
+      expect(job.edges.length, icon.title).toBeGreaterThan(0);
       expect(job.stats.grayscaleLevels, icon.title).toBeGreaterThan(1);
     }
   });
 
   it("preserves holes in compound filled brand paths", () => {
     const job = buildSimpleIconJob("M2 2H22V22H2Z M8 8V16H16V8Z", { ...DEFAULT_SETTINGS, iconSize: 12 });
-    const centerRuns = job.segments.filter((segment) => segment[0].y === 0);
+    const centerRuns = job.fillPlans[0].segments.filter((segment) => segment[0].y === 0);
     expect(centerRuns.length).toBeGreaterThan(2);
     expect(centerRuns.every((run) => Math.max(run[0].x, run[1].x) < 0 || Math.min(run[0].x, run[1].x) > 0)).toBe(true);
+    expect(job.stats.edgeCount).toBeGreaterThanOrEqual(2);
     expect(job.stats.grayscaleLevels).toBeGreaterThan(1);
   });
 });

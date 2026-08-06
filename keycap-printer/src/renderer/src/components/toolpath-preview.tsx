@@ -60,12 +60,17 @@ export function ToolpathPreview({ job, settings }: ToolpathPreviewProps) {
             <line x1={0} y1={-1} x2={0} y2={1} />
           </g>
           <g className="fill-none stroke-toolpath" strokeWidth="0.13" strokeLinecap="round" strokeLinejoin="round">
-            {job?.segments.map((segment, index) => (
+            {job?.fillPlans[0]?.segments.map((segment, index) => (
               <polyline
                 key={index}
                 points={segment.map(({ x, y }) => `${x},${y}`).join(" ")}
-                strokeOpacity={0.12 + job.intensities[index] * 0.88}
+                strokeOpacity={0.12 + job.fillPlans[0].intensities[index] * 0.88}
               />
+            ))}
+          </g>
+          <g className="fill-none stroke-toolpath" strokeWidth="0.18" strokeLinecap="round" strokeLinejoin="round">
+            {job?.edges.map((edge, index) => (
+              <polyline key={index} points={edge.map(({ x, y }) => `${x},${y}`).join(" ")} />
             ))}
           </g>
         </g>

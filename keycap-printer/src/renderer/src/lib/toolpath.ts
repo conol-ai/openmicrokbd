@@ -11,6 +11,8 @@ export const ENGRAVE_SPEED_PERCENT = 10;
 export const DEFAULT_LINE_WIDTH_MM = 0.7;
 export const RASTER_PIXEL_MM = 0.1;
 export const GRAYSCALE_LEVELS = 16;
+export const SCAN_DIRECTIONS_DEG = [0, 90, 45] as const;
+export const EDGE_ISO_LEVEL = 0.5;
 
 const SUPERSAMPLE_SIDE = 4;
 const FULL_COVERAGE_MASK = (1 << GRAYSCALE_LEVELS) - 1;
@@ -70,6 +72,7 @@ export interface JobStats {
   pointCount: number;
   pixelCount: number;
   scanlineCount: number;
+  edgeCount: number;
   grayscaleLevels: number;
   travelMm: number;
   cutsMm: number;
@@ -78,9 +81,15 @@ export interface JobStats {
   fitsKeycap: boolean;
 }
 
-export interface LaserJob {
+export interface FillPlan {
+  angleDeg: number;
   segments: Point[][];
   intensities: number[];
+}
+
+export interface LaserJob {
+  edges: Point[][];
+  fillPlans: FillPlan[];
   stats: JobStats;
 }
 
@@ -126,8 +135,11 @@ export function buildIconJob(iconNode: IconNode, settings: Partial<LaserSettings
   const normalized = normalizeSettings(settings);
   const source = iconNode.flatMap(([tag, attrs]) => elementToPolylines(tag, attrs, normalized.curveQuality));
   const centerlines = transformPolylines(source.map(dedupeAdjacentPoints).filter((line) => line.length > 1), normalized);
-  const raster = rasterizePolylines(centerlines, normalized.lineWidth);
-  return buildLaserJob(raster, normalized);
+  const origin = iconCenter(normalized);
+  return buildLaserJob(
+    (angleDeg) => rasterizeStrokeRows(rotatePolylines(centerlines, -angleDeg, origin), normalized.lineWidth),
+    normalized
+  );
 }
 
 export function buildSimpleIconJob(pathData: string, settings: Partial<LaserSettings>): LaserJob {
@@ -136,24 +148,48 @@ export function buildSimpleIconJob(pathData: string, settings: Partial<LaserSett
     pathToPolylines(pathData, normalized.curveQuality).map(dedupeAdjacentPoints).filter((line) => line.length > 1),
     normalized
   );
-  return buildLaserJob(rasterizeFilledPolylines(contours), normalized);
+  const origin = iconCenter(normalized);
+  return buildLaserJob((angleDeg) => rasterizeFillRows(rotatePolylines(contours, -angleDeg, origin)), normalized);
 }
 
-function buildLaserJob(raster: RasterizedToolpath, settings: LaserSettings): LaserJob {
-  const baseStats = pathStats(raster.segments);
+function buildLaserJob(rowsForAngle: (angleDeg: number) => RasterRows, settings: LaserSettings): LaserJob {
+  const origin = iconCenter(settings);
+  const fillPlans: FillPlan[] = [];
+  let edges: Point[][] = [];
+  let bounds: Bounds | null = null;
+  let pixelCount = 0;
+  let scanlineCount = 0;
+  let grayscaleLevels = 0;
+
+  for (const angleDeg of SCAN_DIRECTIONS_DEG) {
+    const rows = rowsForAngle(angleDeg);
+    const raster = rasterRowsToToolpath(rows);
+    const segments = rotatePolylinesBack(raster.segments, angleDeg, origin);
+    fillPlans.push({ angleDeg, segments, intensities: raster.intensities });
+    bounds = unionBounds(bounds, fillPlanBounds(segments, angleDeg));
+    if (angleDeg === 0) {
+      pixelCount = raster.pixelCount;
+      scanlineCount = raster.scanlineCount;
+      grayscaleLevels = raster.grayscaleLevels;
+      edges = traceCoverageEdges(rows);
+    }
+  }
+
   const workArea = keycapBounds(settings);
+  const baseStats = pathStats([...edges, ...fillPlans[0].segments]);
 
   return {
-    segments: raster.segments,
-    intensities: raster.intensities,
+    edges,
+    fillPlans,
     stats: {
       ...baseStats,
-      pixelCount: raster.pixelCount,
-      scanlineCount: raster.scanlineCount,
-      grayscaleLevels: raster.grayscaleLevels,
-      bounds: raster.bounds,
+      pixelCount,
+      scanlineCount,
+      edgeCount: edges.length,
+      grayscaleLevels,
+      bounds,
       workArea,
-      fitsKeycap: raster.bounds !== null && boundsInside(raster.bounds, workArea)
+      fitsKeycap: bounds !== null && boundsInside(bounds, workArea)
     }
   };
 }
@@ -235,7 +271,7 @@ interface RasterizedToolpath {
 
 type RasterRows = Map<number, Map<number, number>>;
 
-function rasterizePolylines(polylines: Point[][], width: number): RasterizedToolpath {
+function rasterizeStrokeRows(polylines: Point[][], width: number): RasterRows {
   const rows: RasterRows = new Map();
   const radius = width / 2;
   const fullCoverageRadius = Math.max(0, radius - PIXEL_HALF_DIAGONAL);
@@ -267,12 +303,12 @@ function rasterizePolylines(polylines: Point[][], width: number): RasterizedTool
     }
   }
 
-  return rasterRowsToToolpath(rows);
+  return rows;
 }
 
-function rasterizeFilledPolylines(contours: Point[][]): RasterizedToolpath {
+function rasterizeFillRows(contours: Point[][]): RasterRows {
   const points = contours.flat();
-  if (points.length === 0) return emptyRasterizedToolpath();
+  if (points.length === 0) return new Map();
 
   const rows: RasterRows = new Map();
   const minX = Math.min(...points.map((point) => point.x));
@@ -294,7 +330,7 @@ function rasterizeFilledPolylines(contours: Point[][]): RasterizedToolpath {
     }
   }
 
-  return rasterRowsToToolpath(rows);
+  return rows;
 }
 
 function isInsideFilledPath(point: Point, contours: Point[][]): boolean {
@@ -376,6 +412,227 @@ function emptyRasterizedToolpath(): RasterizedToolpath {
   return { segments: [], intensities: [], bounds: null, pixelCount: 0, scanlineCount: 0, grayscaleLevels: 0 };
 }
 
+function rotatePolylines(lines: Point[][], angleDeg: number, origin: Point): Point[][] {
+  if (angleDeg === 0) return lines;
+  const radians = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return lines.map((line) => line.map((point) => rotatePointAround(point, cos, sin, origin)));
+}
+
+function rotatePolylinesBack(lines: Point[][], angleDeg: number, origin: Point): Point[][] {
+  if (angleDeg === 0) return lines;
+  const radians = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return lines.map((line) =>
+    line.map((point) => {
+      const rotated = rotatePointAround(point, cos, sin, origin);
+      return { x: roundRasterCoordinate(rotated.x), y: roundRasterCoordinate(rotated.y) };
+    })
+  );
+}
+
+function rotatePointAround(point: Point, cos: number, sin: number, origin: Point): Point {
+  const x = point.x - origin.x;
+  const y = point.y - origin.y;
+  return { x: origin.x + x * cos - y * sin, y: origin.y + x * sin + y * cos };
+}
+
+function fillPlanBounds(segments: Point[][], angleDeg: number): Bounds | null {
+  if (segments.length === 0) return null;
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const segment of segments) {
+    for (const point of segment) {
+      minX = Math.min(minX, point.x);
+      maxX = Math.max(maxX, point.x);
+      minY = Math.min(minY, point.y);
+      maxY = Math.max(maxY, point.y);
+    }
+  }
+
+  // Runs are centerlines of pixel rows: expand by the half-pixel row width
+  // along the scan normal to cover what the beam actually sweeps.
+  const radians = (angleDeg * Math.PI) / 180;
+  const expandX = Math.abs(Math.sin(radians)) * (RASTER_PIXEL_MM / 2);
+  const expandY = Math.abs(Math.cos(radians)) * (RASTER_PIXEL_MM / 2);
+  return {
+    minX: roundRasterCoordinate(minX - expandX),
+    maxX: roundRasterCoordinate(maxX + expandX),
+    minY: roundRasterCoordinate(minY - expandY),
+    maxY: roundRasterCoordinate(maxY + expandY)
+  };
+}
+
+function unionBounds(a: Bounds | null, b: Bounds | null): Bounds | null {
+  if (!a) return b;
+  if (!b) return a;
+  return {
+    minX: Math.min(a.minX, b.minX),
+    maxX: Math.max(a.maxX, b.maxX),
+    minY: Math.min(a.minY, b.minY),
+    maxY: Math.max(a.maxY, b.maxY)
+  };
+}
+
+function traceCoverageEdges(rows: RasterRows): Point[][] {
+  if (rows.size === 0) return [];
+
+  let minRow = Number.POSITIVE_INFINITY;
+  let maxRow = Number.NEGATIVE_INFINITY;
+  let minColumn = Number.POSITIVE_INFINITY;
+  let maxColumn = Number.NEGATIVE_INFINITY;
+  for (const [row, columns] of rows) {
+    minRow = Math.min(minRow, row);
+    maxRow = Math.max(maxRow, row);
+    for (const column of columns.keys()) {
+      minColumn = Math.min(minColumn, column);
+      maxColumn = Math.max(maxColumn, column);
+    }
+  }
+
+  const level = (row: number, column: number): number => {
+    const mask = rows.get(row)?.get(column);
+    return mask ? coverageLevel(mask) / GRAYSCALE_LEVELS : 0;
+  };
+
+  const segments: Array<[Point, Point]> = [];
+  for (let row = minRow - 1; row <= maxRow; row += 1) {
+    for (let column = minColumn - 1; column <= maxColumn; column += 1) {
+      marchCoverageCell(row, column, level, segments);
+    }
+  }
+  return chainEdgeSegments(segments);
+}
+
+function marchCoverageCell(
+  row: number,
+  column: number,
+  level: (row: number, column: number) => number,
+  segments: Array<[Point, Point]>
+): void {
+  const iso = EDGE_ISO_LEVEL;
+  const v00 = level(row, column);
+  const v10 = level(row, column + 1);
+  const v11 = level(row + 1, column + 1);
+  const v01 = level(row + 1, column);
+  const caseIndex = (v00 >= iso ? 1 : 0) | (v10 >= iso ? 2 : 0) | (v11 >= iso ? 4 : 0) | (v01 >= iso ? 8 : 0);
+  if (caseIndex === 0 || caseIndex === 15) return;
+
+  const x = column * RASTER_PIXEL_MM;
+  const y = row * RASTER_PIXEL_MM;
+  const interpolate = (a: number, b: number) => ((iso - a) / (b - a)) * RASTER_PIXEL_MM;
+  const bottom = () => ({ x: x + interpolate(v00, v10), y });
+  const top = () => ({ x: x + interpolate(v01, v11), y: y + RASTER_PIXEL_MM });
+  const left = () => ({ x, y: y + interpolate(v00, v01) });
+  const right = () => ({ x: x + RASTER_PIXEL_MM, y: y + interpolate(v10, v11) });
+  const add = (a: Point, b: Point) => {
+    if (Math.abs(a.x - b.x) > 1e-9 || Math.abs(a.y - b.y) > 1e-9) segments.push([a, b]);
+  };
+  const centerInside = (v00 + v10 + v11 + v01) / 4 >= iso;
+
+  switch (caseIndex) {
+    case 1:
+    case 14:
+      add(left(), bottom());
+      break;
+    case 2:
+    case 13:
+      add(bottom(), right());
+      break;
+    case 3:
+    case 12:
+      add(left(), right());
+      break;
+    case 4:
+    case 11:
+      add(right(), top());
+      break;
+    case 6:
+    case 9:
+      add(bottom(), top());
+      break;
+    case 7:
+    case 8:
+      add(left(), top());
+      break;
+    case 5:
+      if (centerInside) {
+        add(left(), top());
+        add(bottom(), right());
+      } else {
+        add(left(), bottom());
+        add(right(), top());
+      }
+      break;
+    case 10:
+      if (centerInside) {
+        add(bottom(), left());
+        add(right(), top());
+      } else {
+        add(bottom(), right());
+        add(left(), top());
+      }
+      break;
+  }
+}
+
+function chainEdgeSegments(segments: Array<[Point, Point]>): Point[][] {
+  const key = (point: Point) => `${Math.round(point.x * 1e6)},${Math.round(point.y * 1e6)}`;
+  const links = new Map<string, number[]>();
+  for (const [index, segment] of segments.entries()) {
+    for (const end of segment) {
+      const endKey = key(end);
+      const list = links.get(endKey) ?? [];
+      list.push(index);
+      links.set(endKey, list);
+    }
+  }
+
+  const used = new Array<boolean>(segments.length).fill(false);
+  const contours: Point[][] = [];
+
+  for (const [startIndex, segment] of segments.entries()) {
+    if (used[startIndex]) continue;
+    used[startIndex] = true;
+    const contour: Point[] = [segment[0], segment[1]];
+    const startKey = key(segment[0]);
+
+    for (;;) {
+      const tipKey = key(contour.at(-1)!);
+      if (tipKey === startKey) break;
+      const nextIndex = links.get(tipKey)?.find((candidate) => !used[candidate]);
+      if (nextIndex === undefined) break;
+      used[nextIndex] = true;
+      const [a, b] = segments[nextIndex];
+      contour.push(key(a) === tipKey ? b : a);
+    }
+
+    const rounded = dedupeAdjacentPoints(
+      contour.map((point) => ({ x: roundRasterCoordinate(point.x), y: roundRasterCoordinate(point.y) }))
+    );
+    if (rounded.length > 2) contours.push(simplifyContour(rounded));
+  }
+
+  return contours;
+}
+
+function simplifyContour(points: Point[]): Point[] {
+  const simplified: Point[] = [points[0]];
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const previous = simplified.at(-1)!;
+    const current = points[index];
+    const next = points[index + 1];
+    const cross = (current.x - previous.x) * (next.y - previous.y) - (current.y - previous.y) * (next.x - previous.x);
+    if (Math.abs(cross) > 1e-9) simplified.push(current);
+  }
+  simplified.push(points.at(-1)!);
+  return simplified;
+}
+
 function sampleCoverageMask(x: number, y: number, isCovered: (sample: Point) => boolean): number {
   let mask = 0;
   for (const [index, offset] of SUBPIXEL_OFFSETS.entries()) {
@@ -425,7 +682,7 @@ function keycapBounds(settings: LaserSettings): Bounds {
 
 function pathStats(
   segments: Point[][]
-): Omit<JobStats, "pixelCount" | "scanlineCount" | "grayscaleLevels" | "bounds" | "workArea" | "fitsKeycap"> {
+): Omit<JobStats, "pixelCount" | "scanlineCount" | "edgeCount" | "grayscaleLevels" | "bounds" | "workArea" | "fitsKeycap"> {
   let cutsMm = 0;
   let travelMm = 0;
   let previousEnd: Point | null = null;

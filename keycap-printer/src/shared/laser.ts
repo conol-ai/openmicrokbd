@@ -76,9 +76,14 @@ export interface EngravePoint {
   y: number;
 }
 
-export interface EngraveJobData {
+export interface EngraveFillPlanData {
   segments: EngravePoint[][];
   intensities: number[];
+}
+
+export interface EngraveJobData {
+  edges: EngravePoint[][];
+  fillPlans: EngraveFillPlanData[];
   powerPercent: number;
   speedPercent: number;
   passes: number;
@@ -87,33 +92,46 @@ export interface EngraveJobData {
 export function isEngraveJobData(value: unknown): value is EngraveJobData {
   if (!value || typeof value !== "object") return false;
   const job = value as Partial<EngraveJobData>;
-  if (!Array.isArray(job.segments) || job.segments.length === 0 || job.segments.length > 10_000) return false;
-  if (!Array.isArray(job.intensities) || job.intensities.length !== job.segments.length) return false;
   if (typeof job.powerPercent !== "number" || !Number.isFinite(job.powerPercent) || job.powerPercent < 0 || job.powerPercent > 100) return false;
   if (typeof job.speedPercent !== "number" || !Number.isFinite(job.speedPercent) || job.speedPercent < 1 || job.speedPercent > 100) return false;
   if (typeof job.passes !== "number" || !Number.isInteger(job.passes) || job.passes < 1 || job.passes > 20) return false;
+  if (!Array.isArray(job.edges) || job.edges.length > 10_000) return false;
+  if (!Array.isArray(job.fillPlans) || job.fillPlans.length < 1 || job.fillPlans.length > 3) return false;
 
-  let pointCount = 0;
-  for (const [segmentIndex, segment] of job.segments.entries()) {
-    if (!Array.isArray(segment)) return false;
-    const intensity = job.intensities[segmentIndex];
-    if (typeof intensity !== "number" || !Number.isFinite(intensity) || intensity <= 0 || intensity > 1) return false;
-    pointCount += segment.length;
-    if (pointCount > 200_000) return false;
-    for (const point of segment) {
-      if (
-        !point ||
-        typeof point !== "object" ||
-        typeof point.x !== "number" ||
-        typeof point.y !== "number" ||
-        !Number.isFinite(point.x) ||
-        !Number.isFinite(point.y) ||
-        Math.abs(point.x) > 100 ||
-        Math.abs(point.y) > 100
-      ) return false;
+  const budget = { points: 0 };
+  for (const edge of job.edges) {
+    if (!isEngravePolyline(edge, 2, budget)) return false;
+  }
+  for (const plan of job.fillPlans) {
+    if (!plan || typeof plan !== "object") return false;
+    if (!Array.isArray(plan.segments) || plan.segments.length === 0 || plan.segments.length > 10_000) return false;
+    if (!Array.isArray(plan.intensities) || plan.intensities.length !== plan.segments.length) return false;
+    for (const [runIndex, run] of plan.segments.entries()) {
+      const intensity = plan.intensities[runIndex];
+      if (typeof intensity !== "number" || !Number.isFinite(intensity) || intensity <= 0 || intensity > 1) return false;
+      if (!Array.isArray(run) || run.length !== 2 || !isEngravePolyline(run, 2, budget)) return false;
     }
   }
-  return pointCount >= 2;
+  return budget.points >= 2;
+}
+
+function isEngravePolyline(value: unknown, minPoints: number, budget: { points: number }): boolean {
+  if (!Array.isArray(value) || value.length < minPoints) return false;
+  budget.points += value.length;
+  if (budget.points > 200_000) return false;
+  for (const point of value) {
+    if (
+      !point ||
+      typeof point !== "object" ||
+      typeof (point as EngravePoint).x !== "number" ||
+      typeof (point as EngravePoint).y !== "number" ||
+      !Number.isFinite((point as EngravePoint).x) ||
+      !Number.isFinite((point as EngravePoint).y) ||
+      Math.abs((point as EngravePoint).x) > 100 ||
+      Math.abs((point as EngravePoint).y) > 100
+    ) return false;
+  }
+  return true;
 }
 
 export type LaserEvent =

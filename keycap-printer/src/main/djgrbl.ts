@@ -1,5 +1,15 @@
 import { createCipheriv, createDecipheriv } from "node:crypto";
-import type { EngraveJobData, EngravePoint } from "../shared/laser";
+import type { EngravePoint } from "../shared/laser";
+
+// The vendor protocol streams flat vector polylines; it predates the
+// edges-plus-fill-plans job structure used by the live GRBL path.
+export interface DjGrblEngraveJob {
+  segments: EngravePoint[][];
+  intensities?: number[];
+  powerPercent: number;
+  speedPercent: number;
+  passes: number;
+}
 
 const OUTGOING_KEY = Buffer.from("1b6e251826afd8462b17458866c0483e", "hex");
 const INCOMING_KEY = Buffer.from("2b7e152628aed2a8abf7158808cf4f3c", "hex");
@@ -121,7 +131,7 @@ export class DjGrblResponseParser {
   }
 }
 
-export function buildCenteredDjGrblJob(job: EngraveJobData, center: MachinePoint): DjGrblJobPlan {
+export function buildCenteredDjGrblJob(job: DjGrblEngraveJob, center: MachinePoint): DjGrblJobPlan {
   validateJob(job);
   if (!Number.isFinite(center.x) || !Number.isFinite(center.y)) throw new Error("Machine position is unavailable");
 
@@ -169,7 +179,7 @@ export function buildCenteredDjGrblJob(job: EngraveJobData, center: MachinePoint
   };
 }
 
-function buildMarkProperties(job: EngraveJobData): DjGrblRecord[] {
+function buildMarkProperties(job: DjGrblEngraveJob): DjGrblRecord[] {
   return [
     valueRecord(0x05, Math.trunc((job.speedPercent / 100) * 0xffff)),
     valueRecord(0x06, 100_000),
@@ -246,7 +256,7 @@ function encodeRecords(records: DjGrblRecord[]): Buffer {
   return output;
 }
 
-function validateJob(job: EngraveJobData): void {
+function validateJob(job: DjGrblEngraveJob): void {
   if (!Array.isArray(job.segments) || job.segments.length === 0 || job.segments.length > 10_000) {
     throw new Error("Invalid engraving path list");
   }

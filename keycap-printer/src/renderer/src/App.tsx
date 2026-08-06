@@ -185,8 +185,8 @@ export function App() {
     if (!job || !job.stats.fitsKeycap) return;
     try {
       await controller.runCenteredJob({
-        segments: job.segments,
-        intensities: job.intensities,
+        edges: job.edges,
+        fillPlans: job.fillPlans.map((plan) => ({ segments: plan.segments, intensities: plan.intensities })),
         powerPercent: powerToPercent(settings.power),
         speedPercent: feedToPercent(settings.engraveFeed),
         passes: settings.passes
@@ -203,6 +203,8 @@ export function App() {
     `Pixels: ${job.stats.pixelCount}`,
     `Scanlines: ${job.stats.scanlineCount}`,
     `Runs: ${job.stats.motionSegments}`,
+    `Edge contours: ${job.stats.edgeCount}`,
+    "Scan cycle: horizontal, vertical, 45 deg per pass",
     `Grayscale levels: ${job.stats.grayscaleLevels}`,
     "Resolution: 0.1 mm",
     selected.kind === "lucide" ? `Line width: ${settings.lineWidth.toFixed(1)} mm` : "Fill: solid brand silhouette",
