@@ -8,8 +8,12 @@
 //!   COL0..3  = PB4  PB5  PC14 PC13  (inputs, pull-down; diode cathode -> COL)
 //!   ENC_A/B  = PB12 PB13 (quadrature, pull-up, common to GND)
 //!   ENC_SW   = PB15      (pull-up, active low)
-//!   JOY_X/Y  = PB1/ADC_IN9  PA0/ADC_IN0
-//!   JOY_SW   = PA15      (pull-up, active low)
+//!   JOY_X/Y  = PB1/ADC_IN9  PA0/ADC_IN0 (stick mounted rotated: the JOY_X
+//!              net senses vertical travel — adc_task swaps the channels)
+//!   JOY_SW   = PA15      (pull-up, active low; DEAD on the 2026-08 fab —
+//!              that revision's footprint paired the switch poles by column
+//!              instead of by row, shorting the line to GND through the
+//!              switch body; fixed in openmicro_parts.cohdl for the next spin)
 //!   TOUCH    = PB9       (RC charge-time sensing, no external R)
 //!   LED_KEY  = PA8       (13x SK6812MINI-E per-key chain)
 //!   LED_UG   = PB14      (8x SK6812MINI-E perimeter underglow ring)
@@ -29,12 +33,16 @@
 //! (keymap.rs) — all 13 keys are independent positions (including the pair
 //! under the 2U keycap). Factory defaults: keys F13..F20 + Shift+F13..F17
 //! (interceptable on every OS), encoder -> volume/mute, touch -> play/pause,
-//! joystick -> arrows/enter.
+//! joystick -> arrows/enter. The joystick alternatively runs in MOUSE mode
+//! (keymap.rs joy_mode): a dedicated HID mouse interface carries
+//! proportional pointer motion and the stick's push switch becomes left
+//! click.
 //!
-//! A third, vendor-defined HID interface (usage page 0xFF60) carries the
-//! app protocol: version query, DFU reboot, keymap read/write/save, analog
-//! tuning, and unsolicited input-event reports (first byte 0x80) that give
-//! the app live press feedback without any OS input-monitoring permission.
+//! A vendor-defined HID interface (usage page 0xFF60) carries the app
+//! protocol: version query, DFU reboot, keymap read/write/save, analog
+//! tuning, joystick mode, and unsolicited input-event reports (first byte
+//! 0x80) that give the app live press feedback without any OS
+//! input-monitoring permission.
 
 #![no_std]
 #![no_main]
@@ -64,7 +72,9 @@ use defmt::{debug, info, warn};
 use defmt_rtt as _;
 use panic_probe as _;
 use static_cell::StaticCell;
-use usbd_hid::descriptor::{KeyboardReport, MediaKeyboardReport, SerializedDescriptor};
+use usbd_hid::descriptor::{
+    KeyboardReport, MediaKeyboardReport, MouseReport, SerializedDescriptor,
+};
 
 bind_interrupts!(struct Irqs {
     USB => usb::InterruptHandler<peripherals::USB>;
@@ -148,6 +158,12 @@ const RAW_HID_DESC: &[u8] = &[
 //   [0x06, 'R','S','T','!']        -> [0x06, ok] (factory defaults, flash wiped)
 //   [0x07]                         -> [0x07, thr_lo, thr_hi] (joystick threshold)
 //   [0x08, thr_lo, thr_hi]         -> [0x08, 0x01] (RAM only; SAVE persists)
+//   [0x09]                         -> [0x09, mode, speed] (joystick mode 0 keys /
+//                                     1 mouse, pointer speed 1..=10)
+//   [0x0A, mode, speed]            -> [0x0A, 0x01] (RAM only; SAVE persists)
+//   [0x0B]                         -> [0x0B, brightness] (LED brightness 0..=255)
+//   [0x0C, brightness]             -> [0x0C, 0x01] (RAM only, applied within one
+//                                     LED frame; SAVE persists)
 const CMD_VERSION: u8 = 0x01;
 const CMD_ENTER_DFU: u8 = 0x02;
 const CMD_GET_KEYMAP: u8 = 0x03;
@@ -156,6 +172,10 @@ const CMD_SAVE: u8 = 0x05;
 const CMD_FACTORY_RESET: u8 = 0x06;
 const CMD_GET_ANALOG: u8 = 0x07;
 const CMD_SET_ANALOG: u8 = 0x08;
+const CMD_GET_JOYMODE: u8 = 0x09;
+const CMD_SET_JOYMODE: u8 = 0x0A;
+const CMD_GET_LED: u8 = 0x0B;
+const CMD_SET_LED: u8 = 0x0C;
 const ENTER_DFU_KEY: &[u8; 4] = b"DFU!";
 const SAVE_KEY: &[u8; 4] = b"SAVE";
 const RESET_KEY: &[u8; 4] = b"RST!";
@@ -188,6 +208,27 @@ impl KeyboardTransition {
 // overload can never split that ordering guarantee.
 static KBD_CH: Channel<ThreadModeRawMutex, KeyboardTransition, 16> = Channel::new();
 static CONSUMER_CH: Channel<ThreadModeRawMutex, MediaKeyboardReport, 8> = Channel::new();
+
+/// One HID mouse frame (mouse-mode joystick). Every frame carries the FULL
+/// button state, so newest-wins eviction on overload can never strand a
+/// click: whatever report goes out last is the truth.
+#[derive(Clone, Copy)]
+struct MouseFrame {
+    buttons: u8,
+    dx: i8,
+    dy: i8,
+}
+static MOUSE_CH: Channel<ThreadModeRawMutex, MouseFrame, 8> = Channel::new();
+/// Current mouse button bitmask (bit 0 = left, from the joystick push
+/// switch). Written by scan_task, folded into motion frames by adc_task.
+static MOUSE_BUTTONS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+fn force_send_mouse(frame: MouseFrame) {
+    if MOUSE_CH.try_send(frame).is_err() {
+        let _ = MOUSE_CH.try_receive();
+        let _ = MOUSE_CH.try_send(frame);
+    }
+}
 /// Bit i = key position i pressed — drives the per-key LED effect.
 static KEYSTATE: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);
 
@@ -466,6 +507,7 @@ async fn main(spawner: Spawner) {
     static CONTROL_BUF: StaticCell<[u8; 64]> = StaticCell::new();
     static KBD_STATE: StaticCell<State> = StaticCell::new();
     static CONSUMER_STATE: StaticCell<State> = StaticCell::new();
+    static MOUSE_STATE: StaticCell<State> = StaticCell::new();
     static RAW_STATE: StaticCell<State> = StaticCell::new();
 
     let mut builder = embassy_usb::Builder::new(
@@ -494,6 +536,18 @@ async fn main(spawner: Spawner) {
             report_descriptor: MediaKeyboardReport::desc(),
             request_handler: None,
             poll_ms: 8,
+            max_packet_size: 8,
+        },
+    );
+
+    // IN-only: the pointer interface for the joystick's mouse mode.
+    let mut mouse_writer = HidWriter::<_, 8>::new(
+        &mut builder,
+        MOUSE_STATE.init(State::new()),
+        embassy_usb::class::hid::Config {
+            report_descriptor: MouseReport::desc(),
+            request_handler: None,
+            poll_ms: 4,
             max_packet_size: 8,
         },
     );
@@ -619,8 +673,14 @@ async fn main(spawner: Spawner) {
                 continue;
             }
 
-            match embassy_futures::select::select(KBD_CH.receive(), CONSUMER_CH.receive()).await {
-                embassy_futures::select::Either::First(transition) => {
+            match embassy_futures::select::select3(
+                KBD_CH.receive(),
+                CONSUMER_CH.receive(),
+                MOUSE_CH.receive(),
+            )
+            .await
+            {
+                embassy_futures::select::Either3::First(transition) => {
                     match write_keyboard_transition(&mut kbd_writer, &transition).await {
                         Ok(()) => {}
                         Err(EndpointError::Disabled) => keyboard_needs_resync = true,
@@ -629,8 +689,18 @@ async fn main(spawner: Spawner) {
                         }
                     }
                 }
-                embassy_futures::select::Either::Second(report) => {
+                embassy_futures::select::Either3::Second(report) => {
                     let _ = consumer_writer.write_serialize(&report).await;
+                }
+                embassy_futures::select::Either3::Third(frame) => {
+                    let report = MouseReport {
+                        buttons: frame.buttons,
+                        x: frame.dx,
+                        y: frame.dy,
+                        wheel: 0,
+                        pan: 0,
+                    };
+                    let _ = mouse_writer.write_serialize(&report).await;
                 }
             }
         }
@@ -720,6 +790,33 @@ async fn main(spawner: Spawner) {
                             info!("app: joystick threshold -> {=u16}", thr);
                             reply[1] = 0x01;
                         }
+                        CMD_GET_JOYMODE => {
+                            reply[1] = keymap::joy_mode();
+                            reply[2] = keymap::joy_mouse_speed();
+                        }
+                        CMD_SET_JOYMODE => {
+                            let mode = if buf[1] <= keymap::JOY_MODE_MOUSE {
+                                buf[1]
+                            } else {
+                                keymap::DEFAULT_JOY_MODE
+                            };
+                            let speed = buf[2].clamp(1, 10);
+                            keymap::KEYMAP.lock(|k| {
+                                let mut k = k.borrow_mut();
+                                k.joy_mode = mode;
+                                k.joy_mouse_speed = speed;
+                            });
+                            info!("app: joystick mode -> {=u8} speed {=u8}", mode, speed);
+                            reply[1] = 0x01;
+                        }
+                        CMD_GET_LED => {
+                            reply[1] = keymap::led_brightness();
+                        }
+                        CMD_SET_LED => {
+                            keymap::KEYMAP.lock(|k| k.borrow_mut().led_brightness = buf[1]);
+                            info!("app: led brightness -> {=u8}", buf[1]);
+                            reply[1] = 0x01;
+                        }
                         other => {
                             debug!("app: unknown cmd 0x{=u8:02x}", other);
                             continue;
@@ -766,6 +863,10 @@ async fn scan_task(
     let mut pressed = [[false; 4]; 4];
     let mut enc_sw_last = enc_sw.is_high();
     let mut joy_sw_last = joy_sw.is_high();
+    // Which form of "joystick push down" is outstanding, so a mode switch
+    // mid-hold retracts exactly what was asserted.
+    let mut joy_key_held = false;
+    let mut joy_click_held = false;
 
     loop {
         ticker.next().await;
@@ -822,11 +923,41 @@ async fn scan_task(
         }
         enc_sw_last = e;
 
+        // Joystick push: a held key slot in keys mode, mouse button 1 in
+        // mouse mode. The mode can change while the switch is down (app
+        // sync), so retract a stale assertion before honouring the new mode.
         let j = joy_sw.is_high();
+        let mouse_mode = keymap::joy_mode() == keymap::JOY_MODE_MOUSE;
+        if mouse_mode && joy_key_held {
+            set_held(keymap::SLOT_JOY_PRESS, false);
+            joy_key_held = false;
+        }
+        if !mouse_mode && joy_click_held {
+            joy_click_held = false;
+            MOUSE_BUTTONS.store(0, core::sync::atomic::Ordering::Relaxed);
+            force_send_mouse(MouseFrame {
+                buttons: 0,
+                dx: 0,
+                dy: 0,
+            });
+        }
         if j != joy_sw_last {
             info!("joystick switch {}", if j { "UP" } else { "DOWN" });
-            set_held(keymap::SLOT_JOY_PRESS, !j);
-            post_event(3, 4, !j as u8);
+            let down = !j;
+            if mouse_mode {
+                joy_click_held = down;
+                let buttons = down as u8;
+                MOUSE_BUTTONS.store(buttons, core::sync::atomic::Ordering::Relaxed);
+                force_send_mouse(MouseFrame {
+                    buttons,
+                    dx: 0,
+                    dy: 0,
+                });
+            } else {
+                set_held(keymap::SLOT_JOY_PRESS, down);
+                joy_key_held = down;
+            }
+            post_event(3, 4, down as u8);
         }
         joy_sw_last = j;
 
@@ -890,8 +1021,12 @@ async fn encoder_task(mut enc_a: ExtiInput<'static>, mut enc_b: ExtiInput<'stati
     }
 }
 
-/// Joystick: 50 Hz ADC poll; deflection past the (configurable) threshold
-/// holds that direction's slot until the stick returns to centre.
+/// Joystick, 50 Hz ADC poll. Keys mode: deflection past the (configurable)
+/// threshold holds that direction's slot until the stick returns to centre.
+/// Mouse mode: deflection past a small fixed dead zone moves the HID mouse
+/// pointer proportionally, scaled by the app-tunable speed. Threshold
+/// crossings post app events in both modes, so the app's live feedback keeps
+/// working whatever the stick means.
 #[embassy_executor::task]
 async fn adc_task(
     mut adc: Adc<'static, peripherals::ADC1>,
@@ -902,12 +1037,43 @@ async fn adc_task(
     let mut ticker = Ticker::every(Duration::from_millis(20));
     // Direction indices on the wire (and their slots, at SLOT_JOY_UP + dir).
     const DIR_NONE: u8 = 0xFF;
+    const DIR_SLOTS: [usize; 4] = [
+        keymap::SLOT_JOY_UP,
+        keymap::SLOT_JOY_DOWN,
+        keymap::SLOT_JOY_LEFT,
+        keymap::SLOT_JOY_RIGHT,
+    ];
+    /// Mouse-mode dead zone in ADC counts around centre — fixed and small;
+    /// the key threshold is a *trigger point*, this only absorbs stick slop.
+    const MOUSE_DEADZONE: i32 = 200;
+    /// Fractional-motion denominator: px/frame = deflection × speed / DIV.
+    /// Full deflection (~1848 counts) at speed 5 ≈ 18 px per 20 ms frame.
+    const MOUSE_DIV: i32 = 512;
+    fn past_deadzone(centred: i32) -> i32 {
+        if centred > MOUSE_DEADZONE {
+            centred - MOUSE_DEADZONE
+        } else if centred < -MOUSE_DEADZONE {
+            centred + MOUSE_DEADZONE
+        } else {
+            0
+        }
+    }
     let mut last: u8 = DIR_NONE;
+    let mut was_mouse = false;
+    let mut acc_x: i32 = 0;
+    let mut acc_y: i32 = 0;
     let mut n: u32 = 0;
     loop {
         ticker.next().await;
-        let x = adc.read(&mut joy_x).await;
-        let y = adc.read(&mut joy_y).await;
+        let a = adc.read(&mut joy_x).await;
+        let b = adc.read(&mut joy_y).await;
+        // The current board mounts the stick rotated, so the JOY_X net (PB1)
+        // senses the stick's VERTICAL travel and PA0 the horizontal. Swap at
+        // the source so (x, y) mean what they say for keys and mouse alike.
+        #[cfg(not(feature = "proto"))]
+        let (x, y) = (b, a);
+        #[cfg(feature = "proto")]
+        let (x, y) = (a, b);
         // Once a second, so the raw swing can be eyeballed while the stick is
         // moved — these are the numbers the threshold is judged against.
         n = n.wrapping_add(1);
@@ -929,23 +1095,48 @@ async fn adc_task(
         } else {
             DIR_NONE
         };
+
+        // The app can flip the mode while the stick is deflected; hand the
+        // active direction over so neither mode strands a held key.
+        let mouse = keymap::joy_mode() == keymap::JOY_MODE_MOUSE;
+        if mouse != was_mouse {
+            was_mouse = mouse;
+            acc_x = 0;
+            acc_y = 0;
+            if last != DIR_NONE {
+                set_held(DIR_SLOTS[last as usize], !mouse);
+            }
+        }
+
         if dir != last {
             info!("joystick dir {=u8} (x={=u16} y={=u16})", dir, x, y);
-            const DIR_SLOTS: [usize; 4] = [
-                keymap::SLOT_JOY_UP,
-                keymap::SLOT_JOY_DOWN,
-                keymap::SLOT_JOY_LEFT,
-                keymap::SLOT_JOY_RIGHT,
-            ];
             if last != DIR_NONE {
-                set_held(DIR_SLOTS[last as usize], false);
+                if !mouse {
+                    set_held(DIR_SLOTS[last as usize], false);
+                }
                 post_event(3, last, 0);
             }
             if dir != DIR_NONE {
-                set_held(DIR_SLOTS[dir as usize], true);
+                if !mouse {
+                    set_held(DIR_SLOTS[dir as usize], true);
+                }
                 post_event(3, dir, 1);
             }
             last = dir;
+        }
+
+        if mouse {
+            let speed = keymap::joy_mouse_speed() as i32;
+            acc_x += past_deadzone(x as i32 - 2048) * speed;
+            acc_y += past_deadzone(y as i32 - 2048) * speed;
+            let dx = (acc_x / MOUSE_DIV).clamp(-127, 127) as i8;
+            let dy = (acc_y / MOUSE_DIV).clamp(-127, 127) as i8;
+            if dx != 0 || dy != 0 {
+                acc_x -= dx as i32 * MOUSE_DIV;
+                acc_y -= dy as i32 * MOUSE_DIV;
+                let buttons = MOUSE_BUTTONS.load(core::sync::atomic::Ordering::Relaxed);
+                force_send_mouse(MouseFrame { buttons, dx, dy });
+            }
         }
     }
 }
@@ -1054,7 +1245,7 @@ async fn touch_task(mut pad: Flex<'static>) {
 /// the perimeter underglow ring runs a slow hue rotation. Brightness is capped
 /// to stay inside the 500 mA VBUS budget.
 #[embassy_executor::task]
-async fn led_task(mut led_key: Output<'static>, mut led_ug: Output<'static>) {
+async fn led_task(mut led_key: ws2812::LedPin<'static>, mut led_ug: ws2812::LedPin<'static>) {
     info!("led_task: entered");
     let mut ticker = Ticker::every(Duration::from_millis(33));
     let mut phase: u8 = 0;
@@ -1065,7 +1256,18 @@ async fn led_task(mut led_key: Output<'static>, mut led_ug: Output<'static>) {
         // ~8.5 s heartbeat — cheap proof the executor is still scheduling.
         if phase == 0 {
             debug!("led: alive, keystate=0x{=u16:04x}", state);
+            // Bodge diagnostic: release each open-drain data line and read
+            // it back — true only when an external pull-up lifts this net,
+            // i.e. the 5V bodge resistor is really on the DIN trace.
         }
+
+        // The app-tunable brightness dims DOWN from the hard-coded scales,
+        // which stay the ceiling: they are what keeps the whole board inside
+        // the 500 mA VBUS budget. The setting is SQUARED because perceived
+        // brightness is roughly quadratic in duty cycle — linear scaling
+        // made the top half of the slider look like nothing happened.
+        let bright = keymap::led_brightness() as u32;
+        let dim = |base: u32| ((base * bright * bright) / (255 * 255)) as u8;
 
         let mut keys = [ws2812::Grb::default(); 13];
         for (i, px) in keys.iter_mut().enumerate() {
@@ -1073,19 +1275,28 @@ async fn led_task(mut led_key: Output<'static>, mut led_ug: Output<'static>) {
             // the sw index order in the .cohdl, and every position is
             // independent now (the 2U pair each has its own LED and bit).
             *px = if state & (1 << i) != 0 {
-                ws2812::Grb::rgb(255, 255, 255).scaled(24)
+                ws2812::Grb::rgb(255, 255, 255).scaled(dim(24))
             } else {
-                hue(phase.wrapping_add((i as u8) * 20)).scaled(6)
+                hue(phase.wrapping_add((i as u8) * 20)).scaled(dim(6))
             };
         }
         // The hue step is 256/UG_LEN so the ring carries exactly one full
         // wheel around the board regardless of revision.
         let mut ring = [ws2812::Grb::default(); UG_LEN];
         for (i, px) in ring.iter_mut().enumerate() {
-            *px = hue(phase.wrapping_add((i as u8) * (256 / UG_LEN) as u8)).scaled(8);
+            *px = hue(phase.wrapping_add((i as u8) * (256 / UG_LEN) as u8)).scaled(dim(8));
         }
-        ws2812::write(&mut led_key, &keys);
-        ws2812::write(&mut led_ug, &ring);
+        #[cfg(not(feature = "proto"))]
+        {
+            let _ = (&mut led_key, &mut led_ug);
+            ws2812::write_raw(embassy_stm32::pac::GPIOA, 8, &keys);
+            ws2812::write_raw(embassy_stm32::pac::GPIOB, 14, &ring);
+        }
+        #[cfg(feature = "proto")]
+        {
+            ws2812::write_raw(embassy_stm32::pac::GPIOB, 4, &keys);
+            ws2812::write_raw(embassy_stm32::pac::GPIOA, 0, &ring);
+        }
     }
 }
 

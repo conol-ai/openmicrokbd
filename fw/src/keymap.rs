@@ -48,6 +48,14 @@ pub const KIND_NONE: u8 = 0;
 pub const KIND_KEYBOARD: u8 = 1;
 pub const KIND_CONSUMER: u8 = 2;
 
+/// Joystick modes on the wire (and in flash). In KEYS mode deflection holds
+/// the direction slots like any key; in MOUSE mode deflection moves the HID
+/// mouse pointer proportionally and the stick's push switch is left click
+/// (the direction and press slots are ignored, but keep their contents so
+/// switching back restores them).
+pub const JOY_MODE_KEYS: u8 = 0;
+pub const JOY_MODE_MOUSE: u8 = 1;
+
 /// One emitted code: 4 bytes on the wire (kind, mods, code LE).
 /// `mods` is the HID modifier bitmask (bit0 LCtrl, bit1 LShift, bit2 LAlt,
 /// bit3 LGui); `code` a keyboard usage (KIND_KEYBOARD) or consumer usage
@@ -131,10 +139,18 @@ pub const DEFAULT_SLOTS: [Slot; SLOT_COUNT] = [
 ];
 
 pub const DEFAULT_JOY_THRESHOLD: u16 = 1024;
+pub const DEFAULT_JOY_MODE: u8 = JOY_MODE_KEYS;
+/// 1..=10; the adc task scales pointer motion by this.
+pub const DEFAULT_JOY_MOUSE_SPEED: u8 = 5;
+/// 0..=255 dims both LED chains; 255 = the hard power-budget cap.
+pub const DEFAULT_LED_BRIGHTNESS: u8 = 255;
 
 pub struct KeymapState {
     pub slots: [Slot; SLOT_COUNT],
     pub joy_threshold: u16,
+    pub joy_mode: u8,
+    pub joy_mouse_speed: u8,
+    pub led_brightness: u8,
 }
 
 /// The live keymap. All tasks run in thread mode (no ISR touches this), so a
@@ -143,6 +159,9 @@ pub static KEYMAP: Mutex<ThreadModeRawMutex, RefCell<KeymapState>> =
     Mutex::new(RefCell::new(KeymapState {
         slots: DEFAULT_SLOTS,
         joy_threshold: DEFAULT_JOY_THRESHOLD,
+        joy_mode: DEFAULT_JOY_MODE,
+        joy_mouse_speed: DEFAULT_JOY_MOUSE_SPEED,
+        led_brightness: DEFAULT_LED_BRIGHTNESS,
     }));
 
 pub fn slot(i: usize) -> Slot {
@@ -153,25 +172,47 @@ pub fn joy_threshold() -> u16 {
     KEYMAP.lock(|k| k.borrow().joy_threshold)
 }
 
+pub fn joy_mode() -> u8 {
+    KEYMAP.lock(|k| k.borrow().joy_mode)
+}
+
+pub fn joy_mouse_speed() -> u8 {
+    KEYMAP.lock(|k| k.borrow().joy_mouse_speed)
+}
+
+pub fn led_brightness() -> u8 {
+    KEYMAP.lock(|k| k.borrow().led_brightness)
+}
+
 // ---- flash persistence -----------------------------------------------------
 
 /// Last 2 KiB page of the 128 KiB flash, as an offset from the flash base.
 const CONFIG_OFFSET: u32 = 0x1F800;
 const CONFIG_ADDR: u32 = 0x0800_0000 + CONFIG_OFFSET;
 const MAGIC: u32 = 0x4F4D_4B31; // "OMK1"
-const LAYOUT_VERSION: u16 = 1;
-/// Where the checksum sits: right after the slots.
-const CK_OFFSET: usize = 8 + SLOT_COUNT * 4;
-/// magic(4) + version(2) + joy_threshold(2) + 24 slots × 4 + checksum(2)
-/// + 2 pad bytes, so both flash writes (body, then magic) are multiples of
-/// the F0's 4-byte programming unit.
+/// v1: … slots, checksum(2), pad(2). v2 spent those pad bytes on the two
+/// joystick-mode fields. v3 appends led_brightness + a reserved byte and
+/// moves the checksum after them, growing the blob 108 -> 112 bytes — still
+/// a multiple of the F0's 4-byte programming unit for both flash writes
+/// (body, then magic). Older blobs still load, with the fields they predate
+/// at their defaults.
+const LAYOUT_VERSION: u16 = 3;
+/// Where v1 put the checksum: right after the slots.
+const V1_CK_OFFSET: usize = 8 + SLOT_COUNT * 4;
+/// v2 field homes (the former v1 checksum + pad area).
+const JOY_MODE_OFFSET: usize = V1_CK_OFFSET;
+const JOY_SPEED_OFFSET: usize = V1_CK_OFFSET + 1;
+const V2_CK_OFFSET: usize = V1_CK_OFFSET + 2;
+/// v3 field homes (the former v2 checksum area) + one reserved byte.
+const LED_BRIGHTNESS_OFFSET: usize = V2_CK_OFFSET;
+const CK_OFFSET: usize = V2_CK_OFFSET + 2;
 const BLOB_LEN: usize = CK_OFFSET + 4;
 
-/// Wrapping byte sum over everything before the checksum field. Combined
-/// with magic-last write ordering this makes a torn SAVE fail validation
-/// instead of loading garbage slots.
-fn checksum(b: &[u8]) -> u16 {
-    b[..CK_OFFSET]
+/// Wrapping byte sum over everything before the (version-dependent) checksum
+/// field. Combined with magic-last write ordering this makes a torn SAVE
+/// fail validation instead of loading garbage slots.
+fn checksum(b: &[u8], ck_offset: usize) -> u16 {
+    b[..ck_offset]
         .iter()
         .fold(0u16, |a, &x| a.wrapping_add(x as u16))
 }
@@ -187,7 +228,10 @@ fn encode(state: &KeymapState) -> [u8; BLOB_LEN] {
         b[o + 1] = s.mods;
         b[o + 2..o + 4].copy_from_slice(&s.code.to_le_bytes());
     }
-    let ck = checksum(&b);
+    b[JOY_MODE_OFFSET] = state.joy_mode;
+    b[JOY_SPEED_OFFSET] = state.joy_mouse_speed;
+    b[LED_BRIGHTNESS_OFFSET] = state.led_brightness;
+    let ck = checksum(&b, CK_OFFSET);
     b[CK_OFFSET..CK_OFFSET + 2].copy_from_slice(&ck.to_le_bytes());
     b
 }
@@ -200,15 +244,39 @@ pub fn load_from_flash() -> bool {
         // Safety: reads of valid, always-mapped flash addresses.
         *byte = unsafe { core::ptr::read_volatile((CONFIG_ADDR + i as u32) as *const u8) };
     }
-    if u32::from_le_bytes([b[0], b[1], b[2], b[3]]) != MAGIC
-        || u16::from_le_bytes([b[4], b[5]]) != LAYOUT_VERSION
-        || u16::from_le_bytes([b[CK_OFFSET], b[CK_OFFSET + 1]]) != checksum(&b)
-    {
+    if u32::from_le_bytes([b[0], b[1], b[2], b[3]]) != MAGIC {
+        return false;
+    }
+    let version = u16::from_le_bytes([b[4], b[5]]);
+    let ck_offset = match version {
+        1 => V1_CK_OFFSET,
+        2 => V2_CK_OFFSET,
+        3 => CK_OFFSET,
+        _ => return false,
+    };
+    if u16::from_le_bytes([b[ck_offset], b[ck_offset + 1]]) != checksum(&b, ck_offset) {
         return false;
     }
     KEYMAP.lock(|k| {
         let mut k = k.borrow_mut();
         k.joy_threshold = u16::from_le_bytes([b[6], b[7]]).clamp(200, 1900);
+        if version >= 2 {
+            let mode = b[JOY_MODE_OFFSET];
+            k.joy_mode = if mode <= JOY_MODE_MOUSE {
+                mode
+            } else {
+                DEFAULT_JOY_MODE
+            };
+            k.joy_mouse_speed = b[JOY_SPEED_OFFSET].clamp(1, 10);
+        } else {
+            k.joy_mode = DEFAULT_JOY_MODE;
+            k.joy_mouse_speed = DEFAULT_JOY_MOUSE_SPEED;
+        }
+        k.led_brightness = if version >= 3 {
+            b[LED_BRIGHTNESS_OFFSET]
+        } else {
+            DEFAULT_LED_BRIGHTNESS
+        };
         for i in 0..SLOT_COUNT {
             let o = 8 + i * 4;
             // A corrupt slot (bad kind, or a keyboard code outside u8 range,
@@ -261,6 +329,9 @@ pub fn factory_reset(flash: &mut Flash<'_, Blocking>) -> Result<(), ()> {
         let mut k = k.borrow_mut();
         k.slots = DEFAULT_SLOTS;
         k.joy_threshold = DEFAULT_JOY_THRESHOLD;
+        k.joy_mode = DEFAULT_JOY_MODE;
+        k.joy_mouse_speed = DEFAULT_JOY_MOUSE_SPEED;
+        k.led_brightness = DEFAULT_LED_BRIGHTNESS;
     });
     flash
         .blocking_erase(CONFIG_OFFSET, CONFIG_OFFSET + 2048)
