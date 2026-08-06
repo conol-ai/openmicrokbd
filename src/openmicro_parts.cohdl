@@ -226,9 +226,13 @@ pub part ENC_EC11: RotaryEC11 {
 // Y by VR2; which physical axis each senses is a firmware convention, not a
 // datasheet fact, so the naming here is ours.
 //
-// The switch's four terminals leave the switch body on its two sides, so they
-// pair by side: a+b are one pole, c+d the other — one pin claiming two pads,
-// the same shape the key switches use.
+// The switch's four terminals leave the switch body in a 2x2 grid (a/c the
+// top row, b/d the bottom) and its two poles pair BY ROW: a+c are one pole,
+// b+d the other — one pin claiming two pads, the same shape the key switches
+// use. Hardware-verified on the 2026-08 fab: that revision paired them by
+// side (a+b / c+d), which routes each internal pole strap across the two
+// nets and shorts JOY_SW to GND permanently — the push switch could never
+// register. Do not "simplify" this pairing back to columns.
 //
 // MNT = the metal frame's four soldered corner lugs (the datasheet's "Solder
 // all metal inserted fixing including terminals & metal lugs"), one pin
@@ -242,8 +246,8 @@ pub device ThumbPointer {
         required Y_END_A: B1 [passive]
         required Y_WIPER: B2 [output]
         required Y_END_B: B3 [passive]
-        required SW_A: SA, SB [passive]
-        required SW_B: SC, SD [passive]
+        required SW_A: SA, SC [passive]
+        required SW_B: SB, SD [passive]
         optional MNT: L1, L2, L3, L4 [passive]
     }
 }
