@@ -209,15 +209,55 @@ pub struct InputConfig {
     pub action: Action,
 }
 
+/// What the firmware does with joystick deflection: hold the direction key
+/// slots, or move the HID mouse pointer (push switch = left click). Mirrors
+/// the wire values (0 keys, 1 mouse).
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum JoyMode {
+    #[default]
+    Keys,
+    Mouse,
+}
+
+impl JoyMode {
+    pub fn to_wire(self) -> u8 {
+        match self {
+            JoyMode::Keys => 0,
+            JoyMode::Mouse => 1,
+        }
+    }
+
+    pub fn from_wire(byte: u8) -> Self {
+        if byte == 1 {
+            JoyMode::Mouse
+        } else {
+            JoyMode::Keys
+        }
+    }
+}
+
+pub const DEFAULT_JOY_MOUSE_SPEED: u8 = 5;
+
+fn default_joy_mouse_speed() -> u8 {
+    DEFAULT_JOY_MOUSE_SPEED
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct AnalogTuning {
     pub joy_threshold: u16, // ADC deviation from centre 2048; default 1024
+    #[serde(default)]
+    pub joy_mode: JoyMode,
+    #[serde(default = "default_joy_mouse_speed")]
+    pub joy_mouse_speed: u8, // pointer speed 1..=10; only meaningful in Mouse
 }
 
 impl Default for AnalogTuning {
     fn default() -> Self {
         AnalogTuning {
             joy_threshold: 1024,
+            joy_mode: JoyMode::Keys,
+            joy_mouse_speed: DEFAULT_JOY_MOUSE_SPEED,
         }
     }
 }
@@ -479,12 +519,138 @@ fn is_direct_slot(input: &InputConfig, emitted: Slot) -> bool {
     input.emitted == emitted && input.action == Action::None
 }
 
+// ---------------------------------------------------------------------------
+// Joystick modes.
+// ---------------------------------------------------------------------------
+
+/// HID arrow usages in direction-slot order (up, down, left, right).
+pub const ARROW_CODES: [u16; 4] = [0x52, 0x51, 0x50, 0x4F];
+
+/// The three joystick behaviors the editor offers.
+///
+/// Like the rotator presets this is a semantic layer over profile state, not
+/// stored state: `Mouse` is the profile's `joy_mode`; `Arrows` is recognised
+/// from the four direction slots being exactly the arrow keys under one
+/// shared modifier mask with no host actions; anything else is `Custom`.
+/// Direction and press slots survive a stay in Mouse mode untouched, so
+/// switching back restores what the user had.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum JoystickMode {
+    Mouse,
+    Arrows,
+    Custom,
+}
+
+impl JoystickMode {
+    pub const ALL: [Self; 3] = [Self::Mouse, Self::Arrows, Self::Custom];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Mouse => "Mouse pointer",
+            Self::Arrows => "Arrow keys",
+            Self::Custom => "Custom keys",
+        }
+    }
+
+    pub const fn detail(self) -> &'static str {
+        match self {
+            Self::Mouse => "Deflection moves the pointer · push is left click",
+            Self::Arrows => "Deflection sends arrow keys · push is configurable",
+            Self::Custom => "Every direction and the push are configurable",
+        }
+    }
+
+    /// The uniform modifier mask across the four direction slots, if the
+    /// profile is in the recognisable arrows shape (mode aside).
+    pub fn arrow_mods(profile: &Profile) -> Option<u8> {
+        let first = profile.inputs.get(SLOT_JOY_UP)?;
+        let mods = first.emitted.mods;
+        for (i, code) in ARROW_CODES.iter().enumerate() {
+            let input = profile.inputs.get(SLOT_JOY_UP + i)?;
+            let expected = Slot {
+                kind: SlotKind::Keyboard,
+                mods,
+                code: *code,
+            };
+            if !is_direct_slot(input, expected) {
+                return None;
+            }
+        }
+        Some(mods)
+    }
+
+    pub fn infer(profile: &Profile) -> Self {
+        if profile.analog.joy_mode == JoyMode::Mouse {
+            return Self::Mouse;
+        }
+        if Self::arrow_mods(profile).is_some() {
+            return Self::Arrows;
+        }
+        Self::Custom
+    }
+
+    /// Move the profile into this mode. `Mouse` and `Custom` only flip
+    /// `joy_mode` — slots keep whatever they held. `Arrows` also rewrites
+    /// the four direction slots as plain arrows (press untouched); modifiers
+    /// are then edited via `set_arrow_mods`.
+    pub fn apply_to(self, profile: &mut Profile) {
+        profile.analog.joy_mode = match self {
+            Self::Mouse => JoyMode::Mouse,
+            Self::Arrows | Self::Custom => JoyMode::Keys,
+        };
+        if self == Self::Arrows && JoystickMode::arrow_mods(profile).is_none() {
+            Self::set_arrow_mods(profile, 0);
+        }
+    }
+
+    /// Write the four direction slots as arrow keys under one modifier mask.
+    pub fn set_arrow_mods(profile: &mut Profile, mods: u8) {
+        if profile.inputs.len() <= SLOT_JOY_RIGHT {
+            return;
+        }
+        const ARROWS: [(&str, &str); 4] = [
+            ("Up", "arrow-up"),
+            ("Down", "arrow-down"),
+            ("Left", "arrow-left"),
+            ("Right", "arrow-right"),
+        ];
+        for (i, ((label, icon), code)) in ARROWS.iter().zip(ARROW_CODES).enumerate() {
+            profile.inputs[SLOT_JOY_UP + i] = keyboard_input(label, icon, mods, code);
+        }
+    }
+}
+
+pub const DEFAULT_LED_BRIGHTNESS: u8 = 255;
+
+fn default_led_brightness() -> u8 {
+    DEFAULT_LED_BRIGHTNESS
+}
+
+/// UI language: follow the OS or pin one of the supported languages.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LanguageSetting {
+    #[default]
+    Auto,
+    En,
+    ZhHans,
+    ZhHant,
+    Ja,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppConfig {
     pub active_profile: usize,
     pub profiles: Vec<Profile>,
     pub launch_at_login: bool, // default true
     pub show_menubar: bool,    // default true
+    /// Pad backlight, 0..=255 (both LED chains; 255 = the power-budget cap).
+    /// Device-level rather than per-profile: brightness is a hardware
+    /// comfort setting, not part of a workflow mapping.
+    #[serde(default = "default_led_brightness")]
+    pub led_brightness: u8,
+    #[serde(default)]
+    pub language: LanguageSetting,
 }
 
 impl Default for AppConfig {
@@ -494,6 +660,8 @@ impl Default for AppConfig {
             profiles: vec![default_codex_profile()],
             launch_at_login: true,
             show_menubar: true,
+            led_brightness: DEFAULT_LED_BRIGHTNESS,
+            language: LanguageSetting::Auto,
         }
     }
 }
@@ -637,6 +805,8 @@ fn sanitize(cfg: &mut AppConfig) {
         // app truth and device truth from fighting (an out-of-range value
         // would re-sync forever because the device reads back different).
         profile.analog.joy_threshold = profile.analog.joy_threshold.clamp(200, 1900);
+        // Same story for SET_JOYMODE's speed byte.
+        profile.analog.joy_mouse_speed = profile.analog.joy_mouse_speed.clamp(1, 10);
 
         // Add semantic metadata to older key/touch configurations without
         // changing the compiled slot or action that already works. Ambiguous
@@ -752,6 +922,8 @@ fn migrate_legacy(legacy: LegacyConfig) -> AppConfig {
         profiles: vec![profile],
         launch_at_login: true,
         show_menubar: true,
+        led_brightness: DEFAULT_LED_BRIGHTNESS,
+        language: LanguageSetting::Auto,
     }
 }
 
@@ -1172,6 +1344,97 @@ mod tests {
     }
 
     #[test]
+    fn joystick_mode_inference_and_application() {
+        // Factory defaults are plain arrows + Enter: Arrows, no modifiers.
+        let mut profile = default_codex_profile();
+        assert_eq!(JoystickMode::infer(&profile), JoystickMode::Arrows);
+        assert_eq!(JoystickMode::arrow_mods(&profile), Some(0));
+
+        // Mouse mode flips the analog flag and leaves every slot alone.
+        let slots_before: Vec<InputConfig> = profile.inputs[SLOT_JOY_UP..=SLOT_JOY_PRESS].to_vec();
+        JoystickMode::Mouse.apply_to(&mut profile);
+        assert_eq!(JoystickMode::infer(&profile), JoystickMode::Mouse);
+        assert_eq!(profile.analog.joy_mode, JoyMode::Mouse);
+        assert_eq!(
+            &profile.inputs[SLOT_JOY_UP..=SLOT_JOY_PRESS],
+            slots_before.as_slice()
+        );
+
+        // Leaving Mouse for Arrows restores keys mode; the slots were already
+        // arrows so they must not be rewritten (press keeps its config).
+        JoystickMode::Arrows.apply_to(&mut profile);
+        assert_eq!(profile.analog.joy_mode, JoyMode::Keys);
+        assert_eq!(JoystickMode::infer(&profile), JoystickMode::Arrows);
+        assert_eq!(
+            &profile.inputs[SLOT_JOY_UP..=SLOT_JOY_PRESS],
+            slots_before.as_slice()
+        );
+
+        // A shared modifier mask keeps the arrows shape recognisable.
+        JoystickMode::set_arrow_mods(&mut profile, 0x08);
+        assert_eq!(JoystickMode::infer(&profile), JoystickMode::Arrows);
+        assert_eq!(JoystickMode::arrow_mods(&profile), Some(0x08));
+        for (i, code) in ARROW_CODES.iter().enumerate() {
+            assert_eq!(
+                profile.inputs[SLOT_JOY_UP + i].emitted,
+                Slot {
+                    kind: SlotKind::Keyboard,
+                    mods: 0x08,
+                    code: *code
+                }
+            );
+        }
+
+        // One diverging direction (or a host action) makes it Custom.
+        profile.inputs[SLOT_JOY_LEFT].emitted.code = 0x2C; // space
+        assert_eq!(JoystickMode::infer(&profile), JoystickMode::Custom);
+        assert_eq!(JoystickMode::arrow_mods(&profile), None);
+        JoystickMode::set_arrow_mods(&mut profile, 0);
+        profile.inputs[SLOT_JOY_UP].action = Action::Run {
+            command: "true".into(),
+        };
+        assert_eq!(JoystickMode::infer(&profile), JoystickMode::Custom);
+        profile.inputs[SLOT_JOY_UP].action = Action::None;
+
+        // Entering Arrows from a custom shape rewrites the four directions
+        // as plain arrows; entering Custom rewrites nothing.
+        profile.inputs[SLOT_JOY_LEFT].emitted.code = 0x2C;
+        JoystickMode::Custom.apply_to(&mut profile);
+        assert_eq!(profile.inputs[SLOT_JOY_LEFT].emitted.code, 0x2C);
+        assert_eq!(JoystickMode::infer(&profile), JoystickMode::Custom);
+        JoystickMode::Arrows.apply_to(&mut profile);
+        assert_eq!(JoystickMode::arrow_mods(&profile), Some(0));
+        assert_eq!(profile.inputs[SLOT_JOY_LEFT].emitted.code, 0x50);
+    }
+
+    #[test]
+    fn analog_tuning_defaults_migrate_and_clamp() {
+        // A pre-mode config file has no joy_mode / joy_mouse_speed fields.
+        let parsed: AnalogTuning = serde_json::from_str(r#"{"joy_threshold": 800}"#).unwrap();
+        assert_eq!(parsed.joy_mode, JoyMode::Keys);
+        assert_eq!(parsed.joy_mouse_speed, DEFAULT_JOY_MOUSE_SPEED);
+
+        let mut cfg = AppConfig::default();
+        cfg.profiles[0].analog.joy_mouse_speed = 0;
+        sanitize(&mut cfg);
+        assert_eq!(cfg.profiles[0].analog.joy_mouse_speed, 1);
+        cfg.profiles[0].analog.joy_mouse_speed = 99;
+        sanitize(&mut cfg);
+        assert_eq!(cfg.profiles[0].analog.joy_mouse_speed, 10);
+
+        assert_eq!(JoyMode::from_wire(0), JoyMode::Keys);
+        assert_eq!(JoyMode::from_wire(1), JoyMode::Mouse);
+        assert_eq!(JoyMode::from_wire(7), JoyMode::Keys);
+        assert_eq!(JoyMode::Mouse.to_wire(), 1);
+
+        // A pre-brightness config file has no led_brightness field.
+        let mut json = serde_json::to_value(AppConfig::default()).unwrap();
+        json.as_object_mut().unwrap().remove("led_brightness");
+        let parsed: AppConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.led_brightness, DEFAULT_LED_BRIGHTNESS);
+    }
+
+    #[test]
     fn legacy_migration() {
         let old = r#"{ "bindings": [
             {"kind":"run","arg":"echo hi"},
@@ -1241,6 +1504,8 @@ mod tests {
             }],
             launch_at_login: false,
             show_menubar: false,
+            led_brightness: DEFAULT_LED_BRIGHTNESS,
+            language: LanguageSetting::Auto,
         };
         sanitize(&mut cfg);
         assert_eq!(cfg.active_profile, 0);

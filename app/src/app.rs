@@ -25,10 +25,12 @@ use crate::actions::{self, OpenAppSettings};
 use crate::app_picker::*;
 use crate::behaviors::{self, InstalledApp};
 use crate::config::{
-    self, Action, AppConfig, ControlBehavior, InputConfig, MacOsControl, MacroStep, MacroStepEntry,
-    MediaOp, RotatorPressPreset, RotatorRotationPreset, SlotKind, SLOT_ENC_CW, SLOT_ENC_PRESS,
-    SLOT_JOY_UP, SLOT_NAMES, SLOT_TOUCH_TAP,
+    self, Action, AppConfig, ControlBehavior, InputConfig, JoystickMode, LanguageSetting,
+    MacOsControl, MacroStep, MacroStepEntry, MediaOp, RotatorPressPreset, RotatorRotationPreset,
+    SlotKind, SLOT_ENC_CW, SLOT_ENC_PRESS, SLOT_JOY_PRESS, SLOT_JOY_UP, SLOT_NAMES,
+    SLOT_TOUCH_TAP,
 };
+use crate::i18n::{self, tr};
 use crate::device::{self, DeviceCmd, DeviceMsg, PadEvent, UpdateMsg};
 use crate::intercept::{self, HotkeyMsg, Intercept, SlotStatus};
 use crate::keycodes;
@@ -40,7 +42,7 @@ use crate::release::{self, DownloadKind, ReleaseCatalog, ReleaseMsg};
 /// local `cargo run` builds useful when no release environment is present.
 const LATEST_FW: &str = match option_env!("OPENMICRO_FIRMWARE_VERSION") {
     Some(version) => version,
-    None => "0.2.1",
+    None => "0.3.0",
 };
 
 /// UI cap on macro steps (the config format itself has no limit).
@@ -1050,7 +1052,7 @@ live_design! {
                             <View> {
                                 width: Fit, height: Fit,
                                 flow: Right, spacing: 5, align: {y: 0.5},
-                                <Eyebrow> {text: "PROFILE"}
+                                tr_profile = <Eyebrow> {text: "PROFILE"}
                                 prof_prev = <IconButton> {text: ""}
                                 // The selector and rename field share this
                                 // slot, keeping the header stable.
@@ -1119,8 +1121,8 @@ live_design! {
                                 <View> {
                                     width: Fill, height: 28,
                                     flow: Right, align: {y: 0.5},
-                                    <Heading> {text: "Device map"}
-                                    <Small> {margin: {left: 8}, text: "13 keys · 3 controls"}
+                                    tr_device_map = <Heading> {text: "Device map"}
+                                    tr_13_keys_3_controls = <Small> {margin: {left: 8}, text: "13 keys · 3 controls"}
                                     <Filler> {}
                                     map_live = <Small> {text: "Waiting for device"}
                                 }
@@ -1174,7 +1176,7 @@ live_design! {
                                     width: Fill, height: 24,
                                     flow: Right, spacing: 7, align: {y: 0.5},
                                     <Dot> {width: 6, height: 6, draw_bg: {color: (OM_ACCENT)}}
-                                    <Small> {text: "Select a control to edit · presses light up live"}
+                                    tr_select_a_control_to_edit_presses = <Small> {text: "Select a control to edit · presses light up live"}
                                 }
                                 disconnected_card = <RoundedView> {
                                     width: Fill, height: Fit,
@@ -1187,8 +1189,8 @@ live_design! {
                                         border_size: 1.0,
                                         border_color: #60441f
                                     }
-                                    <Title> {text: "Editing offline"}
-                                    <Small> {width: Fill, text: "Connect over USB-C to sync this profile."}
+                                    tr_editing_offline = <Title> {text: "Editing offline"}
+                                    tr_connect_over_usb_c_to_sync_this = <Small> {width: Fill, text: "Connect over USB-C to sync this profile."}
                                 }
                             }
 
@@ -1212,8 +1214,8 @@ live_design! {
                                         flow: Down, spacing: 10, padding: 32,
                                         align: {x: 0.5, y: 0.5},
                                         <AppMark> {}
-                                        <Heading> {text: "Choose a control"}
-                                        <Body> {
+                                        tr_choose_a_control = <Heading> {text: "Choose a control"}
+                                        tr_select_a_key_dial_joystick_direction = <Body> {
                                             width: Fit,
                                             text: "Select a key, dial, joystick direction, or touch input from the hardware map."
                                         }
@@ -1252,7 +1254,7 @@ live_design! {
                                             width: Fill, height: Fit,
                                             visible: false,
                                             flow: Right, spacing: 10, align: {y: 0.5},
-                                            <Small> {width: 112, text: "DIRECTION / GESTURE"}
+                                            tr_direction_gesture = <Small> {width: 112, text: "DIRECTION / GESTURE"}
                                             sub_dd = <Select> {width: Fill}
                                         }
                                         }
@@ -1271,8 +1273,8 @@ live_design! {
                                                     <View> {
                                                         width: Fill, height: Fit,
                                                         flow: Down, spacing: 2,
-                                                        <Heading> {text: "Choose what the rotator does"}
-                                                        <Small> {
+                                                        tr_choose_what_the_rotator_does = <Heading> {text: "Choose what the rotator does"}
+                                                        tr_rotation_sets_both_directions = <Small> {
                                                             text: "Rotation sets both directions; Press sets the push switch."
                                                         }
                                                     }
@@ -1299,8 +1301,8 @@ live_design! {
                                                         <View> {
                                                             width: Fill, height: Fit,
                                                             flow: Down, spacing: 2,
-                                                            <Title> {text: "Rotation"}
-                                                            <Small> {text: "Clockwise and counter-clockwise"}
+                                                            tr_rotation = <Title> {text: "Rotation"}
+                                                            tr_clockwise_and_counter_clockwise = <Small> {text: "Clockwise and counter-clockwise"}
                                                         }
                                                         rot_rotation_dd = <Select> {width: 236}
                                                     }
@@ -1329,8 +1331,8 @@ live_design! {
                                                         <View> {
                                                             width: Fill, height: Fit,
                                                             flow: Down, spacing: 2,
-                                                            <Title> {text: "Press"}
-                                                            <Small> {text: "Push the rotator down"}
+                                                            tr_press = <Title> {text: "Press"}
+                                                            tr_push_the_rotator_down = <Small> {text: "Push the rotator down"}
                                                         }
                                                         rot_press_dd = <Select> {width: 236}
                                                     }
@@ -1366,6 +1368,112 @@ live_design! {
                                             }
                                         }
 
+                                        joystick_editor = <View> {
+                                            width: Fill, height: Fit,
+                                            flow: Down, spacing: 0,
+                                            visible: false,
+                                            joy_mode_section = <SectionCard> {
+                                                spacing: 12,
+                                                <View> {
+                                                    width: Fill, height: Fit,
+                                                    flow: Right, spacing: 10, align: {y: 0.5},
+                                                    <SectionNumber> {section_number = {text: "1"}}
+                                                    <View> {
+                                                        width: Fill, height: Fit,
+                                                        flow: Down, spacing: 2,
+                                                        tr_choose_what_the_joystick_does = <Heading> {text: "Choose what the joystick does"}
+                                                        tr_one_mode_covers_all_four_directions = <Small> {
+                                                            text: "One mode covers all four directions and the push switch."
+                                                        }
+                                                    }
+                                                }
+
+                                                <Inset> {
+                                                    padding: 12, spacing: 10,
+                                                    <View> {
+                                                        width: Fill, height: Fit,
+                                                        flow: Right, spacing: 12, align: {y: 0.5},
+                                                        <RoundedView> {
+                                                            width: 38, height: 38,
+                                                            align: {x: 0.5, y: 0.5},
+                                                            draw_bg: {
+                                                                color: (OM_ACCENT_SOFT),
+                                                                border_radius: 9.0,
+                                                                border_size: 1.0,
+                                                                border_color: #60441f
+                                                            }
+                                                            joy_mode_icon = <IconLabel> {
+                                                                draw_text: {color: (OM_ACCENT_HI)}
+                                                            }
+                                                        }
+                                                        <View> {
+                                                            width: Fill, height: Fit,
+                                                            flow: Down, spacing: 2,
+                                                            tr_mode = <Title> {text: "Mode"}
+                                                            tr_mouse_pointer_arrow_keys_or = <Small> {text: "Mouse pointer, arrow keys, or custom keys"}
+                                                        }
+                                                        joy_mode_dd = <Select> {width: 236}
+                                                    }
+                                                    joy_mode_detail = <Body> {
+                                                        width: Fill,
+                                                        text: ""
+                                                    }
+                                                }
+
+                                                joy_mouse_block = <Inset> {
+                                                    width: Fill, height: Fit,
+                                                    visible: false,
+                                                    flow: Down, spacing: 10,
+                                                    <View> {
+                                                        width: Fill, height: Fit,
+                                                        flow: Right, spacing: 12, align: {y: 0.5},
+                                                        joy_speed_slider = <OmSlider> {
+                                                            width: Fill,
+                                                            min: 1.0, max: 10.0, step: 1.0,
+                                                            text: "Pointer speed"
+                                                        }
+                                                        joy_speed_value = <Mono> {text: ""}
+                                                    }
+                                                    tr_deflection_moves_the_pointer = <Small> {
+                                                        width: Fill,
+                                                        text: "Deflection moves the pointer proportionally — further is faster. Pushing the stick clicks the left mouse button."
+                                                    }
+                                                }
+
+                                                joy_arrow_block = <Inset> {
+                                                    width: Fill, height: Fit,
+                                                    visible: false,
+                                                    flow: Down, spacing: 10,
+                                                    <View> {
+                                                        width: Fill, height: Fit,
+                                                        flow: Down, spacing: 2,
+                                                        tr_held_modifiers = <Title> {text: "Held modifiers"}
+                                                        tr_sent_with_every_arrow_press = <Small> {text: "Sent with every arrow press — optional"}
+                                                    }
+                                                    <View> {
+                                                        width: Fill, height: Fit,
+                                                        flow: Right, spacing: 14, align: {y: 0.5},
+                                                        joy_mod_ctrl = <Toggle> {text: "Ctrl"}
+                                                        joy_mod_shift = <Toggle> {text: "Shift"}
+                                                        joy_mod_alt = <Toggle> {text: "Alt"}
+                                                        joy_mod_gui = <Toggle> {text: "Cmd"}
+                                                    }
+                                                    tr_the_push_switch_is_its_own_key = <Small> {
+                                                        width: Fill,
+                                                        text: "The push switch is its own key — configure it below like any other."
+                                                    }
+                                                }
+
+                                                <View> {
+                                                    width: Fill, height: Fit,
+                                                    flow: Right, spacing: 8, align: {y: 0.5},
+                                                    joy_sync_dot = <Dot> {width: 6, height: 6}
+                                                    joy_sync_note = <Small> {width: Fill, text: ""}
+                                                }
+                                            }
+                                            joy_editor_rule = <Rule> {}
+                                        }
+
                                         simple_editor = <View> {
                                             width: Fill, height: Fit,
                                             flow: Down, spacing: 0,
@@ -1379,8 +1487,8 @@ live_design! {
                                                     <View> {
                                                         width: Fill, height: Fit,
                                                         flow: Down, spacing: 2,
-                                                        <Heading> {text: "Keycap"}
-                                                        <Small> {text: "Choose the artwork and short label shown on the map"}
+                                                        tr_keycap = <Heading> {text: "Keycap"}
+                                                        tr_choose_the_artwork_and_short = <Small> {text: "Choose the artwork and short label shown on the map"}
                                                     }
                                                 }
                                                 <Inset> {
@@ -1409,7 +1517,7 @@ live_design! {
                                                         <View> {
                                                             width: Fill, height: Fit,
                                                             flow: Down, spacing: 5,
-                                                            <Small> {text: "LABEL"}
+                                                            tr_label = <Small> {text: "LABEL"}
                                                             simple_label_input = <Field> {
                                                                 width: Fill,
                                                                 empty_text: "Short keycap label"
@@ -1429,8 +1537,8 @@ live_design! {
                                                     <View> {
                                                         width: Fill, height: Fit,
                                                         flow: Down, spacing: 2,
-                                                        <Heading> {text: "Behavior"}
-                                                        <Small> {text: "Choose what happens when you press this control"}
+                                                        tr_behavior = <Heading> {text: "Behavior"}
+                                                        tr_choose_what_happens_when_you = <Small> {text: "Choose what happens when you press this control"}
                                                     }
                                                     behavior_dd = <Select> {width: 250}
                                                 }
@@ -1459,13 +1567,13 @@ live_design! {
                                                     <View> {
                                                         width: Fill, height: Fit,
                                                         flow: Right, spacing: 10, align: {y: 0.5},
-                                                        <Small> {width: 100, text: "APPLICATION"}
+                                                        tr_application = <Small> {width: 100, text: "APPLICATION"}
                                                         shortcut_app_dd = <Select> {width: Fill}
                                                     }
                                                     <View> {
                                                         width: Fill, height: Fit,
                                                         flow: Right, spacing: 10, align: {y: 0.5},
-                                                        <Small> {width: 100, text: "SHORTCUT"}
+                                                        tr_shortcut = <Small> {width: 100, text: "SHORTCUT"}
                                                         shortcut_dd = <Select> {width: Fill}
                                                     }
                                                     shortcut_detail = <Small> {width: Fill, text: ""}
@@ -1478,7 +1586,7 @@ live_design! {
                                                     <View> {
                                                         width: Fill, height: Fit,
                                                         flow: Right, spacing: 10, align: {y: 0.5},
-                                                        <Small> {width: 100, text: "CONTROL"}
+                                                        tr_control = <Small> {width: 100, text: "CONTROL"}
                                                         macos_dd = <Select> {width: Fill}
                                                     }
                                                     macos_detail = <Small> {width: Fill, text: ""}
@@ -1491,7 +1599,7 @@ live_design! {
                                                     <View> {
                                                         width: Fill, height: Fit,
                                                         flow: Right, spacing: 10, align: {y: 0.5},
-                                                        <Small> {width: 100, text: "MODIFIERS"}
+                                                        tr_modifiers = <Small> {width: 100, text: "MODIFIERS"}
                                                         behavior_mod_ctrl = <ModifierKey> {
                                                             width: 112, text: "⌃ Control"
                                                         }
@@ -1508,7 +1616,7 @@ live_design! {
                                                     <View> {
                                                         width: Fill, height: Fit,
                                                         flow: Right, spacing: 10, align: {y: 0.5},
-                                                        <Small> {width: 100, text: "KEY"}
+                                                        tr_key = <Small> {width: 100, text: "KEY"}
                                                         behavior_key_group_dd = <Select> {width: 210}
                                                         behavior_key_dd = <Select> {width: Fill}
                                                     }
@@ -1521,7 +1629,7 @@ live_design! {
                                                     <View> {
                                                         width: Fill, height: Fit,
                                                         flow: Right, spacing: 10, align: {y: 0.5},
-                                                        <Small> {width: 100, text: "APPLICATION"}
+                                                        tr_application_2 = <Small> {width: 100, text: "APPLICATION"}
                                                         installed_app_choose = <ButtonSecondary> {
                                                             width: Fill,
                                                             align: {x: 0.0, y: 0.5},
@@ -1546,8 +1654,8 @@ live_design! {
                                         <View> {
                                             width: Fill, height: Fit,
                                             flow: Down, spacing: 2,
-                                            <Heading> {text: "Device output"}
-                                            <Small> {text: "Stored on the pad and works without this app"}
+                                            tr_device_output = <Heading> {text: "Device output"}
+                                            tr_stored_on_the_pad_and_works = <Small> {text: "Stored on the pad and works without this app"}
                                         }
                                         <View> {
                                             width: Fit, height: Fit,
@@ -1566,7 +1674,7 @@ live_design! {
                                         <View> {
                                             width: Fill, height: Fit,
                                             flow: Right, spacing: 12, align: {y: 0.5},
-                                            <Small> {width: 112, text: "MODIFIERS"}
+                                            tr_modifiers_2 = <Small> {width: 112, text: "MODIFIERS"}
                                             mod_ctrl = <Toggle> {text: "Ctrl"}
                                             mod_shift = <Toggle> {text: "Shift"}
                                             mod_alt = <Toggle> {text: "Alt"}
@@ -1575,7 +1683,7 @@ live_design! {
                                         <View> {
                                             width: Fill, height: Fit,
                                             flow: Right, spacing: 10, align: {y: 0.5},
-                                            <Small> {width: 112, text: "KEYCODE"}
+                                            tr_keycode_2 = <Small> {width: 112, text: "KEYCODE"}
                                             key_dd = <Select> {width: Fill}
                                         }
                                     }
@@ -1583,7 +1691,7 @@ live_design! {
                                         width: Fill, height: Fit,
                                         visible: false,
                                         flow: Right, spacing: 10, align: {y: 0.5},
-                                        <Small> {width: 112, text: "MEDIA CODE"}
+                                        tr_media_code_2 = <Small> {width: 112, text: "MEDIA CODE"}
                                         media_dd = <Select> {width: Fill}
                                     }
                                     emit_note_wrap = <View> {
@@ -1602,14 +1710,14 @@ live_design! {
                                         <View> {
                                             width: Fill, height: Fit,
                                             flow: Down, spacing: 2,
-                                            <Heading> {text: "Desktop action"}
-                                            <Small> {text: "Optional automation run by the host app"}
+                                            tr_desktop_action = <Heading> {text: "Desktop action"}
+                                            tr_optional_automation_run_by_the = <Small> {text: "Optional automation run by the host app"}
                                         }
                                     }
                                     <View> {
                                         width: Fill, height: Fit,
                                         flow: Right, spacing: 10, align: {y: 0.5},
-                                        <Small> {width: 112, text: "WHEN PRESSED"}
+                                        tr_when_pressed = <Small> {width: 112, text: "WHEN PRESSED"}
                                         action_dd = <Select> {width: Fill}
                                     }
                                     ks_block = <Inset> {
@@ -1664,7 +1772,7 @@ live_design! {
                                     perm_note = <View> {
                                         width: Fill, height: Fit,
                                         visible: false,
-                                        <Small> {
+                                        tr_needs_the_accessibility_permission = <Small> {
                                             width: Fill,
                                             text: "Needs the Accessibility permission — grant it from Settings (gear, below)."
                                             draw_text: {color: (OM_DANGER)}
@@ -1686,14 +1794,14 @@ live_design! {
                                         <View> {
                                             width: Fill, height: Fit,
                                             flow: Down, spacing: 2,
-                                            <Heading> {text: "Label & icon"}
-                                            <Small> {text: "Keep the hardware map easy to scan"}
+                                            tr_label_icon = <Heading> {text: "Label & icon"}
+                                            tr_keep_the_hardware_map_easy_to = <Small> {text: "Keep the hardware map easy to scan"}
                                         }
                                     }
                                     <View> {
                                         width: Fill, height: Fit,
                                         flow: Right, spacing: 10, align: {y: 0.5},
-                                        <Small> {width: 48, text: "LABEL"}
+                                        tr_label_2 = <Small> {width: 48, text: "LABEL"}
                                         label_input = <Field> {width: Fill, empty_text: "Short label"}
                                         <RoundedView> {
                                             width: 34, height: 34,
@@ -1728,8 +1836,8 @@ live_design! {
                                             <View> {
                                                 width: Fill, height: Fit,
                                                 flow: Down, spacing: 2,
-                                                <Heading> {text: "Joystick sensitivity"}
-                                                <Small> {text: "Applies to every direction in this profile"}
+                                                tr_joystick_sensitivity = <Heading> {text: "Joystick sensitivity"}
+                                                tr_applies_to_every_direction_in = <Small> {text: "Applies to every direction in this profile"}
                                             }
                                         }
                                         <View> {
@@ -1742,7 +1850,7 @@ live_design! {
                                             }
                                             thr_value = <Mono> {text: ""}
                                         }
-                                        <Small> {
+                                        tr_lower_values_respond_sooner = <Small> {
                                             width: Fill,
                                             text: "Lower values respond sooner. Changes are debounced and written safely to the pad."
                                         }
@@ -1760,7 +1868,7 @@ live_design! {
                             padding: {left: 16, right: 16},
                             show_bg: true,
                             draw_bg: {color: (OM_RAIL)}
-                            <Small> {text: "Saved locally"}
+                            tr_saved_locally = <Small> {text: "Saved locally"}
                             <Filler> {}
                             status_meta = <Mono> {text: ""}
                             footer_live = <Small> {margin: {left: 12}, text: "Waiting for device"}
@@ -1775,8 +1883,8 @@ live_design! {
                                 width: Fill, height: Fit, flow: Right, align: {y: 0.5},
                                 <View> {
                                     width: Fill, height: Fit, flow: Down, spacing: 3,
-                                    <Display> {text: "Settings"}
-                                    <Small> {text: "App behavior, profile data, and permissions"}
+                                    tr_settings_2 = <Display> {text: "Settings"}
+                                    tr_app_behavior_profile_data_and = <Small> {text: "App behavior, profile data, and permissions"}
                                 }
                                 <Filler> {}
                                 settings_close = <ButtonPrimary> {text: "Done"}
@@ -1787,15 +1895,39 @@ live_design! {
                                 <Inset> {
                                     width: Fill,
                                     launch_cb = <Toggle> {text: "Launch at login"}
-                                    <Small> {width: Fill, text: "Keep pad actions available after sign-in."}
+                                    tr_keep_pad_actions_available_after = <Small> {width: Fill, text: "Keep pad actions available after sign-in."}
                                 }
                                 <Inset> {
                                     width: Fill,
                                     menubar_cb = <Toggle> {text: "Show menu bar icon"}
-                                    <Small> {width: Fill, text: "Switch profiles without opening the window."}
+                                    tr_switch_profiles_without_opening = <Small> {width: Fill, text: "Switch profiles without opening the window."}
                                 }
                             }
-                            <Eyebrow> {text: "PROFILE DATA"}
+                            tr_language_eyebrow = <Eyebrow> {text: "LANGUAGE"}
+                            <Inset> {
+                                width: Fill, height: Fit, flow: Right, spacing: 10, align: {y: 0.5},
+                                lang_dd = <Select> {width: 220}
+                                tr_language_applies = <Small> {width: Fill, text: "Applies immediately · Auto follows the system"}
+                            }
+                            tr_device = <Eyebrow> {text: "DEVICE"}
+                            <Inset> {
+                                width: Fill, height: Fit, flow: Down, spacing: 6,
+                                <View> {
+                                    width: Fill, height: Fit,
+                                    flow: Right, spacing: 12, align: {y: 0.5},
+                                    led_slider = <OmSlider> {
+                                        width: Fill,
+                                        min: 0.0, max: 100.0, step: 5.0,
+                                        text: "Backlight brightness"
+                                    }
+                                    led_value = <Mono> {text: ""}
+                                }
+                                tr_dims_the_per_key_backlight_and = <Small> {
+                                    width: Fill,
+                                    text: "Dims the per-key backlight and the underglow ring together, live while you drag. 100% is the USB power budget cap; 0% turns the lights off. Saved on the pad."
+                                }
+                            }
+                            tr_profile_data = <Eyebrow> {text: "PROFILE DATA"}
                             <Inset> {
                                 width: Fill, height: Fit, flow: Right, spacing: 10, align: {y: 0.5},
                                 export_btn = <ButtonSecondary> {text: "Export…"}
@@ -1807,13 +1939,13 @@ live_design! {
                                 reset_btn = <ButtonDanger> {text: "Reset all bindings to factory defaults"}
                             }
                             settings_status = <Small> {width: Fill, text: ""}
-                            <Eyebrow> {text: "ACCESSIBILITY"}
+                            tr_accessibility = <Eyebrow> {text: "ACCESSIBILITY"}
                             <Inset> {
                                 width: Fill, height: Fit, flow: Right, spacing: 10, align: {y: 0.5},
                                 perm_status = <Body> {width: Fill, text: ""}
                                 perm_open_btn = <ButtonSecondary> {text: "Open System Settings"}
                             }
-                            <Small> {
+                            tr_your_human_readable_json_config = <Small> {
                                 width: Fill,
                                 text: "Your human-readable JSON config stays in the user config directory. Everything works offline."
                             }
@@ -1828,13 +1960,13 @@ live_design! {
                                 <View> {
                                     width: Fill, height: Fit, flow: Down, spacing: 3,
                                     macro_title = <Heading> {text: "Macro"}
-                                    <Small> {text: "Build a short, dependable action sequence"}
+                                    tr_build_a_short_dependable_action = <Small> {text: "Build a short, dependable action sequence"}
                                 }
                                 <Filler> {}
                                 macro_cancel = <ButtonGhost> {text: "Cancel"}
                                 macro_done = <ButtonPrimary> {text: "Done"}
                             }
-                            <Body> {
+                            tr_steps_run_in_order_delays_are = <Body> {
                                 width: Fill,
                                 text: "Steps run in order. Delays are milliseconds; Record captures a shortcut for a keystroke step."
                             }
@@ -1863,8 +1995,8 @@ live_design! {
                                 width: Fill, height: Fit, flow: Right, align: {y: 0.5},
                                 <View> {
                                     width: Fill, height: Fit, flow: Down, spacing: 3,
-                                    <Display> {text: "Firmware"}
-                                    <Small> {text: "Safely update or recover your OpenMicro"}
+                                    tr_firmware = <Display> {text: "Firmware"}
+                                    tr_safely_update_or_recover_your = <Small> {text: "Safely update or recover your OpenMicro"}
                                 }
                                 <Filler> {}
                                 fw_close = <ButtonGhost> {text: "Close"}
@@ -1874,7 +2006,7 @@ live_design! {
                                 flow: Right, spacing: 12, align: {y: 0.5},
                                 <View> {
                                     width: Fill, height: Fit, flow: Down, spacing: 3,
-                                    <Eyebrow> {text: "INSTALLED"}
+                                    tr_installed = <Eyebrow> {text: "INSTALLED"}
                                     fw_version = <Label> {
                                         text: "—",
                                         padding: 0,
@@ -1884,7 +2016,7 @@ live_design! {
                                 fw_pill = <Pill> {pill_label = {text: "Searching…"}}
                             }
                             fw_meta = <Mono> {width: Fill, text: "waiting for the pad"}
-                            <Body> {
+                            tr_profiles_and_key_configs_survive = <Body> {
                                 width: Fill,
                                 text: "Profiles and key configs survive updates — the keymap lives in a flash page the update never touches."
                             }
@@ -1923,7 +2055,7 @@ live_design! {
                                 flow: Right, spacing: 12, align: {y: 0.5},
                                 visible: false,
                                 dfu_btn = <ButtonSecondary> {text: "Reboot into DFU"}
-                                <Small> {
+                                tr_drops_the_pad_into_its_rom_bootloader = <Small> {
                                     width: Fill,
                                     text: "Drops the pad into its ROM bootloader (0483:df11) and leaves it there."
                                 }
@@ -1951,7 +2083,7 @@ live_design! {
                                         draw_bg: {color: (OM_ACCENT), border_radius: 3.0}
                                     }
                                 }
-                                <Small> {
+                                tr_keep_the_pad_powered_if_the = <Small> {
                                     width: Fill,
                                     text: "Keep the pad powered. If the app stops while ROM DFU is still present, Install can resume; unplugging mid-flash may require SWD recovery."
                                 }
@@ -1972,7 +2104,7 @@ live_design! {
                                 width: Fill, height: Fit, flow: Right, align: {y: 0.5},
                                 <View> {
                                     width: Fill, height: Fit, flow: Down, spacing: 3,
-                                    <Display> {text: "Choose an application"}
+                                    tr_choose_an_application_2 = <Display> {text: "Choose an application"}
                                     app_picker_meta = <Small> {
                                         text: "Search or scroll through installed apps"
                                     }
@@ -2191,6 +2323,92 @@ fn macro_row_id(i: usize) -> LiveId {
 }
 
 /// The grid cell that shows a given slot.
+/// The action_dd entries, translated, in ACTION_KINDS order.
+fn action_labels() -> Vec<String> {
+    ["act_none", "act_keystroke", "act_macro", "act_run", "act_open", "act_media", "act_app_settings"]
+        .iter()
+        .map(|k| tr(k).to_string())
+        .collect()
+}
+
+fn resolve_language(setting: LanguageSetting) -> i18n::Lang {
+    match setting {
+        LanguageSetting::Auto => i18n::detect(),
+        LanguageSetting::En => i18n::Lang::En,
+        LanguageSetting::ZhHans => i18n::Lang::ZhHans,
+        LanguageSetting::ZhHant => i18n::Lang::ZhHant,
+        LanguageSetting::Ja => i18n::Lang::Ja,
+    }
+}
+
+/// Translated display name of a slot (the compile-time SLOT_NAMES stays the
+/// canonical English reference).
+fn slot_name(slot: usize) -> String {
+    match slot {
+        0..=12 => {
+            let row = match slot {
+                0 | 1 => 1,
+                2..=5 => 2,
+                6..=9 => 3,
+                _ => 4,
+            };
+            tr("slot_key_n")
+                .replace("{n}", &(slot + 1).to_string())
+                .replace("{r}", &row.to_string())
+        }
+        13 => tr("slot_enc_cw").to_string(),
+        14 => tr("slot_enc_ccw").to_string(),
+        15 => tr("slot_enc_press").to_string(),
+        16 => tr("slot_joy_up").to_string(),
+        17 => tr("slot_joy_down").to_string(),
+        18 => tr("slot_joy_left").to_string(),
+        19 => tr("slot_joy_right").to_string(),
+        20 => tr("slot_joy_press").to_string(),
+        21 => tr("slot_touch_tap").to_string(),
+        22 => tr("slot_touch_swipe_l").to_string(),
+        23 => tr("slot_touch_swipe_r").to_string(),
+        _ => String::new(),
+    }
+}
+
+fn rotation_preset_label(preset: RotatorRotationPreset) -> &'static str {
+    match preset {
+        RotatorRotationPreset::Volume => tr("preset_volume"),
+        RotatorRotationPreset::Brightness => tr("preset_brightness"),
+        RotatorRotationPreset::Tracks => tr("preset_tracks"),
+        RotatorRotationPreset::VerticalArrows => tr("preset_v_arrows"),
+        RotatorRotationPreset::HorizontalArrows => tr("preset_h_arrows"),
+    }
+}
+
+fn press_preset_label(preset: RotatorPressPreset) -> &'static str {
+    match preset {
+        RotatorPressPreset::Mute => tr("press_mute"),
+        RotatorPressPreset::LockScreen => tr("press_lock"),
+        RotatorPressPreset::Play => tr("press_play"),
+        RotatorPressPreset::Enter => tr("press_enter"),
+    }
+}
+
+fn joystick_mode_label(mode: JoystickMode) -> &'static str {
+    match mode {
+        JoystickMode::Mouse => tr("mode_mouse"),
+        JoystickMode::Arrows => tr("mode_arrows"),
+        JoystickMode::Custom => tr("mode_custom"),
+    }
+}
+
+/// Backlight brightness: 0..=255 on the wire and in config, whole percent in
+/// the UI. The pair round-trips (percent -> byte -> the same percent) so the
+/// slider always shows the number it stored.
+fn brightness_percent(brightness: u8) -> u32 {
+    ((brightness as f64) * 100.0 / 255.0).round() as u32
+}
+
+fn percent_to_brightness(pct: f64) -> u8 {
+    (pct.clamp(0.0, 100.0) * 255.0 / 100.0).round() as u8
+}
+
 fn cell_for_slot(slot: usize) -> usize {
     match slot {
         0..=12 => slot,
@@ -2495,16 +2713,22 @@ impl App {
         self.refresh_status(cx);
     }
 
-    /// Write the active profile's keymap + analog tuning to the device
-    /// (RAM + flash), so the pad emits the right codes app or no app.
+    /// Write the active profile's keymap + analog tuning + joystick mode to
+    /// the device (RAM + flash), so the pad behaves right app or no app.
     fn sync_device(&mut self) {
         let profile = self.active_profile();
         let slots = profile.slots();
         let joy_threshold = profile.analog.joy_threshold;
+        let joy_mode = profile.analog.joy_mode;
+        let joy_mouse_speed = profile.analog.joy_mouse_speed;
+        let led_brightness = self.state.config.led_brightness;
         if let Some(tx) = &self.state.device_tx {
             let _ = tx.send(DeviceCmd::SyncKeymap {
                 slots,
                 joy_threshold,
+                joy_mode,
+                joy_mouse_speed,
+                led_brightness,
             });
         }
     }
@@ -2931,7 +3155,7 @@ impl App {
 
         let mut rotation_labels: Vec<String> = RotatorRotationPreset::ALL
             .iter()
-            .map(|preset| preset.label().to_string())
+            .map(|preset| rotation_preset_label(*preset).to_string())
             .collect();
         let rotation_index = rotation
             .and_then(|selected| {
@@ -2940,7 +3164,7 @@ impl App {
                     .position(|preset| *preset == selected)
             })
             .unwrap_or_else(|| {
-                rotation_labels.push("Custom (existing)".to_string());
+                rotation_labels.push(tr("custom_existing").to_string());
                 rotation_labels.len() - 1
             });
         let rotation_dd = self.ui.drop_down(id!(rot_rotation_dd));
@@ -2949,7 +3173,7 @@ impl App {
 
         let mut press_labels: Vec<String> = RotatorPressPreset::ALL
             .iter()
-            .map(|preset| preset.label().to_string())
+            .map(|preset| press_preset_label(*preset).to_string())
             .collect();
         let press_index = press
             .and_then(|selected| {
@@ -2958,7 +3182,7 @@ impl App {
                     .position(|preset| *preset == selected)
             })
             .unwrap_or_else(|| {
-                press_labels.push("Custom (existing)".to_string());
+                press_labels.push(tr("custom_existing").to_string());
                 press_labels.len() - 1
             });
         let press_dd = self.ui.drop_down(id!(rot_press_dd));
@@ -2966,49 +3190,21 @@ impl App {
         press_dd.set_selected_item(cx, press_index);
 
         let (rotation_icon, rotation_detail) = match rotation {
-            Some(RotatorRotationPreset::Volume) => (
-                "volume-2",
-                "Clockwise raises volume · counter-clockwise lowers it.",
-            ),
-            Some(RotatorRotationPreset::Brightness) => (
-                "sun-medium",
-                "Clockwise brightens the screen · counter-clockwise dims it.",
-            ),
-            Some(RotatorRotationPreset::Tracks) => (
-                "skip-forward",
-                "Clockwise selects the next song · counter-clockwise selects the previous song.",
-            ),
-            Some(RotatorRotationPreset::VerticalArrows) => (
-                "arrow-up-down",
-                "Clockwise sends Arrow Down · counter-clockwise sends Arrow Up.",
-            ),
-            Some(RotatorRotationPreset::HorizontalArrows) => (
-                "arrow-left-right",
-                "Clockwise sends Arrow Right · counter-clockwise sends Arrow Left.",
-            ),
-            None => (
-                "rotate-cw",
-                "The existing clockwise and counter-clockwise mappings are preserved.",
-            ),
+            Some(RotatorRotationPreset::Volume) => ("volume-2", tr("rotd_volume")),
+            Some(RotatorRotationPreset::Brightness) => ("sun-medium", tr("rotd_brightness")),
+            Some(RotatorRotationPreset::Tracks) => ("skip-forward", tr("rotd_tracks")),
+            Some(RotatorRotationPreset::VerticalArrows) => ("arrow-up-down", tr("rotd_v_arrows")),
+            Some(RotatorRotationPreset::HorizontalArrows) => {
+                ("arrow-left-right", tr("rotd_h_arrows"))
+            }
+            None => ("rotate-cw", tr("rot_custom_detail")),
         };
         let (press_icon, press_detail) = match press {
-            Some(RotatorPressPreset::Mute) => {
-                ("volume-x", "Sends the system audio Mute command.")
-            }
-            Some(RotatorPressPreset::LockScreen) => (
-                "lock-keyhole",
-                "Sends the standard HID lock-screen command. Support depends on the operating system.",
-            ),
-            Some(RotatorPressPreset::Play) => {
-                ("play", "Sends the dedicated media Play command.")
-            }
-            Some(RotatorPressPreset::Enter) => {
-                ("corner-down-left", "Sends the standard Enter key.")
-            }
-            None => (
-                "mouse-pointer-click",
-                "The existing push-switch mapping is preserved.",
-            ),
+            Some(RotatorPressPreset::Mute) => ("volume-x", tr("pressd_mute")),
+            Some(RotatorPressPreset::LockScreen) => ("lock-keyhole", tr("pressd_lock")),
+            Some(RotatorPressPreset::Play) => ("play", tr("pressd_play")),
+            Some(RotatorPressPreset::Enter) => ("corner-down-left", tr("pressd_enter")),
+            None => ("mouse-pointer-click", tr("press_custom_detail")),
         };
         let rotation_glyph = lucide::icon_char(rotation_icon)
             .map(String::from)
@@ -3030,15 +3226,9 @@ impl App {
             .set_text(cx, press_detail);
 
         let custom_note = match (rotation.is_none(), press.is_none()) {
-            (true, true) => {
-                "This profile has custom rotation and press mappings. Both stay untouched until you choose a preset."
-            }
-            (true, false) => {
-                "This profile has a custom rotation mapping. It stays untouched until you choose a preset."
-            }
-            (false, true) => {
-                "This profile has a custom press mapping. It stays untouched until you choose a preset."
-            }
+            (true, true) => tr("rot_custom_both"),
+            (true, false) => tr("rot_custom_rotation"),
+            (false, true) => tr("rot_custom_press"),
             (false, false) => "",
         };
         self.ui
@@ -3049,20 +3239,77 @@ impl App {
             .set_visible(cx, !custom_note.is_empty());
 
         let (sync_color, sync_note) = if self.state.connected {
-            (
-                vec4(0.267, 0.820, 0.616, 1.0),
-                "Changes are written to OpenMicro and saved in its flash memory.",
-            )
+            (vec4(0.267, 0.820, 0.616, 1.0), tr("sync_connected_note"))
         } else {
-            (
-                vec4(0.949, 0.667, 0.298, 1.0),
-                "Saved in this profile · connect OpenMicro to write these choices to the keyboard.",
-            )
+            (vec4(0.949, 0.667, 0.298, 1.0), tr("sync_offline_note"))
         };
         self.ui
             .view(id!(rot_sync_dot))
             .apply_over(cx, live! {draw_bg: {color: (sync_color)}});
         self.ui.label(id!(rot_sync_note)).set_text(cx, sync_note);
+    }
+
+    fn refresh_joystick_editor(&mut self, cx: &mut Cx) {
+        let profile = self.active_profile();
+        let mode = JoystickMode::infer(profile);
+        let speed = profile.analog.joy_mouse_speed;
+        let arrow_mods = JoystickMode::arrow_mods(profile).unwrap_or(0);
+
+        let labels: Vec<String> = JoystickMode::ALL
+            .iter()
+            .map(|mode| joystick_mode_label(*mode).to_string())
+            .collect();
+        let index = JoystickMode::ALL
+            .iter()
+            .position(|candidate| *candidate == mode)
+            .unwrap_or(JoystickMode::ALL.len() - 1);
+        let dd = self.ui.drop_down(id!(joy_mode_dd));
+        dd.set_labels(cx, labels);
+        dd.set_selected_item(cx, index);
+
+        let (icon, detail) = match mode {
+            JoystickMode::Mouse => ("mouse-pointer-2", tr("joy_mouse_detail")),
+            JoystickMode::Arrows => ("gamepad-directional", tr("joy_arrows_detail")),
+            JoystickMode::Custom => ("gamepad-2", tr("joy_custom_detail")),
+        };
+        let glyph = lucide::icon_char(icon).map(String::from).unwrap_or_default();
+        self.ui.label(id!(joy_mode_icon)).set_text(cx, &glyph);
+        self.ui.label(id!(joy_mode_detail)).set_text(cx, detail);
+
+        self.ui
+            .view(id!(joy_mouse_block))
+            .set_visible(cx, mode == JoystickMode::Mouse);
+        self.ui
+            .view(id!(joy_arrow_block))
+            .set_visible(cx, mode == JoystickMode::Arrows);
+        if mode == JoystickMode::Mouse {
+            self.ui
+                .slider(id!(joy_speed_slider))
+                .set_value(cx, speed as f64);
+            self.ui
+                .label(id!(joy_speed_value))
+                .set_text(cx, &format!("{speed}"));
+        }
+        if mode == JoystickMode::Arrows {
+            for (id, bit) in [
+                (id!(joy_mod_ctrl), 0x01u8),
+                (id!(joy_mod_shift), 0x02),
+                (id!(joy_mod_alt), 0x04),
+                (id!(joy_mod_gui), 0x08),
+            ] {
+                self.ui.check_box(id).set_active(cx, arrow_mods & bit != 0);
+            }
+        }
+
+        let (sync_color, sync_note) = if self.state.connected {
+            (vec4(0.267, 0.820, 0.616, 1.0), tr("sync_connected_note"))
+        } else {
+            (vec4(0.949, 0.667, 0.298, 1.0), tr("sync_offline_note"))
+        };
+        self.ui
+            .view(id!(joy_sync_dot))
+            .apply_over(cx, live! {draw_bg: {color: (sync_color)}});
+        self.ui.label(id!(joy_sync_note)).set_text(cx, sync_note);
     }
 
     fn reload_installed_apps(&mut self, cx: &mut Cx, preserve_target: Option<&str>) {
@@ -3113,13 +3360,13 @@ impl App {
 
         let existing = behavior.is_none();
         let mut behavior_labels = vec![
-            "Application shortcuts".to_string(),
-            "macOS".to_string(),
-            "Key stroke".to_string(),
-            "App".to_string(),
+            tr("beh_shortcuts").to_string(),
+            tr("beh_macos").to_string(),
+            tr("beh_keystroke").to_string(),
+            tr("beh_app").to_string(),
         ];
         if existing {
-            behavior_labels.insert(0, "Existing setup".to_string());
+            behavior_labels.insert(0, tr("beh_existing").to_string());
         }
         let behavior_index = match &behavior {
             Some(ControlBehavior::ApplicationShortcut { .. }) => 0,
@@ -3308,6 +3555,11 @@ impl App {
         let input = self.input(slot).clone();
         let is_rotator = (SLOT_ENC_CW..=SLOT_ENC_PRESS).contains(&slot);
         let is_simple = slot < 13 || slot == SLOT_TOUCH_TAP;
+        let is_joy = (SLOT_JOY_UP..=SLOT_JOY_PRESS).contains(&slot);
+        let joy_mode = JoystickMode::infer(self.active_profile());
+        // In mouse mode there is no per-slot editing at all: the mode card
+        // (with its speed slider) is the whole editor.
+        let joy_mouse = is_joy && joy_mode == JoystickMode::Mouse;
         self.ui.view(id!(editor_header)).set_visible(cx, !is_simple);
         self.ui
             .view(id!(editor_header_rule))
@@ -3316,16 +3568,35 @@ impl App {
             .view(id!(rotator_editor))
             .set_visible(cx, is_rotator);
         self.ui.view(id!(simple_editor)).set_visible(cx, is_simple);
+        self.ui.view(id!(joystick_editor)).set_visible(cx, is_joy);
+        self.ui
+            .view(id!(joy_editor_rule))
+            .set_visible(cx, is_joy && !joy_mouse);
         self.ui
             .view(id!(standard_editor))
-            .set_visible(cx, !is_rotator && !is_simple);
+            .set_visible(cx, !is_rotator && !is_simple && !joy_mouse);
+        if is_joy {
+            self.refresh_joystick_editor(cx);
+        }
+        if joy_mouse {
+            let header_icon = lucide::icon_char("mouse-pointer-2")
+                .map(String::from)
+                .unwrap_or_default();
+            self.ui.label(id!(ed_icon)).set_text(cx, &header_icon);
+            self.ui.label(id!(ed_title)).set_text(cx, tr("joystick_hdr"));
+            self.ui.label(id!(ed_pos)).set_text(cx, tr("mouse_pointer_mode"));
+            self.ui.view(id!(ed_status)).set_visible(cx, false);
+            self.ui.view(id!(sub_row)).set_visible(cx, false);
+            self.ui.redraw(cx);
+            return;
+        }
         if is_rotator {
             let header_icon = lucide::icon_char("rotate-cw")
                 .map(String::from)
                 .unwrap_or_default();
             self.ui.label(id!(ed_icon)).set_text(cx, &header_icon);
-            self.ui.label(id!(ed_title)).set_text(cx, "Rotator");
-            self.ui.label(id!(ed_pos)).set_text(cx, "Rotation + press");
+            self.ui.label(id!(ed_title)).set_text(cx, tr("rotator_hdr"));
+            self.ui.label(id!(ed_pos)).set_text(cx, tr("rotation_plus_press"));
             self.ui.view(id!(ed_status)).set_visible(cx, false);
             self.ui.view(id!(sub_row)).set_visible(cx, false);
             self.refresh_rotator_editor(cx);
@@ -3348,12 +3619,12 @@ impl App {
         self.ui.label(id!(ed_title)).set_text(
             cx,
             if input.label.is_empty() {
-                "Unlabelled"
+                tr("unlabelled")
             } else {
                 &input.label
             },
         );
-        self.ui.label(id!(ed_pos)).set_text(cx, SLOT_NAMES[slot]);
+        self.ui.label(id!(ed_pos)).set_text(cx, &slot_name(slot));
         let status = self
             .state
             .intercept
@@ -3362,43 +3633,43 @@ impl App {
             .unwrap_or(SlotStatus::Unavailable);
         let (status_text, status_bg, status_line, status_fg) = match status {
             SlotStatus::PassThrough => (
-                "No host action",
+                tr("st_pass_through"),
                 vec4(0.047, 0.059, 0.078, 1.0),
                 vec4(0.165, 0.200, 0.251, 1.0),
                 vec4(0.725, 0.710, 0.678, 1.0),
             ),
             SlotStatus::Active => (
-                "Host action active",
+                tr("st_active"),
                 vec4(0.071, 0.192, 0.153, 1.0),
                 vec4(0.145, 0.420, 0.325, 1.0),
                 vec4(0.267, 0.820, 0.616, 1.0),
             ),
             SlotStatus::ConsumerCode => (
-                "Handled by OS",
+                tr("st_consumer"),
                 vec4(0.227, 0.161, 0.090, 1.0),
                 vec4(0.376, 0.267, 0.122, 1.0),
                 vec4(1.000, 0.765, 0.420, 1.0),
             ),
             SlotStatus::DeadOnThisOs => (
-                "Invisible on this OS",
+                tr("st_dead"),
                 vec4(0.212, 0.102, 0.125, 1.0),
                 vec4(0.400, 0.188, 0.227, 1.0),
                 vec4(1.000, 0.565, 0.588, 1.0),
             ),
             SlotStatus::NothingEmitted => (
-                "Emits nothing",
+                tr("st_nothing"),
                 vec4(0.212, 0.102, 0.125, 1.0),
                 vec4(0.400, 0.188, 0.227, 1.0),
                 vec4(1.000, 0.565, 0.588, 1.0),
             ),
             SlotStatus::Failed => (
-                "Key already taken",
+                tr("st_taken"),
                 vec4(0.212, 0.102, 0.125, 1.0),
                 vec4(0.400, 0.188, 0.227, 1.0),
                 vec4(1.000, 0.565, 0.588, 1.0),
             ),
             SlotStatus::Unavailable => (
-                "Hotkeys unavailable",
+                tr("st_unavailable"),
                 vec4(0.047, 0.059, 0.078, 1.0),
                 vec4(0.165, 0.200, 0.251, 1.0),
                 vec4(0.725, 0.710, 0.678, 1.0),
@@ -3422,13 +3693,15 @@ impl App {
             .label(id!(ed_status.pill_label))
             .apply_over(cx, live! {draw_text: {color: (status_fg)}});
 
-        // Analog sub-input picker.
+        // Analog sub-input picker. In Arrows mode the directions are one
+        // fixed preset — the press switch is the only editable joy input, so
+        // there is nothing to pick between.
         let cell = cell_for_slot(slot);
         let group = slots_for_cell(cell);
-        let show_sub = group.len() > 1;
+        let show_sub = group.len() > 1 && !(is_joy && joy_mode == JoystickMode::Arrows);
         self.ui.view(id!(sub_row)).set_visible(cx, show_sub);
         if show_sub {
-            let labels: Vec<String> = group.iter().map(|&s| SLOT_NAMES[s].to_string()).collect();
+            let labels: Vec<String> = group.iter().map(|&s| slot_name(s)).collect();
             let dd = self.ui.drop_down(id!(sub_dd));
             dd.set_labels(cx, labels);
             if let Some(pos) = group.iter().position(|&s| s == slot) {
@@ -3645,8 +3918,8 @@ impl App {
             .view(id!(icon_note_wrap))
             .set_visible(cx, !icon_note.is_empty());
 
-        // Joystick tuning, only where it applies.
-        let is_joy = (SLOT_JOY_UP..=20).contains(&slot);
+        // Joystick tuning, only where it applies (mouse mode has its own
+        // speed slider in the mode card and never reaches this point).
         self.ui.view(id!(joy_block)).set_visible(cx, is_joy);
         if is_joy {
             let thr = self.active_profile().analog.joy_threshold;
@@ -3659,6 +3932,15 @@ impl App {
     }
 
     fn select_slot(&mut self, cx: &mut Cx, slot: usize) {
+        // In Arrows mode the four directions are one fixed preset; the press
+        // switch is the only joystick input with an editor of its own.
+        let slot = if (SLOT_JOY_UP..SLOT_JOY_PRESS).contains(&slot)
+            && JoystickMode::infer(self.active_profile()) == JoystickMode::Arrows
+        {
+            SLOT_JOY_PRESS
+        } else {
+            slot
+        };
         let prev_cell = self.state.selected.map(cell_for_slot);
         self.state.selected = Some(slot);
         self.state.recording = RecordTarget::None;
@@ -3805,6 +4087,116 @@ impl App {
         self.ui.redraw(cx);
     }
 
+    /// Set the runtime language from config and re-text every static label,
+    /// then re-run the refreshes so dynamic strings follow. Called at
+    /// startup and whenever the Settings language picker changes.
+    fn apply_language(&mut self, cx: &mut Cx) {
+        i18n::set_lang(resolve_language(self.state.config.language));
+        for key in i18n::ANON_KEYS {
+            self.ui
+                .label(&[LiveId::from_str(&format!("tr_{key}"))])
+                .set_text(cx, tr(key));
+        }
+        for (id, key) in [
+            (id!(gear_btn), "settings"),
+            (id!(fw_banner_btn), "update_now"),
+            (id!(fw_banner_later), "later"),
+            (id!(perm_btn), "open_settings"),
+            (id!(simple_icon_pick_btn), "change_icon"),
+            (id!(installed_app_choose), "choose_application"),
+            (id!(installed_apps_refresh), "refresh"),
+            (id!(installed_app_open), "open"),
+            (id!(ks_record), "record_shortcut"),
+            (id!(ks_test), "test"),
+            (id!(macro_test), "test"),
+            (id!(run_test), "test"),
+            (id!(open_test), "test"),
+            (id!(media_test), "test"),
+            (id!(macro_edit), "edit_steps"),
+            (id!(open_browse), "browse"),
+            (id!(settings_close), "done"),
+            (id!(export_btn), "export"),
+            (id!(import_replace_btn), "import_replace"),
+            (id!(import_merge_btn), "import_merge"),
+            (id!(perm_open_btn), "open_system_settings"),
+            (id!(macro_cancel), "cancel"),
+            (id!(macro_done), "done"),
+            (id!(macro_add), "add_step"),
+            (id!(macro_test_sheet), "test_run"),
+            (id!(fw_close), "close"),
+            (id!(choose_btn), "choose_bin"),
+            (id!(install_btn), "install"),
+            (id!(adv_btn), "advanced"),
+            (id!(dfu_btn), "reboot_into_dfu"),
+            (id!(app_picker_clear), "clear"),
+            (id!(app_picker_cancel), "cancel"),
+            (id!(icon_none_btn), "no_icon"),
+            (id!(icon_cancel), "cancel"),
+            (id!(icon_pick_btn), "choose_icon"),
+        ] {
+            self.ui.button(id).set_text(cx, tr(key));
+        }
+        self.ui
+            .check_box(id!(launch_cb))
+            .set_text(tr("launch_at_login"));
+        self.ui
+            .check_box(id!(menubar_cb))
+            .set_text(tr("show_menubar_icon"));
+        for (seg, key) in [("kind_0", "kind_nothing"), ("kind_1", "kind_keycode"), ("kind_2", "kind_media")] {
+            self.ui
+                .button(&[LiveId::from_str(seg)])
+                .set_text(cx, tr(key));
+        }
+        for (id, key) in [
+            (id!(banner_text), "perm_banner"),
+            (id!(behavior_existing_note), "existing_setup_note"),
+            (id!(file_meta), "bin_hint"),
+            (id!(app_picker_meta), "app_picker_meta"),
+            (id!(icon_sheet_title), "icon"),
+        ] {
+            self.ui.label(id).set_text(cx, tr(key));
+        }
+        self.ui
+            .label(id!(enc_cell.dial_label))
+            .set_text(cx, tr("dial_rotator"));
+        self.ui
+            .label(id!(joy_cell.dial_label))
+            .set_text(cx, tr("dial_joystick"));
+        self.ui
+            .label(id!(touch_cell.dial_label))
+            .set_text(cx, tr("dial_touch"));
+        for (id, key) in [
+            (id!(thr_slider), "deflection"),
+            (id!(joy_speed_slider), "pointer_speed"),
+            (id!(led_slider), "backlight_brightness"),
+        ] {
+            let text = tr(key);
+            self.ui.slider(id).apply_over(cx, live! {text: (text)});
+        }
+        for (id, key) in [
+            (id!(prof_rename), "profile_name_placeholder"),
+            (id!(simple_label_input), "keycap_label_placeholder"),
+            (id!(label_input), "short_label"),
+            (id!(run_input), "shell_command_placeholder"),
+            (id!(open_input), "open_placeholder"),
+            (id!(icon_search), "icon_search_placeholder"),
+        ] {
+            let text = tr(key);
+            self.ui
+                .text_input(id)
+                .apply_over(cx, live! {empty_text: (text)});
+        }
+        self.ui
+            .drop_down(id!(action_dd))
+            .set_labels(cx, action_labels());
+        self.refresh_profile_strip(cx);
+        self.refresh_grid(cx);
+        self.refresh_status(cx);
+        self.refresh_editor(cx, true);
+        self.refresh_settings(cx);
+        self.ui.redraw(cx);
+    }
+
     fn refresh_settings(&mut self, cx: &mut Cx) {
         self.ui
             .check_box(id!(launch_cb))
@@ -3812,21 +4204,47 @@ impl App {
         self.ui
             .check_box(id!(menubar_cb))
             .set_active(cx, self.state.config.show_menubar);
+        let pct = brightness_percent(self.state.config.led_brightness);
+        self.ui.slider(id!(led_slider)).set_value(cx, pct as f64);
+        self.ui
+            .label(id!(led_value))
+            .set_text(cx, &format!("{pct}%"));
+        let lang_dd = self.ui.drop_down(id!(lang_dd));
+        lang_dd.set_labels(
+            cx,
+            vec![
+                tr("language_auto").to_string(),
+                "English".to_string(),
+                "简体中文".to_string(),
+                "繁體中文".to_string(),
+                "日本語".to_string(),
+            ],
+        );
+        lang_dd.set_selected_item(
+            cx,
+            match self.state.config.language {
+                LanguageSetting::Auto => 0,
+                LanguageSetting::En => 1,
+                LanguageSetting::ZhHans => 2,
+                LanguageSetting::ZhHant => 3,
+                LanguageSetting::Ja => 4,
+            },
+        );
         let trusted = actions::accessibility_trusted();
         self.ui.label(id!(perm_status)).set_text(
             cx,
             if trusted {
-                "Accessibility / Input Monitoring: granted — keystroke and media actions can run."
+                tr("perm_granted")
             } else {
-                "Accessibility / Input Monitoring: not granted — the app can show state but cannot type or press media keys for you."
+                tr("perm_missing")
             },
         );
         self.ui.button(id!(reset_btn)).set_text(
             cx,
             if self.state.confirm_reset {
-                "Really reset everything?"
+                tr("reset_confirm")
             } else {
-                "Reset all bindings to factory defaults"
+                tr("reset_factory")
             },
         );
         self.ui.redraw(cx);
@@ -3836,8 +4254,8 @@ impl App {
         let slot_label = self
             .state
             .selected
-            .map(|s| SLOT_NAMES[s])
-            .unwrap_or("Macro");
+            .map(slot_name)
+            .unwrap_or_else(|| "Macro".to_string());
         self.ui
             .label(id!(macro_title))
             .set_text(cx, &format!("Macro — {slot_label}"));
@@ -4076,6 +4494,20 @@ impl App {
             self.state.confirm_reset = false;
             self.open_sheet(cx, SheetKind::None);
         }
+        if let Some(idx) = self.ui.drop_down(id!(lang_dd)).selected(actions) {
+            let choice = [
+                LanguageSetting::Auto,
+                LanguageSetting::En,
+                LanguageSetting::ZhHans,
+                LanguageSetting::ZhHant,
+                LanguageSetting::Ja,
+            ][idx.min(4)];
+            if choice != self.state.config.language {
+                self.state.config.language = choice;
+                self.persist(cx);
+                self.apply_language(cx);
+            }
+        }
         if let Some(on) = self.ui.check_box(id!(launch_cb)).changed(actions) {
             match apply_launch_at_login(on) {
                 Ok(()) => {
@@ -4091,6 +4523,22 @@ impl App {
                         .set_text(cx, &format!("Launch at login: {e}"));
                 }
             }
+        }
+        if let Some(v) = self.ui.slider(id!(led_slider)).slided(actions) {
+            let brightness = percent_to_brightness(v);
+            self.state.config.led_brightness = brightness;
+            self.ui
+                .label(id!(led_value))
+                .set_text(cx, &format!("{}%", brightness_percent(brightness)));
+            // Live on the pad within one LED frame (RAM only)…
+            if let Some(tx) = &self.state.device_tx {
+                let _ = tx.send(DeviceCmd::SetLedBrightness { brightness });
+            }
+            // …and the same debounce as the analog sliders for the flash
+            // write: one save per drag, not hundreds.
+            self.state.sync_pending = true;
+            cx.stop_timer(self.state.sync_timer);
+            self.state.sync_timer = cx.start_timeout(0.6);
         }
         if let Some(on) = self.ui.check_box(id!(menubar_cb)).changed(actions) {
             self.state.config.show_menubar = on;
@@ -4493,6 +4941,7 @@ const MEDIA_OPS: [(MediaOp, &str); 8] = [
 impl MatchEvent for App {
     fn handle_startup(&mut self, cx: &mut Cx) {
         self.state.config = config::load();
+        i18n::set_lang(resolve_language(self.state.config.language));
         self.ui
             .view(id!(caption_bar))
             .set_visible(cx, cfg!(target_os = "macos") || cfg!(target_os = "windows"));
@@ -4518,6 +4967,7 @@ impl MatchEvent for App {
         let mut menubar = Menubar::new();
         menubar.set_visible(self.state.config.show_menubar);
         self.state.menubar = Some(menubar);
+        self.apply_language(cx);
 
         // Dropdown datasets.
         self.state.kbd_usages = keycodes::KEYBOARD_USAGES.iter().map(|k| k.usage).collect();
@@ -4557,7 +5007,7 @@ impl MatchEvent for App {
             .set_labels(cx, consumer_labels);
         self.ui
             .drop_down(id!(action_dd))
-            .set_labels(cx, ACTION_KINDS.iter().map(|s| s.to_string()).collect());
+            .set_labels(cx, action_labels());
         self.ui
             .drop_down(id!(action_media_dd))
             .set_labels(cx, MEDIA_OPS.iter().map(|(_, n)| n.to_string()).collect());
@@ -4647,6 +5097,9 @@ impl MatchEvent for App {
                     DeviceMsg::Keymap {
                         slots,
                         joy_threshold,
+                        joy_mode,
+                        joy_mouse_speed,
+                        led_brightness,
                     } => {
                         // Device truth vs app truth: if the pad's stored
                         // keymap differs from the active profile, the profile
@@ -4655,6 +5108,9 @@ impl MatchEvent for App {
                         let profile = self.active_profile();
                         if *slots != profile.slots()
                             || *joy_threshold != profile.analog.joy_threshold
+                            || *joy_mode != profile.analog.joy_mode
+                            || *joy_mouse_speed != profile.analog.joy_mouse_speed
+                            || *led_brightness != self.state.config.led_brightness
                         {
                             self.log_line(
                                 cx,
@@ -5105,6 +5561,62 @@ impl MatchEvent for App {
             } else if is_simple {
                 self.handle_simple_editor_actions(cx, actions, slot);
             } else {
+                // Joystick mode card (present alongside the standard editor
+                // for every joy slot; the standard controls below are hidden
+                // in mouse mode, so their events cannot fire there).
+                if (SLOT_JOY_UP..=SLOT_JOY_PRESS).contains(&slot) {
+                    if let Some(idx) = self.ui.drop_down(id!(joy_mode_dd)).selected(actions) {
+                        if let Some(&mode) = JoystickMode::ALL.get(idx) {
+                            let profile_index = self.state.config.active_profile;
+                            let profile = &mut self.state.config.profiles[profile_index];
+                            if JoystickMode::infer(profile) != mode {
+                                mode.apply_to(profile);
+                                self.persist(cx);
+                                if mode == JoystickMode::Arrows && slot != SLOT_JOY_PRESS {
+                                    // select_slot re-runs the editor refresh.
+                                    self.select_slot(cx, SLOT_JOY_PRESS);
+                                } else {
+                                    self.refresh_editor(cx, true);
+                                }
+                                self.sync_device();
+                            }
+                        }
+                    }
+                    let mut arrow_mods_changed = false;
+                    for (id, bit) in [
+                        (id!(joy_mod_ctrl), 0x01u8),
+                        (id!(joy_mod_shift), 0x02),
+                        (id!(joy_mod_alt), 0x04),
+                        (id!(joy_mod_gui), 0x08),
+                    ] {
+                        if let Some(on) = self.ui.check_box(id).changed(actions) {
+                            let profile_index = self.state.config.active_profile;
+                            let profile = &mut self.state.config.profiles[profile_index];
+                            let mods = JoystickMode::arrow_mods(profile).unwrap_or(0);
+                            let mods = if on { mods | bit } else { mods & !bit };
+                            JoystickMode::set_arrow_mods(profile, mods);
+                            arrow_mods_changed = true;
+                        }
+                    }
+                    if arrow_mods_changed {
+                        self.persist(cx);
+                        self.refresh_editor(cx, true);
+                        self.sync_device();
+                    }
+                    if let Some(v) = self.ui.slider(id!(joy_speed_slider)).slided(actions) {
+                        let a = self.state.config.active_profile;
+                        self.state.config.profiles[a].analog.joy_mouse_speed =
+                            (v as u8).clamp(1, 10);
+                        self.ui
+                            .label(id!(joy_speed_value))
+                            .set_text(cx, &format!("{}", (v as u8).clamp(1, 10)));
+                        // Same debounce as the threshold slider: one flash
+                        // write per drag, not hundreds.
+                        self.state.sync_pending = true;
+                        cx.stop_timer(self.state.sync_timer);
+                        self.state.sync_timer = cx.start_timeout(0.6);
+                    }
+                }
                 if let Some(idx) = self.ui.drop_down(id!(sub_dd)).selected(actions) {
                     let group = slots_for_cell(cell_for_slot(slot));
                     if let Some(&s) = group.get(idx) {

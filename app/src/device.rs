@@ -24,7 +24,9 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use crate::config::{Slot, SlotKind, SLOT_COUNT};
+use crate::config::{
+    JoyMode, Slot, SlotKind, DEFAULT_JOY_MOUSE_SPEED, DEFAULT_LED_BRIGHTNESS, SLOT_COUNT,
+};
 use crate::dfuse;
 
 pub const VID: u16 = 0x1209;
@@ -39,6 +41,10 @@ const CMD_SAVE: u8 = 0x05;
 const CMD_FACTORY_RESET: u8 = 0x06;
 const CMD_GET_ANALOG: u8 = 0x07;
 const CMD_SET_ANALOG: u8 = 0x08;
+const CMD_GET_JOYMODE: u8 = 0x09;
+const CMD_SET_JOYMODE: u8 = 0x0A;
+const CMD_GET_LED: u8 = 0x0B;
+const CMD_SET_LED: u8 = 0x0C;
 
 /// First byte of an unsolicited device->host event report.
 const EVENT_MARK: u8 = 0x80;
@@ -71,6 +77,9 @@ pub enum DeviceMsg {
     Keymap {
         slots: [Slot; SLOT_COUNT],
         joy_threshold: u16,
+        joy_mode: JoyMode,
+        joy_mouse_speed: u8,
+        led_brightness: u8,
     },
     SyncDone {
         ok: bool,
@@ -124,6 +133,14 @@ pub enum DeviceCmd {
     SyncKeymap {
         slots: [Slot; SLOT_COUNT],
         joy_threshold: u16,
+        joy_mode: JoyMode,
+        joy_mouse_speed: u8,
+        led_brightness: u8,
+    },
+    /// Live slider preview: RAM only, best-effort, no reply posted. The
+    /// debounced SyncKeymap that follows is what persists it.
+    SetLedBrightness {
+        brightness: u8,
     },
     ReadKeymap,
     FactoryReset,
@@ -222,7 +239,8 @@ fn handle_cmd_offline(api: &mut HidApi, cmd: DeviceCmd) {
             });
         }
         // Nothing to read; the next Connected re-posts the keymap anyway.
-        DeviceCmd::ReadKeymap => {}
+        // A brightness preview with no pad is simply moot.
+        DeviceCmd::ReadKeymap | DeviceCmd::SetLedBrightness { .. } => {}
     }
 }
 
@@ -232,10 +250,7 @@ fn hello(dev: &HidDevice, serial: String) {
     let version = query_version(dev).unwrap_or_else(|| "?".into());
     Cx::post_action(DeviceMsg::Connected { version, serial });
     match read_keymap(dev) {
-        Ok((slots, joy_threshold)) => Cx::post_action(DeviceMsg::Keymap {
-            slots,
-            joy_threshold,
-        }),
+        Ok(keymap) => Cx::post_action(keymap.into_msg()),
         Err(e) => Cx::post_action(DeviceMsg::SyncDone {
             ok: false,
             detail: format!("keymap read failed: {e}"),
@@ -264,18 +279,32 @@ fn session(api: &mut HidApi, rx: &mpsc::Receiver<DeviceCmd>, dev: &HidDevice) ->
                 Ok(DeviceCmd::SyncKeymap {
                     slots,
                     joy_threshold,
+                    joy_mode,
+                    joy_mouse_speed,
+                    led_brightness,
                 }) => {
-                    let (ok, detail) = match sync_keymap(dev, &slots, joy_threshold) {
-                        Ok(()) => (true, "keymap written · saved to flash".to_string()),
+                    let (ok, detail) = match sync_keymap(
+                        dev,
+                        &slots,
+                        joy_threshold,
+                        joy_mode,
+                        joy_mouse_speed,
+                        led_brightness,
+                    ) {
+                        Ok(detail) => (true, detail),
                         Err(e) => (false, e),
                     };
                     Cx::post_action(DeviceMsg::SyncDone { ok, detail });
                 }
+                Ok(DeviceCmd::SetLedBrightness { brightness }) => {
+                    // Live preview while the slider drags: best-effort, no
+                    // SyncDone spam — the debounced sync that follows both
+                    // persists and reports.
+                    let mut reply = [0u8; 32];
+                    let _ = command(dev, &[CMD_SET_LED, brightness], &mut reply, REPLY_TIMEOUT);
+                }
                 Ok(DeviceCmd::ReadKeymap) => match read_keymap(dev) {
-                    Ok((slots, joy_threshold)) => Cx::post_action(DeviceMsg::Keymap {
-                        slots,
-                        joy_threshold,
-                    }),
+                    Ok(keymap) => Cx::post_action(keymap.into_msg()),
                     Err(e) => Cx::post_action(DeviceMsg::SyncDone {
                         ok: false,
                         detail: format!("keymap read failed: {e}"),
@@ -283,11 +312,8 @@ fn session(api: &mut HidApi, rx: &mpsc::Receiver<DeviceCmd>, dev: &HidDevice) ->
                 },
                 Ok(DeviceCmd::FactoryReset) => {
                     match factory_reset(dev).and_then(|()| read_keymap(dev)) {
-                        Ok((slots, joy_threshold)) => {
-                            Cx::post_action(DeviceMsg::Keymap {
-                                slots,
-                                joy_threshold,
-                            });
+                        Ok(keymap) => {
+                            Cx::post_action(keymap.into_msg());
                             Cx::post_action(DeviceMsg::SyncDone {
                                 ok: true,
                                 detail: "factory defaults restored".into(),
@@ -432,8 +458,29 @@ pub fn slot_from_wire(bytes: &[u8]) -> Slot {
     }
 }
 
-/// Pull the whole keymap (4 pages) plus the joystick threshold.
-fn read_keymap(dev: &HidDevice) -> Result<([Slot; SLOT_COUNT], u16), String> {
+/// Everything read_keymap pulls off the pad in one go.
+struct DeviceKeymap {
+    slots: [Slot; SLOT_COUNT],
+    joy_threshold: u16,
+    joy_mode: JoyMode,
+    joy_mouse_speed: u8,
+    led_brightness: u8,
+}
+
+impl DeviceKeymap {
+    fn into_msg(self) -> DeviceMsg {
+        DeviceMsg::Keymap {
+            slots: self.slots,
+            joy_threshold: self.joy_threshold,
+            joy_mode: self.joy_mode,
+            joy_mouse_speed: self.joy_mouse_speed,
+            led_brightness: self.led_brightness,
+        }
+    }
+}
+
+/// Pull the whole keymap (4 pages) plus the joystick threshold and mode.
+fn read_keymap(dev: &HidDevice) -> Result<DeviceKeymap, String> {
     let mut slots = [Slot::default(); SLOT_COUNT];
     for page in 0..KEYMAP_PAGES {
         let mut reply = [0u8; 32];
@@ -457,15 +504,39 @@ fn read_keymap(dev: &HidDevice) -> Result<([Slot; SLOT_COUNT], u16), String> {
     if n < 3 {
         return Err("GET_ANALOG: short reply".into());
     }
-    Ok((slots, u16::from_le_bytes([reply[1], reply[2]])))
+    let joy_threshold = u16::from_le_bytes([reply[1], reply[2]]);
+    // Pre-0.3 firmware silently drops GET_JOYMODE/GET_LED, so a timeout here
+    // is not an error: it means the defaults, the only thing that firmware
+    // can do.
+    let (joy_mode, joy_mouse_speed) =
+        match command(dev, &[CMD_GET_JOYMODE], &mut reply, REPLY_TIMEOUT) {
+            Ok(n) if n >= 3 => (JoyMode::from_wire(reply[1]), reply[2].clamp(1, 10)),
+            _ => (JoyMode::Keys, DEFAULT_JOY_MOUSE_SPEED),
+        };
+    let led_brightness = match command(dev, &[CMD_GET_LED], &mut reply, REPLY_TIMEOUT) {
+        Ok(n) if n >= 2 => reply[1],
+        _ => DEFAULT_LED_BRIGHTNESS,
+    };
+    Ok(DeviceKeymap {
+        slots,
+        joy_threshold,
+        joy_mode,
+        joy_mouse_speed,
+        led_brightness,
+    })
 }
 
-/// Push the whole keymap + analog tuning to RAM, then SAVE to flash.
+/// Push the whole keymap + analog tuning + joystick mode to RAM, then SAVE
+/// to flash. Ok carries the human detail line for the UI — the mode write is
+/// tolerated failing on pre-0.3 firmware, and the detail says so.
 fn sync_keymap(
     dev: &HidDevice,
     slots: &[Slot; SLOT_COUNT],
     joy_threshold: u16,
-) -> Result<(), String> {
+    joy_mode: JoyMode,
+    joy_mouse_speed: u8,
+    led_brightness: u8,
+) -> Result<String, String> {
     for page in 0..KEYMAP_PAGES {
         let base = page as usize * PAGE_SLOTS;
         let count = PAGE_SLOTS.min(SLOT_COUNT - base);
@@ -482,13 +553,37 @@ fn sync_keymap(
     let mut reply = [0u8; 32];
     let n = command(dev, &[CMD_SET_ANALOG, lo, hi], &mut reply, REPLY_TIMEOUT)?;
     expect_ack(n, &reply, "SET_ANALOG")?;
+    // Pre-0.3 firmware drops these commands; joystick mode and brightness
+    // then stay at their defaults on the pad. Everything else synced fine,
+    // so report success with a nudge instead of failing the sync.
+    let mode_supported = command(
+        dev,
+        &[CMD_SET_JOYMODE, joy_mode.to_wire(), joy_mouse_speed],
+        &mut reply,
+        REPLY_TIMEOUT,
+    )
+    .map(|n| expect_ack(n, &reply, "SET_JOYMODE").is_ok())
+    .unwrap_or(false);
+    let led_supported = command(
+        dev,
+        &[CMD_SET_LED, led_brightness],
+        &mut reply,
+        REPLY_TIMEOUT,
+    )
+    .map(|n| expect_ack(n, &reply, "SET_LED").is_ok())
+    .unwrap_or(false);
     let n = command(
         dev,
         &[CMD_SAVE, b'S', b'A', b'V', b'E'],
         &mut reply,
         SAVE_TIMEOUT,
     )?;
-    expect_ack(n, &reply, "SAVE")
+    expect_ack(n, &reply, "SAVE")?;
+    Ok(if mode_supported && led_supported {
+        "keymap written · saved to flash".to_string()
+    } else {
+        "keymap saved · joystick mode and brightness need a firmware update".to_string()
+    })
 }
 
 /// RAM + flash back to firmware defaults; caller re-reads afterwards.

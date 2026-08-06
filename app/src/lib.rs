@@ -6,6 +6,7 @@ pub mod behaviors;
 pub mod config;
 pub mod device;
 pub mod dfuse;
+pub mod i18n;
 pub mod intercept;
 pub mod keycodes;
 pub mod lucide;

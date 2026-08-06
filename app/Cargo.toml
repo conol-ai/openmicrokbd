@@ -1,11 +1,12 @@
 [package]
 name = "openmicro-app"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 description = "OpenMicro companion app: profiles, key actions, firmware updates (makepad GUI)"
 
 [dependencies]
+sys-locale = "0.3"
 makepad-widgets = "1.0"
 
 # device access: vendor HID interface (keymap + events + updater) + DFU
