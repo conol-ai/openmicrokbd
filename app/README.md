@@ -1,24 +1,32 @@
 # OpenMicro companion app
 
 Cross-platform desktop app for the OpenMicro macropad, built with
-[makepad](https://makepad.dev) — the whole product stack (compiler-designed
-board, embassy firmware, host app) stays in Rust.
+[GPUI](https://gpui.rs) and
+[GPUI Component](https://github.com/longbridge/gpui-component). The native,
+GPU-accelerated interface uses platform-quality text rendering and a compact
+8-bit visual system; the whole product stack (compiler-designed board,
+embassy firmware, host app) stays in Rust.
 
 ```sh
-cargo run --release
+cargo run --release --locked --bin openmicro-app
 ```
 
 ## The shape of it
 
-A single surface, not tabs: a product header keeps the active profile,
-connection state, and settings close; beneath it, a board-like hardware map
-and a structured input inspector share the workspace. The map is drawn true
-to life — encoder and joystick as dials, the touch pad as a disc, and all
-**13 keys as independent 1U cells**. Selecting any input opens its editor
-beside the grid; macros, settings and firmware updates are focused sheets over
-the pad; a menubar item carries profile switching and connection status.
-Disconnected, the board remains fully legible and an offline-editing callout
-explains that the active profile will sync when the pad returns.
+A single 8-bit-styled surface, not tabs: a product header keeps the active
+profile, connection state, and settings close; beneath it, a board-like
+hardware map and a structured input inspector share the workspace. Quiet
+one-pixel containment, selective stepped shadows, paired light and dark
+palettes, and compact display labels give the app a hardware-workstation
+character without sacrificing native text clarity. Appearance follows the
+operating system by default and can be pinned to Light or Dark in Settings.
+The map is drawn true to life — encoder and joystick as dials, the touch pad
+as a disc, and all **13 keys as independent 1U cells**. Selecting any input
+opens its editor beside the grid; macros, settings and firmware updates are
+focused sheets over the pad; a menubar item carries profile switching and
+connection status. Disconnected, the board remains fully legible and an
+offline-editing callout explains that the active profile will sync when the
+pad returns.
 
 ## How an input does something
 
@@ -49,13 +57,16 @@ permissions.
 ## Profiles
 
 Named profiles are first-class: full pad configuration (bindings, labels,
-Lucide icons, emitted codes, joystick threshold) stored app-side in a
-human-readable JSON under the OS config dir, exported/imported as one file
+Lucide symbols or Simple Icons brand marks, emitted codes, joystick threshold)
+stored app-side in a human-readable JSON under the OS config dir,
+exported/imported as one file
 (merge or replace). Switching — strip chevrons, dropdown, or the menubar —
 writes the keymap to the device and persists it to device flash. Ships with
 one default profile, **Codex**, matching the Codex Micro keycap set (FAST /
 APPR / REJ / SPLIT / NEW / TERM / PLAY / GIT / PR / DIFF / MIC / MIC / SETUP,
-icons from the full bundled Lucide set).
+icons from the full bundled Lucide set). The icon picker also includes the
+bundled Simple Icons catalog for monochrome brand marks. Brand names and logos
+remain trademarks of their respective owners.
 
 ## Firmware updates
 
@@ -95,8 +106,6 @@ for packaging, Developer ID signing, notarization, and publishing.
 - The menubar popover is a native menu (status, profiles, quick actions,
   firmware footer) — the PRD's mini pad mirror inside the popover needs a
   custom platform view and is deferred.
-- The window is sized for grid + editor rather than growing/shrinking as the
-  editor opens (makepad window resizing at runtime is not yet reliable).
 - Touch swipe left/right slots exist end-to-end in config and protocol, but
   the current single-zone pad cannot detect swipe direction — hardware
   revision territory.

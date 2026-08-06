@@ -19,7 +19,7 @@ This board was designed in **CoHDL**, a hardware description language newly deve
 | [`src/`](src/) | The PCB as CoHDL source: `main.cohdl` (top-level design), `openmicro_parts.cohdl` (datasheet-verified part bindings), `footprints.cohdl`, `pads.cohdl` |
 | [`out/`](out/) | Checked-in compiler output: KiCad netlist (`openmicro.net`), BOM (`openmicro-bom.csv`), SMT placement (`openmicro-smt.csv`), `.kicad_mod` footprints, layout constraints (`openmicro-layout.json`) |
 | [`fw/`](fw/) | Firmware — Rust + [embassy](https://embassy.dev) on STM32F072CB: key matrix, twin WS2812 chains, USB HID + vendor interface, DFU reboot. See [`fw/README.md`](fw/README.md) |
-| [`app/`](app/) | Companion desktop app — Rust + [makepad](https://makepad.dev): device dashboard, live connection state, and button-free firmware updates over USB. See [`app/README.md`](app/README.md) |
+| [`app/`](app/) | Companion desktop app — Rust + [GPUI](https://gpui.rs), with a crisp 8-bit visual system: device dashboard, live connection state, and button-free firmware updates over USB. See [`app/README.md`](app/README.md) |
 | [`pcb/`](pcb/) | The routed board — `openmicro.kicad_pcb` + KiCad project (design rules) |
 | [`fab/`](fab/) | Manufacturing package: Gerber/drill zip, assembly BOM, SMT placement CSV — see [`fab/README.md`](fab/README.md) |
 | [`mechanical/`](mechanical/) | Board outline (DXF) |
@@ -40,7 +40,7 @@ This board was designed in **CoHDL**, a hardware description language newly deve
 # Production firmware binary + debug ELF
 scripts/build-firmware.sh dist
 
-# Native macOS app bundle + DMG (the app is ad-hoc signed for local testing)
+# Native GPUI macOS app bundle + DMG (ad-hoc signed for local testing)
 scripts/package-macos.sh dist dist/openmicro-fw-<firmware-version>.bin
 
 # Or run the companion app from source

@@ -17,9 +17,9 @@ use std::thread;
 use std::time::Duration;
 
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
-use makepad_widgets::Cx;
 
 use crate::config::{Action, MacroStep, MediaOp};
+use crate::events;
 use crate::keycodes::{keyboard_name, mods_label};
 
 /// Posted when an input bound to `Action::AppSettings` fires (the SETUP key
@@ -65,9 +65,7 @@ fn run_blocking(action: &Action) {
         Action::Run { command } => run_command(command),
         Action::Open { target } => open_target(target),
         Action::Media { op } => media_op(*op),
-        // post_action is thread-safe (the device agent posts from its own
-        // thread already), so posting from the worker is fine.
-        Action::AppSettings => Cx::post_action(OpenAppSettings),
+        Action::AppSettings => events::post(OpenAppSettings),
     }
 }
 
@@ -91,9 +89,13 @@ fn run_command(command: &str) {
         return;
     }
     #[cfg(target_os = "windows")]
-    let spawned = std::process::Command::new("cmd").args(["/C", command]).spawn();
+    let spawned = std::process::Command::new("cmd")
+        .args(["/C", command])
+        .spawn();
     #[cfg(not(target_os = "windows"))]
-    let spawned = std::process::Command::new("sh").args(["-c", command]).spawn();
+    let spawned = std::process::Command::new("sh")
+        .args(["-c", command])
+        .spawn();
     if let Err(e) = spawned {
         eprintln!("actions: run '{command}': spawn failed: {e}");
     }
@@ -324,7 +326,11 @@ pub fn needs_permission(action: &Action) -> bool {
     match action {
         Action::Keystroke { .. } | Action::Media { .. } => true,
         Action::Macro { steps } => steps.iter().any(|e| {
-            e.enabled && matches!(e.step, MacroStep::Keystroke { .. } | MacroStep::Media { .. })
+            e.enabled
+                && matches!(
+                    e.step,
+                    MacroStep::Keystroke { .. } | MacroStep::Media { .. }
+                )
         }),
         Action::None | Action::Run { .. } | Action::Open { .. } | Action::AppSettings => false,
     }
@@ -341,7 +347,11 @@ pub fn describe(action: &Action) -> String {
     match action {
         Action::None => "—".to_string(),
         Action::Keystroke { mods, key } => {
-            format!("{}{}", mods_label(*mods), keyboard_name(*key).unwrap_or("—"))
+            format!(
+                "{}{}",
+                mods_label(*mods),
+                keyboard_name(*key).unwrap_or("—")
+            )
         }
         Action::Macro { steps } if steps.len() == 1 => "Macro · 1 step".to_string(),
         Action::Macro { steps } => format!("Macro · {} steps", steps.len()),
@@ -418,22 +428,32 @@ mod tests {
     fn permission_gating_follows_synthesis() {
         assert!(needs_permission(&Action::Keystroke { mods: 0, key: 0x04 }));
         assert!(needs_permission(&Action::Media { op: MediaOp::Mute }));
-        assert!(!needs_permission(&Action::Run { command: "ls".into() }));
+        assert!(!needs_permission(&Action::Run {
+            command: "ls".into()
+        }));
         assert!(!needs_permission(&Action::AppSettings));
         assert!(needs_permission(&Action::Macro {
             steps: vec![
                 MacroStep::Delay { ms: 5 }.into(),
-                MacroStep::Media { op: MediaOp::PlayPause }.into(),
+                MacroStep::Media {
+                    op: MediaOp::PlayPause
+                }
+                .into(),
             ],
         }));
         assert!(!needs_permission(&Action::Macro {
-            steps: vec![MacroStep::Open { target: "https://example.com".into() }.into()],
+            steps: vec![MacroStep::Open {
+                target: "https://example.com".into()
+            }
+            .into()],
         }));
         // A disabled synthesis step must not demand the permission.
         assert!(!needs_permission(&Action::Macro {
             steps: vec![crate::config::MacroStepEntry {
                 enabled: false,
-                step: MacroStep::Media { op: MediaOp::PlayPause },
+                step: MacroStep::Media {
+                    op: MediaOp::PlayPause
+                },
             }],
         }));
     }
@@ -443,15 +463,21 @@ mod tests {
         assert_eq!(describe(&Action::None), "—");
         assert_eq!(describe(&Action::AppSettings), "App settings");
         assert_eq!(
-            describe(&Action::Run { command: "~/bin/deploy.sh --prod".into() }),
+            describe(&Action::Run {
+                command: "~/bin/deploy.sh --prod".into()
+            }),
             "Run · deploy.sh"
         );
         assert_eq!(
-            describe(&Action::Open { target: "https://linear.app/team/board".into() }),
+            describe(&Action::Open {
+                target: "https://linear.app/team/board".into()
+            }),
             "Open · linear.app"
         );
         assert_eq!(
-            describe(&Action::Macro { steps: vec![MacroStep::Delay { ms: 1 }.into()] }),
+            describe(&Action::Macro {
+                steps: vec![MacroStep::Delay { ms: 1 }.into()]
+            }),
             "Macro · 1 step"
         );
     }

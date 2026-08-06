@@ -223,7 +223,6 @@ jobs:
 
       - name: Prebuild the tagged app
         env:
-          ARCH: ${{ matrix.arch }}
           EXPECTED_UNAME: ${{ matrix.uname }}
           FIRMWARE_VERSION: ${{ needs.validate.outputs.firmware_version }}
           RUST_TARGET: ${{ matrix.rust_target }}
@@ -237,10 +236,12 @@ jobs:
           (
             cd app
             MACOSX_DEPLOYMENT_TARGET=11.0 \
-            MAKEPAD="apple_bundle,target_$ARCH" \
-            MAKEPAD_PACKAGE_DIR=. \
             OPENMICRO_FIRMWARE_VERSION="$FIRMWARE_VERSION" \
-              cargo build --release --locked --target "$RUST_TARGET"
+              cargo build \
+                --release \
+                --locked \
+                --target "$RUST_TARGET" \
+                --bin openmicro-app
           )
 
       - name: Import Developer ID and notary credentials
@@ -336,9 +337,10 @@ jobs:
           EMBEDDED_FIRMWARE="$RESOURCES/firmware/openmicro-fw.bin"
           EMBEDDED_MANIFEST="$RESOURCES/firmware/manifest.json"
 
-          test -f "$RESOURCES/openmicro_app/resources/lucide.ttf"
-          test -f "$RESOURCES/makepad_widgets/resources/IBMPlexSans-Text.ttf"
+          test -x "$EXECUTABLE"
           test -f "$EMBEDDED_FIRMWARE"
+          test -f "$EMBEDDED_MANIFEST"
+          test -f "$RESOURCES/licenses/SimpleIcons-LICENSE.md"
           plutil -lint "$APP_BUNDLE/Contents/Info.plist"
           if [[ "$(
             plutil -extract CFBundleShortVersionString raw \
@@ -471,8 +473,10 @@ jobs:
           hdiutil attach "$DMG" -readonly -nobrowse -mountpoint "$MOUNT_POINT"
           codesign --verify --deep --strict --verbose=2 "$MOUNT_POINT/OpenMicro.app"
           test -L "$MOUNT_POINT/Applications"
-          test -f \
-            "$MOUNT_POINT/OpenMicro.app/Contents/Resources/openmicro_app/resources/lucide.ttf"
+          test -x "$MOUNT_POINT/OpenMicro.app/Contents/MacOS/OpenMicro"
+          test -f "$MOUNT_POINT/OpenMicro.app/Contents/Resources/firmware/openmicro-fw.bin"
+          test -f "$MOUNT_POINT/OpenMicro.app/Contents/Resources/firmware/manifest.json"
+          test -f "$MOUNT_POINT/OpenMicro.app/Contents/Resources/licenses/SimpleIcons-LICENSE.md"
           cleanup_mount
           trap - EXIT
 

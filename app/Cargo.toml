@@ -1,13 +1,15 @@
 [package]
 name = "openmicro-app"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
-description = "OpenMicro companion app: profiles, key actions, firmware updates (makepad GUI)"
+description = "OpenMicro companion app: profiles, key actions, firmware updates (GPUI)"
 
 [dependencies]
 sys-locale = "0.3"
-makepad-widgets = "1.0"
+async-channel = "2"
+gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
+gpui-component = "=0.5.1"
 
 # device access: vendor HID interface (keymap + events + updater) + DFU
 hidapi = "2.6"

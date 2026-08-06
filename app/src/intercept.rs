@@ -16,9 +16,9 @@
 
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
-use makepad_widgets::Cx;
 
 use crate::config::{Action, Profile, SlotKind, SLOT_COUNT};
+use crate::events;
 use crate::keycodes;
 
 /// Posted from the listener thread when a registered code fires.
@@ -130,7 +130,8 @@ impl Intercept {
 
             // A second slot emitting the identical code rides the first
             // registration; both actions are reachable via slot_for_id.
-            if let Some(prev) = (0..i).find(|&j| self.registered[j].map(|h| h.id()) == Some(hk.id()))
+            if let Some(prev) =
+                (0..i).find(|&j| self.registered[j].map(|h| h.id()) == Some(hk.id()))
             {
                 self.registered[i] = self.registered[prev];
                 self.status[i] = self.status[prev];
@@ -158,12 +159,12 @@ impl Intercept {
     }
 }
 
-/// Forward hotkey events from global-hotkey's channel into makepad actions.
+/// Forward hotkey events from global-hotkey's channel into app events.
 pub fn spawn_listener() {
     std::thread::spawn(|| {
         while let Ok(event) = GlobalHotKeyEvent::receiver().recv() {
             if event.state == HotKeyState::Pressed {
-                Cx::post_action(HotkeyMsg {
+                events::post(HotkeyMsg {
                     hotkey_id: event.id,
                 });
             }

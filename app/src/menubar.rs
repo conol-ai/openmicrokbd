@@ -14,9 +14,10 @@
 //! tray can't be created (headless CI, odd Linux session), the app just runs
 //! without it.
 
-use makepad_widgets::Cx;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+
+use crate::events;
 
 /// Posted to the UI when a tray menu item is chosen. `id` is our stable
 /// string id: "profile:<index>", "open", "quit".
@@ -49,7 +50,9 @@ fn tray_icon() -> Option<Icon> {
             // Rounded-square coverage test on the plate.
             let (fx, fy) = (x as f32 - 15.5, y as f32 - 15.5);
             let (ax, ay) = (fx.abs() - 9.5, fy.abs() - 9.5);
-            let d = (ax.max(0.0).powi(2) + ay.max(0.0).powi(2)).sqrt() + ax.min(0.0).max(ay.min(0.0)) - 5.0;
+            let d = (ax.max(0.0).powi(2) + ay.max(0.0).powi(2)).sqrt()
+                + ax.min(0.0).max(ay.min(0.0))
+                - 5.0;
             if d < 0.0 {
                 put(&mut rgba, x, y, plate);
             }
@@ -76,18 +79,17 @@ impl Menubar {
     /// event handler.
     pub fn new() -> Self {
         MenuEvent::set_event_handler(Some(|event: MenuEvent| {
-            Cx::post_action(MenubarMsg {
+            events::post(MenubarMsg {
                 id: event.id.0.clone(),
             });
         }));
-        let tray = tray_icon()
-            .and_then(|icon| {
-                TrayIconBuilder::new()
-                    .with_icon(icon)
-                    .with_tooltip("OpenMicro")
-                    .build()
-                    .ok()
-            });
+        let tray = tray_icon().and_then(|icon| {
+            TrayIconBuilder::new()
+                .with_icon(icon)
+                .with_tooltip("OpenMicro")
+                .build()
+                .ok()
+        });
         Menubar { tray }
     }
 
@@ -143,7 +145,12 @@ impl Menubar {
         // No "Open" item: neither makepad nor the tray API can portably
         // raise an existing window, and the PRD forbids dead ends — better
         // absent than a menu entry that does nothing.
-        let _ = menu.append(&MenuItem::with_id("quit", crate::i18n::tr("mb_quit"), true, None));
+        let _ = menu.append(&MenuItem::with_id(
+            "quit",
+            crate::i18n::tr("mb_quit"),
+            true,
+            None,
+        ));
         if connected {
             let _ = menu.append(&PredefinedMenuItem::separator());
             let _ = menu.append(&MenuItem::with_id(

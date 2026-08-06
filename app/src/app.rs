@@ -42,7 +42,7 @@ use crate::release::{self, DownloadKind, ReleaseCatalog, ReleaseMsg};
 /// local `cargo run` builds useful when no release environment is present.
 const LATEST_FW: &str = match option_env!("OPENMICRO_FIRMWARE_VERSION") {
     Some(version) => version,
-    None => "0.3.0",
+    None => "0.4.0",
 };
 
 /// UI cap on macro steps (the config format itself has no limit).
@@ -82,11 +82,26 @@ live_design! {
     OM_CLEAR       = #0000
 
     // ------------------------------------------------------------ typography
+    // Theme fonts with the CJK slot swapped: makepad's bundled default is
+    // LXGW WenKai, a kaiti/handwriting style — jarring next to PingFang-era
+    // system UI. Noto Sans SC is the same modern grotesk class as PingFang.
+    // (Makepad renders its own fonts; it cannot use macOS system fonts.)
+    OM_FONT_REGULAR = <THEME_FONT_REGULAR> {
+        font_family: {
+            chinese = font("crate://self/resources/NotoSansSC.ttf", 0.0, 0.0)
+        }
+    }
+    OM_FONT_BOLD = <THEME_FONT_BOLD> {
+        font_family: {
+            chinese = font("crate://self/resources/NotoSansSC.ttf", 0.0, 0.0)
+        }
+    }
+
     Display = <Label> {
         width: Fit,
         padding: 0,
         draw_text: {
-            text_style: <THEME_FONT_BOLD> {font_size: 18.0},
+            text_style: <OM_FONT_BOLD> {font_size: 18.0},
             color: (OM_TEXT)
         }
     }
@@ -94,32 +109,32 @@ live_design! {
         width: Fit,
         padding: 0,
         draw_text: {
-            text_style: <THEME_FONT_BOLD> {font_size: 14.0},
+            text_style: <OM_FONT_BOLD> {font_size: 14.0},
             color: (OM_TEXT)
         }
     }
     Title = <Label> {
         width: Fit,
         padding: 0,
-        draw_text: {text_style: <THEME_FONT_BOLD> {font_size: 13.0}, color: (OM_TEXT)}
+        draw_text: {text_style: <OM_FONT_BOLD> {font_size: 13.0}, color: (OM_TEXT)}
     }
     Body = <Label> {
         width: Fill,
         padding: 0,
         draw_text: {
-            text_style: <THEME_FONT_REGULAR> {font_size: 11.5, line_spacing: 1.45},
+            text_style: <OM_FONT_REGULAR> {font_size: 11.5, line_spacing: 1.45},
             color: (OM_TEXT_2)
         }
     }
     Small = <Label> {
         width: Fit,
         padding: 0,
-        draw_text: {text_style: <THEME_FONT_REGULAR> {font_size: 10.5}, color: (OM_TEXT_3)}
+        draw_text: {text_style: <OM_FONT_REGULAR> {font_size: 10.5}, color: (OM_TEXT_3)}
     }
     Eyebrow = <Label> {
         width: Fit,
         padding: 0,
-        draw_text: {text_style: <THEME_FONT_BOLD> {font_size: 9.5}, color: (OM_TEXT_3)}
+        draw_text: {text_style: <OM_FONT_BOLD> {font_size: 9.5}, color: (OM_TEXT_3)}
     }
     Mono = <Label> {
         width: Fit,
@@ -231,7 +246,7 @@ live_design! {
         section_number = <Label> {
             padding: 0,
             draw_text: {
-                text_style: <THEME_FONT_BOLD> {font_size: 10.0},
+                text_style: <OM_FONT_BOLD> {font_size: 10.0},
                 color: (OM_ACCENT_HI)
             }
         }
@@ -249,7 +264,7 @@ live_design! {
         }
         pill_label = <Label> {
             padding: 0,
-            draw_text: {text_style: <THEME_FONT_BOLD> {font_size: 9.5}, color: (OM_TEXT_2)}
+            draw_text: {text_style: <OM_FONT_BOLD> {font_size: 9.5}, color: (OM_TEXT_2)}
         }
     }
 
@@ -290,7 +305,7 @@ live_design! {
             border_color_1_disabled: (OM_CLEAR), border_color_2_disabled: (OM_CLEAR),
         }
         draw_text: {
-            text_style: <THEME_FONT_BOLD> {font_size: 11.5},
+            text_style: <OM_FONT_BOLD> {font_size: 11.5},
             color: (OM_INK),
             color_hover: (OM_INK),
             color_down: (OM_INK),
@@ -314,7 +329,7 @@ live_design! {
             border_color_1_disabled: (OM_LINE_SOFT), border_color_2_disabled: (OM_LINE_SOFT),
         }
         draw_text: {
-            text_style: <THEME_FONT_BOLD> {font_size: 11.0},
+            text_style: <OM_FONT_BOLD> {font_size: 11.0},
             color: (OM_TEXT),
             color_hover: (OM_TEXT),
             color_down: (OM_TEXT),
@@ -335,7 +350,7 @@ live_design! {
             color_disabled: (OM_CLEAR),
         }
         draw_text: {
-            text_style: <THEME_FONT_BOLD> {font_size: 10.5},
+            text_style: <OM_FONT_BOLD> {font_size: 10.5},
             color: (OM_TEXT_2),
             color_hover: (OM_TEXT),
             color_down: (OM_TEXT),
@@ -406,7 +421,7 @@ live_design! {
             color_focus: (OM_CLEAR),
         }
         draw_text: {
-            text_style: <THEME_FONT_BOLD> {font_size: 10.5},
+            text_style: <OM_FONT_BOLD> {font_size: 10.5},
             color: (OM_TEXT_3),
             color_hover: (OM_TEXT_2),
             color_down: (OM_TEXT),
@@ -437,7 +452,7 @@ live_design! {
             border_color_1_disabled: (OM_LINE_SOFT), border_color_2_disabled: (OM_LINE_SOFT),
         }
         draw_text: {
-            text_style: <THEME_FONT_REGULAR> {font_size: 12.0},
+            text_style: <OM_FONT_REGULAR> {font_size: 12.0},
             color: (OM_TEXT),
             color_hover: (OM_TEXT),
             color_focus: (OM_TEXT),
@@ -461,7 +476,7 @@ live_design! {
         height: Fit,
         padding: {left: 24, right: 14, top: 10, bottom: 10},
         draw_text: {
-            text_style: <THEME_FONT_REGULAR> {font_size: 11.5},
+            text_style: <OM_FONT_REGULAR> {font_size: 11.5},
             color: (OM_TEXT_2),
             color_hover: (OM_TEXT),
             color_active: (OM_ACCENT_HI),
@@ -502,7 +517,7 @@ live_design! {
         padding: {left: 13, right: 30, top: 0, bottom: 0},
         popup_menu: <SelectMenu> {}
         draw_text: {
-            text_style: <THEME_FONT_REGULAR> {font_size: 11.5},
+            text_style: <OM_FONT_REGULAR> {font_size: 11.5},
             color: (OM_TEXT),
             color_hover: (OM_TEXT),
             color_focus: (OM_TEXT),
@@ -535,7 +550,7 @@ live_design! {
         padding: {left: 0, right: 0, top: 4, bottom: 4},
         label_walk: {width: Fit, height: Fit, margin: {left: 9}}
         draw_text: {
-            text_style: <THEME_FONT_REGULAR> {font_size: 11.5},
+            text_style: <OM_FONT_REGULAR> {font_size: 11.5},
             color: (OM_TEXT_2),
             color_hover: (OM_TEXT),
             color_active: (OM_TEXT),
@@ -577,7 +592,7 @@ live_design! {
         label_walk: {width: Fill, height: Fit, margin: 0},
         label_align: {x: 0.5, y: 0.5},
         draw_text: {
-            text_style: <THEME_FONT_BOLD> {font_size: 11.0},
+            text_style: <OM_FONT_BOLD> {font_size: 11.0},
             color: (OM_TEXT_2),
             color_hover: (OM_TEXT),
             color_down: (OM_TEXT),
@@ -655,7 +670,7 @@ live_design! {
     OmSlider = <Slider> {
         height: 34,
         draw_text: {
-            text_style: <THEME_FONT_REGULAR> {font_size: 10.5},
+            text_style: <OM_FONT_REGULAR> {font_size: 10.5},
             color: (OM_TEXT_3),
             color_hover: (OM_TEXT_2),
             color_focus: (OM_TEXT_2),
@@ -799,7 +814,7 @@ live_design! {
         }
         cap_label = <Label> {
             padding: 0,
-            draw_text: {text_style: <THEME_FONT_BOLD> {font_size: 10.5}, color: (OM_TEXT)}
+            draw_text: {text_style: <OM_FONT_BOLD> {font_size: 10.5}, color: (OM_TEXT)}
         }
     }
 
@@ -894,7 +909,7 @@ live_design! {
         <View> {width: 1, height: 35}
         dial_label = <Label> {
             padding: 0,
-            draw_text: {text_style: <THEME_FONT_BOLD> {font_size: 10.0}, color: (OM_TEXT_2)}
+            draw_text: {text_style: <OM_FONT_BOLD> {font_size: 10.0}, color: (OM_TEXT_2)}
         }
     }
 
@@ -1089,7 +1104,7 @@ live_design! {
                                     text: "Searching…",
                                     padding: 0,
                                     draw_text: {
-                                        text_style: <THEME_FONT_BOLD> {font_size: 10.5},
+                                        text_style: <OM_FONT_BOLD> {font_size: 10.5},
                                         color: (OM_TEXT)
                                     }
                                 }
@@ -1927,6 +1942,13 @@ live_design! {
                                     text: "Dims the per-key backlight and the underglow ring together, live while you drag. 100% is the USB power budget cap; 0% turns the lights off. Saved on the pad."
                                 }
                             }
+                            <Inset> {
+                                width: Fill, height: Fit, flow: Right, spacing: 10, align: {y: 0.5},
+                                tr_backlight_pattern = <Small> {width: 120, text: "Backlight pattern"}
+                                key_pattern_dd = <Select> {width: 170}
+                                tr_ambient_pattern = <Small> {width: 120, text: "Ambient light"}
+                                ug_pattern_dd = <Select> {width: 170}
+                            }
                             tr_profile_data = <Eyebrow> {text: "PROFILE DATA"}
                             <Inset> {
                                 width: Fill, height: Fit, flow: Right, spacing: 10, align: {y: 0.5},
@@ -2010,7 +2032,7 @@ live_design! {
                                     fw_version = <Label> {
                                         text: "—",
                                         padding: 0,
-                                        draw_text: {text_style: <THEME_FONT_BOLD> {font_size: 16.0}, color: (OM_TEXT)}
+                                        draw_text: {text_style: <OM_FONT_BOLD> {font_size: 16.0}, color: (OM_TEXT)}
                                     }
                                 }
                                 fw_pill = <Pill> {pill_label = {text: "Searching…"}}
@@ -2037,7 +2059,7 @@ live_design! {
                                         width: Fill,
                                         text: "No image selected",
                                         padding: 0,
-                                        draw_text: {text_style: <THEME_FONT_REGULAR> {font_size: 11.0}, color: (OM_TEXT)}
+                                        draw_text: {text_style: <OM_FONT_REGULAR> {font_size: 11.0}, color: (OM_TEXT)}
                                     }
                                     file_meta = <Small> {width: Fill, text: "a raw .bin built from the fw crate"}
                                 }
@@ -2071,7 +2093,7 @@ live_design! {
                                         width: Fill,
                                         text: "",
                                         padding: 0,
-                                        draw_text: {text_style: <THEME_FONT_REGULAR> {font_size: 11.0}, color: (OM_TEXT)}
+                                        draw_text: {text_style: <OM_FONT_REGULAR> {font_size: 11.0}, color: (OM_TEXT)}
                                     }
                                     pct_label = <Mono> {text: "0%"}
                                 }
@@ -2323,6 +2345,50 @@ fn macro_row_id(i: usize) -> LiveId {
 }
 
 /// The grid cell that shows a given slot.
+/// Named single-colour presets offered by the LED pattern pickers.
+const PATTERN_PALETTE: &[(&str, u8, u8, u8)] = &[
+    ("pat_red", 255, 0, 0),
+    ("pat_orange", 255, 96, 0),
+    ("pat_yellow", 255, 200, 0),
+    ("pat_green", 0, 255, 60),
+    ("pat_cyan", 0, 200, 255),
+    ("pat_blue", 0, 80, 255),
+    ("pat_purple", 150, 0, 255),
+    ("pat_pink", 255, 60, 150),
+];
+
+/// Dropdown labels for one pattern picker; appends "Custom (existing)" when
+/// the current value is a solid colour outside the named palette.
+fn pattern_labels(current: &config::LedPattern) -> Vec<String> {
+    let mut labels = vec![tr("pat_rainbow").to_string(), tr("pat_white").to_string()];
+    labels.extend(PATTERN_PALETTE.iter().map(|(k, _, _, _)| tr(k).to_string()));
+    if pattern_index(current).is_none() {
+        labels.push(tr("custom_existing").to_string());
+    }
+    labels
+}
+
+fn pattern_index(pattern: &config::LedPattern) -> Option<usize> {
+    match pattern {
+        config::LedPattern::Rainbow => Some(0),
+        config::LedPattern::White => Some(1),
+        config::LedPattern::Solid { r, g, b } => PATTERN_PALETTE
+            .iter()
+            .position(|(_, pr, pg, pb)| (pr, pg, pb) == (r, g, b))
+            .map(|i| i + 2),
+    }
+}
+
+fn pattern_from_index(idx: usize) -> Option<config::LedPattern> {
+    match idx {
+        0 => Some(config::LedPattern::Rainbow),
+        1 => Some(config::LedPattern::White),
+        _ => PATTERN_PALETTE
+            .get(idx - 2)
+            .map(|&(_, r, g, b)| config::LedPattern::Solid { r, g, b }),
+    }
+}
+
 /// The action_dd entries, translated, in ACTION_KINDS order.
 fn action_labels() -> Vec<String> {
     ["act_none", "act_keystroke", "act_macro", "act_run", "act_open", "act_media", "act_app_settings"]
@@ -4209,6 +4275,16 @@ impl App {
         self.ui
             .label(id!(led_value))
             .set_text(cx, &format!("{pct}%"));
+        for (id, pattern) in [
+            (id!(key_pattern_dd), self.state.config.led_key_pattern),
+            (id!(ug_pattern_dd), self.state.config.led_ambient_pattern),
+        ] {
+            let dd = self.ui.drop_down(id);
+            let labels = pattern_labels(&pattern);
+            let index = pattern_index(&pattern).unwrap_or(labels.len() - 1);
+            dd.set_labels(cx, labels);
+            dd.set_selected_item(cx, index);
+        }
         let lang_dd = self.ui.drop_down(id!(lang_dd));
         lang_dd.set_labels(
             cx,
@@ -4493,6 +4569,23 @@ impl App {
         if self.ui.button(id!(settings_close)).clicked(actions) {
             self.state.confirm_reset = false;
             self.open_sheet(cx, SheetKind::None);
+        }
+        for (id, key_chain) in [(id!(key_pattern_dd), true), (id!(ug_pattern_dd), false)] {
+            if let Some(idx) = self.ui.drop_down(id).selected(actions) {
+                if let Some(pattern) = pattern_from_index(idx) {
+                    let current = if key_chain {
+                        &mut self.state.config.led_key_pattern
+                    } else {
+                        &mut self.state.config.led_ambient_pattern
+                    };
+                    if *current != pattern {
+                        *current = pattern;
+                        self.persist(cx);
+                        self.refresh_settings(cx);
+                        self.sync_device();
+                    }
+                }
+            }
         }
         if let Some(idx) = self.ui.drop_down(id!(lang_dd)).selected(actions) {
             let choice = [

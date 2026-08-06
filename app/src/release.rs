@@ -5,13 +5,14 @@
 //! worker thread, selects the DMG for the running architecture, and verifies
 //! every downloaded artifact against the SHA-256 recorded in that manifest.
 
-use makepad_widgets::Cx;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+use crate::events;
 
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MANIFEST_URL: &str = match option_env!("OPENMICRO_UPDATE_MANIFEST_URL") {
@@ -189,8 +190,8 @@ pub enum ReleaseMsg {
 /// Check for the newest stable release without delaying UI startup.
 pub fn spawn_catalog_check() {
     std::thread::spawn(|| match fetch_catalog(MANIFEST_URL) {
-        Ok(catalog) => Cx::post_action(ReleaseMsg::Catalog(catalog)),
-        Err(error) => Cx::post_action(ReleaseMsg::CatalogUnavailable(error)),
+        Ok(catalog) => events::post(ReleaseMsg::Catalog(catalog)),
+        Err(error) => events::post(ReleaseMsg::CatalogUnavailable(error)),
     });
 }
 
@@ -200,19 +201,19 @@ pub fn spawn_download(kind: DownloadKind, version: String, asset: ReleaseAsset) 
     std::thread::spawn(move || {
         let progress_version = version.clone();
         let result = download_asset(kind, &asset, |fraction| {
-            Cx::post_action(ReleaseMsg::DownloadProgress {
+            events::post(ReleaseMsg::DownloadProgress {
                 kind,
                 version: progress_version.clone(),
                 fraction,
             });
         });
         match result {
-            Ok(path) => Cx::post_action(ReleaseMsg::DownloadReady {
+            Ok(path) => events::post(ReleaseMsg::DownloadReady {
                 kind,
                 version,
                 path,
             }),
-            Err(error) => Cx::post_action(ReleaseMsg::DownloadFailed {
+            Err(error) => events::post(ReleaseMsg::DownloadFailed {
                 kind,
                 version,
                 error,

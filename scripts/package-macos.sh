@@ -58,46 +58,24 @@ mkdir -p "$CONTENTS/MacOS" "$RESOURCES" "$DMG_ROOT"
 
 (
     cd "$REPO_ROOT/app"
-    HOST_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
-    if [[ "$RUST_TARGET" != "$HOST_TRIPLE" ]]; then
-        # Makepad 1.0 compiles one Objective-C helper without forwarding
-        # Cargo's target architecture. The wrapper makes cross-built DMGs
-        # contain a consistently targeted helper object.
-        export PATH="$REPO_ROOT/scripts/macos-cross-tools:$PATH"
-    fi
     MACOSX_DEPLOYMENT_TARGET=11.0 \
-    MAKEPAD="apple_bundle,target_$ARCH" \
-    MAKEPAD_PACKAGE_DIR=. \
     OPENMICRO_FIRMWARE_VERSION="$FW_VERSION" \
-        cargo build --release --locked --target "$RUST_TARGET"
+        cargo build \
+            --release \
+            --locked \
+            --target "$RUST_TARGET" \
+            --bin openmicro-app
 )
 
 cp "$REPO_ROOT/app/target/$RUST_TARGET/release/openmicro-app" "$CONTENTS/MacOS/OpenMicro"
 chmod 755 "$CONTENTS/MacOS/OpenMicro"
+mkdir -p "$RESOURCES/licenses"
+cp \
+    "$REPO_ROOT/app/resources/simple-icons.LICENSE.md" \
+    "$RESOURCES/licenses/SimpleIcons-LICENSE.md"
 sed "s/@APP_VERSION@/$APP_VERSION/g" \
     "$REPO_ROOT/app/macos/Info.plist.in" > "$CONTENTS/Info.plist"
 printf 'APPL????' > "$CONTENTS/PkgInfo"
-
-# Makepad resolves crate:// URLs from NSBundle.resourcePath when built with
-# MAKEPAD=apple_bundle. Mirror every Cargo package's resources directory under
-# its normalized Rust crate name, including the root openmicro_app package.
-METADATA_JSON="$STAGE/cargo-metadata.json"
-cargo metadata \
-    --manifest-path "$REPO_ROOT/app/Cargo.toml" \
-    --locked \
-    --format-version 1 \
-    > "$METADATA_JSON"
-while IFS=$'\t' read -r PACKAGE_NAME MANIFEST_PATH; do
-    PACKAGE_DIR="$(dirname "$MANIFEST_PATH")"
-    SOURCE_RESOURCES="$PACKAGE_DIR/resources"
-    if [[ ! -d "$SOURCE_RESOURCES" ]]; then
-        continue
-    fi
-    CRATE_NAME="${PACKAGE_NAME//-/_}"
-    DESTINATION="$RESOURCES/$CRATE_NAME/resources"
-    mkdir -p "$(dirname "$DESTINATION")"
-    ditto "$SOURCE_RESOURCES" "$DESTINATION"
-done < <(jq -r '.packages[] | [.name, .manifest_path] | @tsv' "$METADATA_JSON")
 
 if [[ -n "$FIRMWARE_BIN" ]]; then
     if [[ ! -f "$FIRMWARE_BIN" ]]; then
@@ -116,6 +94,7 @@ fi
 
 plutil -lint "$CONTENTS/Info.plist"
 file "$CONTENTS/MacOS/OpenMicro"
+test -f "$RESOURCES/licenses/SimpleIcons-LICENSE.md"
 case "$ARCH" in
     aarch64) LIPO_ARCH="arm64" ;;
     x86_64) LIPO_ARCH="x86_64" ;;

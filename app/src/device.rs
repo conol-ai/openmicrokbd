@@ -15,19 +15,20 @@
 //! open the device themselves, so the held handle is closed first and a full
 //! reconnect cycle afterwards re-posts Connected/Keymap.
 //!
-//! Everything is reported to the UI via `Cx::post_action`.
+//! Everything is reported to the UI through the framework-neutral event bus.
 
 use hidapi::{HidApi, HidDevice};
-use makepad_widgets::Cx;
 use std::ffi::CString;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::config::{
-    JoyMode, Slot, SlotKind, DEFAULT_JOY_MOUSE_SPEED, DEFAULT_LED_BRIGHTNESS, SLOT_COUNT,
+    JoyMode, LedPattern, Slot, SlotKind, DEFAULT_JOY_MOUSE_SPEED, DEFAULT_LED_BRIGHTNESS,
+    SLOT_COUNT,
 };
 use crate::dfuse;
+use crate::events;
 
 pub const VID: u16 = 0x1209;
 pub const PID: u16 = 0x0001;
@@ -45,6 +46,8 @@ const CMD_GET_JOYMODE: u8 = 0x09;
 const CMD_SET_JOYMODE: u8 = 0x0A;
 const CMD_GET_LED: u8 = 0x0B;
 const CMD_SET_LED: u8 = 0x0C;
+const CMD_GET_LEDPATTERN: u8 = 0x0D;
+const CMD_SET_LEDPATTERN: u8 = 0x0E;
 
 /// First byte of an unsolicited device->host event report.
 const EVENT_MARK: u8 = 0x80;
@@ -80,6 +83,8 @@ pub enum DeviceMsg {
         joy_mode: JoyMode,
         joy_mouse_speed: u8,
         led_brightness: u8,
+        led_key_pattern: LedPattern,
+        led_ambient_pattern: LedPattern,
     },
     SyncDone {
         ok: bool,
@@ -136,6 +141,8 @@ pub enum DeviceCmd {
         joy_mode: JoyMode,
         joy_mouse_speed: u8,
         led_brightness: u8,
+        led_key_pattern: LedPattern,
+        led_ambient_pattern: LedPattern,
     },
     /// Live slider preview: RAM only, best-effort, no reply posted. The
     /// debounced SyncKeymap that follows is what persists it.
@@ -152,7 +159,7 @@ pub fn spawn_worker() -> mpsc::Sender<DeviceCmd> {
         let api = match HidApi::new() {
             Ok(api) => api,
             Err(e) => {
-                Cx::post_action(UpdateMsg::Failed(format!("HID init failed: {e}")));
+                events::post(UpdateMsg::Failed(format!("HID init failed: {e}")));
                 return;
             }
         };
@@ -188,7 +195,7 @@ fn worker(mut api: HidApi, rx: mpsc::Receiver<DeviceCmd>) {
         // Close our handle before anything re-opens the device (DFU/update),
         // and so a fresh session always re-posts Connected + Keymap.
         drop(dev);
-        Cx::post_action(DeviceMsg::Disconnected);
+        events::post(DeviceMsg::Disconnected);
         match end {
             SessionEnd::Lost => {}
             SessionEnd::EnterDfu => enter_dfu_standalone(&mut api),
@@ -233,7 +240,7 @@ fn handle_cmd_offline(api: &mut HidApi, cmd: DeviceCmd) {
         } => run_update(api, &image, expected_version.as_deref()),
         DeviceCmd::EnterDfuOnly => enter_dfu_standalone(api),
         DeviceCmd::SyncKeymap { .. } | DeviceCmd::FactoryReset => {
-            Cx::post_action(DeviceMsg::SyncDone {
+            events::post(DeviceMsg::SyncDone {
                 ok: false,
                 detail: "device not connected".into(),
             });
@@ -248,10 +255,10 @@ fn handle_cmd_offline(api: &mut HidApi, cmd: DeviceCmd) {
 /// tuning so the UI starts from what is actually on the device.
 fn hello(dev: &HidDevice, serial: String) {
     let version = query_version(dev).unwrap_or_else(|| "?".into());
-    Cx::post_action(DeviceMsg::Connected { version, serial });
+    events::post(DeviceMsg::Connected { version, serial });
     match read_keymap(dev) {
-        Ok(keymap) => Cx::post_action(keymap.into_msg()),
-        Err(e) => Cx::post_action(DeviceMsg::SyncDone {
+        Ok(keymap) => events::post(keymap.into_msg()),
+        Err(e) => events::post(DeviceMsg::SyncDone {
             ok: false,
             detail: format!("keymap read failed: {e}"),
         }),
@@ -282,6 +289,8 @@ fn session(api: &mut HidApi, rx: &mpsc::Receiver<DeviceCmd>, dev: &HidDevice) ->
                     joy_mode,
                     joy_mouse_speed,
                     led_brightness,
+                    led_key_pattern,
+                    led_ambient_pattern,
                 }) => {
                     let (ok, detail) = match sync_keymap(
                         dev,
@@ -290,11 +299,13 @@ fn session(api: &mut HidApi, rx: &mpsc::Receiver<DeviceCmd>, dev: &HidDevice) ->
                         joy_mode,
                         joy_mouse_speed,
                         led_brightness,
+                        led_key_pattern,
+                        led_ambient_pattern,
                     ) {
                         Ok(detail) => (true, detail),
                         Err(e) => (false, e),
                     };
-                    Cx::post_action(DeviceMsg::SyncDone { ok, detail });
+                    events::post(DeviceMsg::SyncDone { ok, detail });
                 }
                 Ok(DeviceCmd::SetLedBrightness { brightness }) => {
                     // Live preview while the slider drags: best-effort, no
@@ -304,8 +315,8 @@ fn session(api: &mut HidApi, rx: &mpsc::Receiver<DeviceCmd>, dev: &HidDevice) ->
                     let _ = command(dev, &[CMD_SET_LED, brightness], &mut reply, REPLY_TIMEOUT);
                 }
                 Ok(DeviceCmd::ReadKeymap) => match read_keymap(dev) {
-                    Ok(keymap) => Cx::post_action(keymap.into_msg()),
-                    Err(e) => Cx::post_action(DeviceMsg::SyncDone {
+                    Ok(keymap) => events::post(keymap.into_msg()),
+                    Err(e) => events::post(DeviceMsg::SyncDone {
                         ok: false,
                         detail: format!("keymap read failed: {e}"),
                     }),
@@ -313,13 +324,13 @@ fn session(api: &mut HidApi, rx: &mpsc::Receiver<DeviceCmd>, dev: &HidDevice) ->
                 Ok(DeviceCmd::FactoryReset) => {
                     match factory_reset(dev).and_then(|()| read_keymap(dev)) {
                         Ok(keymap) => {
-                            Cx::post_action(keymap.into_msg());
-                            Cx::post_action(DeviceMsg::SyncDone {
+                            events::post(keymap.into_msg());
+                            events::post(DeviceMsg::SyncDone {
                                 ok: true,
                                 detail: "factory defaults restored".into(),
                             });
                         }
-                        Err(e) => Cx::post_action(DeviceMsg::SyncDone {
+                        Err(e) => events::post(DeviceMsg::SyncDone {
                             ok: false,
                             detail: format!("factory reset: {e}"),
                         }),
@@ -402,7 +413,7 @@ fn expect_ack(n: usize, reply: &[u8; 32], what: &str) -> Result<(), String> {
 /// Decode an unsolicited event report and post it to the UI.
 fn post_if_event(buf: &[u8]) {
     if let Some(ev) = decode_event(buf) {
-        Cx::post_action(DeviceMsg::Event(ev));
+        events::post(DeviceMsg::Event(ev));
     }
 }
 
@@ -465,6 +476,8 @@ struct DeviceKeymap {
     joy_mode: JoyMode,
     joy_mouse_speed: u8,
     led_brightness: u8,
+    led_key_pattern: LedPattern,
+    led_ambient_pattern: LedPattern,
 }
 
 impl DeviceKeymap {
@@ -475,6 +488,8 @@ impl DeviceKeymap {
             joy_mode: self.joy_mode,
             joy_mouse_speed: self.joy_mouse_speed,
             led_brightness: self.led_brightness,
+            led_key_pattern: self.led_key_pattern,
+            led_ambient_pattern: self.led_ambient_pattern,
         }
     }
 }
@@ -517,12 +532,22 @@ fn read_keymap(dev: &HidDevice) -> Result<DeviceKeymap, String> {
         Ok(n) if n >= 2 => reply[1],
         _ => DEFAULT_LED_BRIGHTNESS,
     };
+    let (led_key_pattern, led_ambient_pattern) =
+        match command(dev, &[CMD_GET_LEDPATTERN], &mut reply, REPLY_TIMEOUT) {
+            Ok(n) if n >= 9 => (
+                LedPattern::from_wire([reply[1], reply[2], reply[3], reply[4]]),
+                LedPattern::from_wire([reply[5], reply[6], reply[7], reply[8]]),
+            ),
+            _ => (LedPattern::Rainbow, LedPattern::Rainbow),
+        };
     Ok(DeviceKeymap {
         slots,
         joy_threshold,
         joy_mode,
         joy_mouse_speed,
         led_brightness,
+        led_key_pattern,
+        led_ambient_pattern,
     })
 }
 
@@ -536,6 +561,8 @@ fn sync_keymap(
     joy_mode: JoyMode,
     joy_mouse_speed: u8,
     led_brightness: u8,
+    led_key_pattern: LedPattern,
+    led_ambient_pattern: LedPattern,
 ) -> Result<String, String> {
     for page in 0..KEYMAP_PAGES {
         let base = page as usize * PAGE_SLOTS;
@@ -572,6 +599,16 @@ fn sync_keymap(
     )
     .map(|n| expect_ack(n, &reply, "SET_LED").is_ok())
     .unwrap_or(false);
+    let kp = led_key_pattern.to_wire();
+    let up = led_ambient_pattern.to_wire();
+    let pattern_supported = command(
+        dev,
+        &[CMD_SET_LEDPATTERN, kp[0], kp[1], kp[2], kp[3], up[0], up[1], up[2], up[3]],
+        &mut reply,
+        REPLY_TIMEOUT,
+    )
+    .map(|n| expect_ack(n, &reply, "SET_LEDPATTERN").is_ok())
+    .unwrap_or(false);
     let n = command(
         dev,
         &[CMD_SAVE, b'S', b'A', b'V', b'E'],
@@ -579,10 +616,10 @@ fn sync_keymap(
         SAVE_TIMEOUT,
     )?;
     expect_ack(n, &reply, "SAVE")?;
-    Ok(if mode_supported && led_supported {
+    Ok(if mode_supported && led_supported && pattern_supported {
         "keymap written · saved to flash".to_string()
     } else {
-        "keymap saved · joystick mode and brightness need a firmware update".to_string()
+        "keymap saved · joystick/LED extras need a firmware update".to_string()
     })
 }
 
@@ -652,12 +689,12 @@ fn enter_dfu(dev: &HidDevice) -> Result<(), String> {
 fn enter_dfu_standalone(api: &mut HidApi) {
     match open_raw(api) {
         Some(dev) => match enter_dfu(&dev) {
-            Ok(()) => Cx::post_action(UpdateMsg::Log(
+            Ok(()) => events::post(UpdateMsg::Log(
                 "device rebooted into DFU mode (0483:df11)".into(),
             )),
-            Err(e) => Cx::post_action(UpdateMsg::Log(format!("enter DFU failed: {e}"))),
+            Err(e) => events::post(UpdateMsg::Log(format!("enter DFU failed: {e}"))),
         },
-        None => Cx::post_action(UpdateMsg::Log("device not found".into())),
+        None => events::post(UpdateMsg::Log("device not found".into())),
     }
 }
 
@@ -666,9 +703,9 @@ fn enter_dfu_standalone(api: &mut HidApi) {
 /// The whole update: sanity-check the image, drop the device into the ROM
 /// bootloader, flash over DFU, wait for the app to come back.
 fn run_update(api: &mut HidApi, image_path: &PathBuf, expected_version: Option<&str>) {
-    let phase = |s: &str| Cx::post_action(UpdateMsg::Phase(s.to_string()));
-    let log = |s: String| Cx::post_action(UpdateMsg::Log(s));
-    let fail = |s: String| Cx::post_action(UpdateMsg::Failed(s));
+    let phase = |s: &str| events::post(UpdateMsg::Phase(s.to_string()));
+    let log = |s: String| events::post(UpdateMsg::Log(s));
+    let fail = |s: String| events::post(UpdateMsg::Failed(s));
 
     // -- image sanity: a Cortex-M0 vector table for this exact chip --
     let image = match std::fs::read(image_path) {
@@ -754,8 +791,8 @@ fn run_update(api: &mut HidApi, image_path: &PathBuf, expected_version: Option<&
 
     // -- flash --
     if let Err(e) = dfuse::flash(dfu, &image, |p, frac| {
-        Cx::post_action(UpdateMsg::Phase(p.to_string()));
-        Cx::post_action(UpdateMsg::Progress(frac));
+        events::post(UpdateMsg::Phase(p.to_string()));
+        events::post(UpdateMsg::Progress(frac));
     }) {
         return fail(format!("DFU flashing failed: {e} — recovery: SWD on J2"));
     }
@@ -774,7 +811,7 @@ fn run_update(api: &mut HidApi, image_path: &PathBuf, expected_version: Option<&
                     ));
                 }
             }
-            Cx::post_action(UpdateMsg::Done { version });
+            events::post(UpdateMsg::Done { version });
             // The handle is dropped here; the worker's reconnect cycle will
             // re-open the pad and re-post Connected + Keymap.
             return;

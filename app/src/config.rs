@@ -626,6 +626,40 @@ fn default_led_brightness() -> u8 {
     DEFAULT_LED_BRIGHTNESS
 }
 
+/// One LED chain's idle pattern. `White` is presentation sugar over a
+/// solid white — kept distinct so the picker can say what it means.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum LedPattern {
+    #[default]
+    Rainbow,
+    White,
+    Solid {
+        r: u8,
+        g: u8,
+        b: u8,
+    },
+}
+
+impl LedPattern {
+    /// Wire form: [mode, r, g, b] with mode 0 rainbow / 1 solid.
+    pub fn to_wire(self) -> [u8; 4] {
+        match self {
+            LedPattern::Rainbow => [0, 0, 0, 0],
+            LedPattern::White => [1, 255, 255, 255],
+            LedPattern::Solid { r, g, b } => [1, r, g, b],
+        }
+    }
+
+    pub fn from_wire(bytes: [u8; 4]) -> Self {
+        match bytes {
+            [1, 255, 255, 255] => LedPattern::White,
+            [1, r, g, b] => LedPattern::Solid { r, g, b },
+            _ => LedPattern::Rainbow,
+        }
+    }
+}
+
 /// UI language: follow the OS or pin one of the supported languages.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "snake_case")]
@@ -636,6 +670,16 @@ pub enum LanguageSetting {
     ZhHans,
     ZhHant,
     Ja,
+}
+
+/// App appearance: follow the operating system or pin a palette explicitly.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeSetting {
+    #[default]
+    System,
+    Light,
+    Dark,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -651,6 +695,14 @@ pub struct AppConfig {
     pub led_brightness: u8,
     #[serde(default)]
     pub language: LanguageSetting,
+    #[serde(default)]
+    pub theme: ThemeSetting,
+    /// Idle pattern of the per-key backlight (device-level, like brightness).
+    #[serde(default)]
+    pub led_key_pattern: LedPattern,
+    /// Idle pattern of the underglow ring.
+    #[serde(default)]
+    pub led_ambient_pattern: LedPattern,
 }
 
 impl Default for AppConfig {
@@ -662,6 +714,9 @@ impl Default for AppConfig {
             show_menubar: true,
             led_brightness: DEFAULT_LED_BRIGHTNESS,
             language: LanguageSetting::Auto,
+            theme: ThemeSetting::System,
+            led_key_pattern: LedPattern::Rainbow,
+            led_ambient_pattern: LedPattern::Rainbow,
         }
     }
 }
@@ -708,8 +763,8 @@ fn unbound_input() -> InputConfig {
     }
 }
 
-/// The out-of-the-box profile, mirroring the printed Codex keycaps. Icons are
-/// Lucide glyph names (see lucide.rs).
+/// The out-of-the-box profile, mirroring the printed Codex keycaps. Bare icon
+/// names are Lucide glyphs; Simple Icons use the `simple:<slug>` namespace.
 pub fn default_codex_profile() -> Profile {
     // Physical keys p0..p12, top-left to bottom-right. p10 and p11 sit under
     // the shared 2U MIC keycap but are separate switches, so both get MIC.
@@ -924,6 +979,9 @@ fn migrate_legacy(legacy: LegacyConfig) -> AppConfig {
         show_menubar: true,
         led_brightness: DEFAULT_LED_BRIGHTNESS,
         language: LanguageSetting::Auto,
+        theme: ThemeSetting::System,
+        led_key_pattern: LedPattern::Rainbow,
+        led_ambient_pattern: LedPattern::Rainbow,
     }
 }
 
@@ -1427,11 +1485,31 @@ mod tests {
         assert_eq!(JoyMode::from_wire(7), JoyMode::Keys);
         assert_eq!(JoyMode::Mouse.to_wire(), 1);
 
-        // A pre-brightness config file has no led_brightness field.
+        // Older config files have neither led_brightness nor theme fields.
         let mut json = serde_json::to_value(AppConfig::default()).unwrap();
         json.as_object_mut().unwrap().remove("led_brightness");
+        json.as_object_mut().unwrap().remove("theme");
         let parsed: AppConfig = serde_json::from_value(json).unwrap();
         assert_eq!(parsed.led_brightness, DEFAULT_LED_BRIGHTNESS);
+        assert_eq!(parsed.theme, ThemeSetting::System);
+    }
+
+    #[test]
+    fn theme_setting_uses_stable_config_names() {
+        for (setting, name) in [
+            (ThemeSetting::System, "system"),
+            (ThemeSetting::Light, "light"),
+            (ThemeSetting::Dark, "dark"),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&setting).unwrap(),
+                format!("\"{name}\"")
+            );
+            assert_eq!(
+                serde_json::from_str::<ThemeSetting>(&format!("\"{name}\"")).unwrap(),
+                setting
+            );
+        }
     }
 
     #[test]
@@ -1484,6 +1562,7 @@ mod tests {
         // Emitted codes come from the new defaults, not the legacy file.
         assert_eq!(inputs[0].emitted.code, 0x68);
         assert!(cfg.launch_at_login && cfg.show_menubar);
+        assert_eq!(cfg.theme, ThemeSetting::System);
     }
 
     #[test]
@@ -1506,6 +1585,9 @@ mod tests {
             show_menubar: false,
             led_brightness: DEFAULT_LED_BRIGHTNESS,
             language: LanguageSetting::Auto,
+            theme: ThemeSetting::System,
+            led_key_pattern: LedPattern::Rainbow,
+            led_ambient_pattern: LedPattern::Rainbow,
         };
         sanitize(&mut cfg);
         assert_eq!(cfg.active_profile, 0);
@@ -1594,6 +1676,7 @@ mod tests {
         let text = serde_json::to_string_pretty(&cfg).unwrap();
         let back = parse_any(&text).expect("new schema roundtrips");
         assert_eq!(back.profiles, cfg.profiles);
+        assert_eq!(back.theme, cfg.theme);
 
         let mut into = AppConfig::default();
         let name = unique_name(&into.profiles, "Codex");
@@ -1603,5 +1686,18 @@ mod tests {
             ..default_codex_profile()
         });
         assert_eq!(unique_name(&into.profiles, "Codex"), "Codex (imported 2)");
+    }
+
+    #[test]
+    fn simple_icon_namespace_roundtrips_without_changing_device_slots() {
+        let mut cfg = AppConfig::default();
+        cfg.profiles[0].inputs[0].icon = "simple:github".into();
+        let device_slots = cfg.profiles[0].slots();
+
+        let text = serde_json::to_string_pretty(&cfg).expect("serialize config");
+        let parsed = parse_any(&text).expect("parse config");
+
+        assert_eq!(parsed.profiles[0].inputs[0].icon, "simple:github");
+        assert_eq!(parsed.profiles[0].slots(), device_slots);
     }
 }

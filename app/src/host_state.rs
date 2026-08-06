@@ -1,0 +1,854 @@
+//! Framework-neutral runtime state for the native host application.
+//!
+//! The GPUI layer owns one `HostState`, renders its public model fields, and
+//! feeds it `AppEvent`s from the global event receiver. Background services
+//! remain responsible for HID, release downloads, global hotkeys, and the
+//! native menu bar; this module is the single main-thread reducer for their
+//! results.
+
+use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::sync::mpsc::Sender;
+use std::time::Duration;
+
+use crate::actions;
+use crate::config::{self, Action, AppConfig, Profile, SLOT_COUNT};
+use crate::config::LedPattern;
+use crate::device::{DeviceCmd, DeviceMsg, PadEvent, UpdateMsg};
+use crate::events::AppEvent;
+use crate::intercept::Intercept;
+use crate::menubar::{Menubar, MenubarMsg};
+use crate::release::{DownloadKind, ReleaseCatalog, ReleaseMsg};
+
+#[cfg(not(test))]
+use crate::{device, intercept, release};
+
+/// Physical cells rendered by the device map: 13 keys and three controls.
+pub const CELL_COUNT: usize = 16;
+pub const CELL_ENCODER: usize = 13;
+pub const CELL_JOYSTICK: usize = 14;
+pub const CELL_TOUCH: usize = 15;
+
+/// Encoder turns and touch taps have no corresponding release report.
+pub const MOMENTARY_RELEASE_DELAY: Duration = Duration::from_millis(250);
+
+const LOG_LIMIT: usize = 8;
+
+/// Side effects which must be performed by the owning UI/event loop.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HostEffect {
+    OpenSettings,
+    Quit,
+    /// Ask the OS to open a downloaded installer or other path.
+    OpenPath(PathBuf),
+    /// Clear a momentary device-map flash after `delay`.
+    ReleaseCellAfter {
+        cell: usize,
+        delay: Duration,
+    },
+}
+
+/// Application model and ownership boundary for all host-side services.
+pub struct HostState {
+    pub config: AppConfig,
+    pub selected_slot: Option<usize>,
+
+    pub device_tx: Option<Sender<DeviceCmd>>,
+    pub connected: bool,
+    /// Last connected `(firmware version, serial)` pair.
+    pub last_conn: Option<(String, String)>,
+    pub pressed_cells: [bool; CELL_COUNT],
+
+    pub intercept: Option<Intercept>,
+    pub menubar: Option<Menubar>,
+
+    pub release: Option<ReleaseCatalog>,
+    pub updating: bool,
+    pub update_phase: Option<String>,
+    pub update_progress: f64,
+    pub update_error: Option<String>,
+    pub firmware_image: Option<PathBuf>,
+    pub firmware_expected_version: Option<String>,
+
+    pub app_downloading: bool,
+    pub app_download_progress: f64,
+    pub app_download: Option<PathBuf>,
+    pub firmware_downloading: bool,
+    pub firmware_download_progress: f64,
+    pub install_after_download: bool,
+    pub release_error: Option<String>,
+    pub logs: VecDeque<String>,
+    pub app_banner_dismissed: bool,
+    pub firmware_banner_dismissed: bool,
+
+    persist_to_disk: bool,
+}
+
+impl HostState {
+    /// Build the production runtime and start its long-lived services.
+    ///
+    /// This must be called on the UI thread: both global-hotkey and tray-icon
+    /// create platform objects with main-thread requirements on macOS.
+    pub fn new() -> Self {
+        #[cfg(test)]
+        {
+            // Unit tests must be hermetic: no USB scan, network request,
+            // global shortcut registration, tray, or config-file write.
+            Self::detached(AppConfig::default())
+        }
+
+        #[cfg(not(test))]
+        {
+            let mut state = Self::detached(config::load());
+            state.persist_to_disk = true;
+
+            let mut interception = Intercept::new();
+            interception.apply(state.active_profile());
+            state.intercept = Some(interception);
+            intercept::spawn_listener();
+
+            let mut menubar = Menubar::new();
+            menubar.set_visible(state.config.show_menubar);
+            state.menubar = Some(menubar);
+
+            state.device_tx = Some(device::spawn_worker());
+            state.apply_active_profile();
+            release::spawn_catalog_check();
+            state
+        }
+    }
+
+    /// Construct a model without starting services or writing configuration.
+    ///
+    /// Useful for previews and reducer tests. Callers may inject a device
+    /// command sender if they want to observe commands without real hardware.
+    pub fn detached(mut config: AppConfig) -> Self {
+        if config.profiles.is_empty() {
+            config.profiles.push(config::default_codex_profile());
+        }
+        config.active_profile = config.active_profile.min(config.profiles.len() - 1);
+
+        Self {
+            config,
+            selected_slot: Some(0),
+            device_tx: None,
+            connected: false,
+            last_conn: None,
+            pressed_cells: [false; CELL_COUNT],
+            intercept: None,
+            menubar: None,
+            release: None,
+            updating: false,
+            update_phase: None,
+            update_progress: 0.0,
+            update_error: None,
+            firmware_image: None,
+            firmware_expected_version: None,
+            app_downloading: false,
+            app_download_progress: 0.0,
+            app_download: None,
+            firmware_downloading: false,
+            firmware_download_progress: 0.0,
+            install_after_download: false,
+            release_error: None,
+            logs: VecDeque::new(),
+            app_banner_dismissed: false,
+            firmware_banner_dismissed: false,
+            persist_to_disk: false,
+        }
+    }
+
+    pub fn active_profile(&self) -> &Profile {
+        &self.config.profiles[self.config.active_profile]
+    }
+
+    pub fn active_profile_mut(&mut self) -> &mut Profile {
+        &mut self.config.profiles[self.config.active_profile]
+    }
+
+    /// Save configuration and re-derive platform integrations from the
+    /// active profile. Detached states intentionally skip the disk write.
+    pub fn persist(&mut self) -> Result<(), String> {
+        let result = if self.persist_to_disk {
+            config::save(&self.config)
+        } else {
+            Ok(())
+        };
+        if let Err(error) = &result {
+            self.push_log(format!("config save failed: {error}"));
+        }
+        self.apply_active_profile();
+        result
+    }
+
+    /// Re-register active-profile hotkeys and refresh the native menu.
+    pub fn apply_active_profile(&mut self) {
+        let profile = self.active_profile().clone();
+        if let Some(interception) = &mut self.intercept {
+            interception.apply(&profile);
+        }
+        self.refresh_menubar();
+    }
+
+    /// Write the active profile and device-wide tuning to pad RAM + flash.
+    /// Returns false if the service is unavailable or its command queue shut
+    /// down before accepting the request.
+    pub fn sync_device(&self) -> bool {
+        let Some(tx) = &self.device_tx else {
+            return false;
+        };
+        let profile = self.active_profile();
+        tx.send(DeviceCmd::SyncKeymap {
+            slots: profile.slots(),
+            joy_threshold: profile.analog.joy_threshold,
+            joy_mode: profile.analog.joy_mode,
+            joy_mouse_speed: profile.analog.joy_mouse_speed,
+            led_brightness: self.config.led_brightness,
+            led_key_pattern: self.config.led_key_pattern,
+            led_ambient_pattern: self.config.led_ambient_pattern,
+        })
+        .is_ok()
+    }
+
+    pub fn select_slot(&mut self, slot: usize) -> bool {
+        if slot >= SLOT_COUNT {
+            return false;
+        }
+        self.selected_slot = Some(slot);
+        true
+    }
+
+    /// Activate a profile, persist it, update host interception/menu state,
+    /// and make the pad follow the switch.
+    pub fn switch_profile(&mut self, index: usize) -> bool {
+        if index >= self.config.profiles.len() {
+            return false;
+        }
+        if self.config.active_profile == index {
+            return true;
+        }
+        self.config.active_profile = index;
+        let _ = self.persist();
+        self.sync_device();
+        true
+    }
+
+    pub fn release_cell(&mut self, cell: usize) {
+        if let Some(pressed) = self.pressed_cells.get_mut(cell) {
+            *pressed = false;
+        }
+    }
+
+    /// Begin a firmware update through the device worker. The same worker
+    /// accepts this while the normal HID device is offline so DFU recovery
+    /// can resume.
+    pub fn start_firmware_update(
+        &mut self,
+        image: PathBuf,
+        expected_version: Option<String>,
+    ) -> bool {
+        self.firmware_image = Some(image.clone());
+        self.firmware_expected_version = expected_version.clone();
+        self.install_after_download = false;
+        self.update_progress = 0.0;
+        self.update_error = None;
+        self.update_phase = Some("Starting…".into());
+
+        let Some(tx) = &self.device_tx else {
+            self.update_failed("device service is unavailable".into());
+            return false;
+        };
+        if tx
+            .send(DeviceCmd::StartUpdate {
+                image,
+                expected_version,
+            })
+            .is_err()
+        {
+            self.update_failed("device service stopped before the update began".into());
+            return false;
+        }
+        self.updating = true;
+        true
+    }
+
+    /// Reduce one service event and return effects for the UI/event loop.
+    pub fn handle_event(&mut self, event: AppEvent) -> Vec<HostEffect> {
+        let mut effects = Vec::new();
+        match event {
+            AppEvent::Device(message) => self.handle_device(message, &mut effects),
+            AppEvent::Update(message) => self.handle_update(message),
+            AppEvent::Release(message) => self.handle_release(message, &mut effects),
+            AppEvent::Hotkey(message) => self.handle_hotkey(message.hotkey_id, &mut effects),
+            AppEvent::Menubar(message) => self.handle_menubar(message, &mut effects),
+            AppEvent::OpenSettings => push_open_settings(&mut effects),
+        }
+        effects
+    }
+
+    pub fn push_log(&mut self, line: impl Into<String>) {
+        self.logs.push_back(line.into());
+        while self.logs.len() > LOG_LIMIT {
+            self.logs.pop_front();
+        }
+    }
+
+    fn refresh_menubar(&mut self) {
+        let Some(menubar) = &mut self.menubar else {
+            return;
+        };
+        let names: Vec<String> = self
+            .config
+            .profiles
+            .iter()
+            .map(|profile| profile.name.clone())
+            .collect();
+        let (version, serial) = self
+            .last_conn
+            .clone()
+            .unwrap_or_else(|| ("?".into(), "?".into()));
+        menubar.update(
+            self.connected,
+            &version,
+            &serial,
+            &names,
+            self.config.active_profile,
+        );
+    }
+
+    fn handle_device(&mut self, message: DeviceMsg, effects: &mut Vec<HostEffect>) {
+        match message {
+            DeviceMsg::Connected { version, serial } => {
+                self.connected = true;
+                self.last_conn = Some((version, serial));
+                self.firmware_banner_dismissed = false;
+                self.refresh_menubar();
+            }
+            DeviceMsg::Disconnected => {
+                self.connected = false;
+                self.last_conn = None;
+                self.pressed_cells.fill(false);
+                self.refresh_menubar();
+            }
+            DeviceMsg::Event(event) => {
+                if let Some(signal) = cell_signal(event) {
+                    self.pressed_cells[signal.cell] = signal.pressed;
+                    if signal.momentary && signal.pressed {
+                        effects.push(HostEffect::ReleaseCellAfter {
+                            cell: signal.cell,
+                            delay: MOMENTARY_RELEASE_DELAY,
+                        });
+                    }
+                }
+            }
+            DeviceMsg::Keymap {
+                slots,
+                joy_threshold,
+                joy_mode,
+                joy_mouse_speed,
+                led_brightness,
+                led_key_pattern,
+                led_ambient_pattern,
+            } => {
+                let profile = self.active_profile();
+                let differs = slots != profile.slots()
+                    || joy_threshold != profile.analog.joy_threshold
+                    || joy_mode != profile.analog.joy_mode
+                    || joy_mouse_speed != profile.analog.joy_mouse_speed
+                    || led_brightness != self.config.led_brightness
+                    || led_key_pattern != self.config.led_key_pattern
+                    || led_ambient_pattern != self.config.led_ambient_pattern;
+                if differs {
+                    self.push_log("pad keymap differs from the active profile — syncing");
+                    self.sync_device();
+                }
+            }
+            DeviceMsg::SyncDone { ok, detail } => {
+                if ok {
+                    self.push_log(format!("pad: {detail}"));
+                } else {
+                    self.push_log(format!("pad sync failed: {detail}"));
+                }
+            }
+        }
+    }
+
+    fn handle_update(&mut self, message: UpdateMsg) {
+        match message {
+            UpdateMsg::Phase(phase) => self.update_phase = Some(phase),
+            UpdateMsg::Log(line) => self.push_log(line),
+            UpdateMsg::Progress(fraction) => {
+                self.update_progress = normalized_fraction(fraction);
+            }
+            UpdateMsg::Done { version } => {
+                self.updating = false;
+                self.update_progress = 1.0;
+                self.update_error = None;
+                self.update_phase = Some(format!("Up to date — firmware {version}"));
+                self.push_log(format!("update complete — firmware {version}"));
+            }
+            UpdateMsg::Failed(error) => self.update_failed(error),
+        }
+    }
+
+    fn update_failed(&mut self, error: String) {
+        self.updating = false;
+        self.update_error = Some(error.clone());
+        self.update_phase = Some(format!("Failed — {error}"));
+        self.push_log(format!("failed: {error}"));
+    }
+
+    fn handle_release(&mut self, message: ReleaseMsg, effects: &mut Vec<HostEffect>) {
+        match message {
+            ReleaseMsg::Catalog(catalog) => {
+                let app_changed = self
+                    .release
+                    .as_ref()
+                    .map(|current| current.app.version != catalog.app.version)
+                    .unwrap_or(true);
+                let firmware_changed = self
+                    .release
+                    .as_ref()
+                    .map(|current| current.firmware.version != catalog.firmware.version)
+                    .unwrap_or(true);
+
+                if app_changed {
+                    self.app_banner_dismissed = false;
+                    self.app_downloading = false;
+                    self.app_download_progress = 0.0;
+                    self.app_download = None;
+                }
+                if firmware_changed {
+                    self.firmware_banner_dismissed = false;
+                    self.firmware_downloading = false;
+                    self.firmware_download_progress = 0.0;
+                    self.install_after_download = false;
+                    if !self.updating
+                        && self
+                            .firmware_expected_version
+                            .as_deref()
+                            .is_some_and(|version| version != catalog.firmware.version)
+                    {
+                        self.firmware_image = None;
+                        self.firmware_expected_version = None;
+                    }
+                }
+                self.release = Some(catalog);
+                self.release_error = None;
+            }
+            ReleaseMsg::CatalogUnavailable(error) => {
+                self.release_error = Some(error.clone());
+                self.push_log(format!("release check failed: {error}"));
+            }
+            ReleaseMsg::DownloadProgress {
+                kind,
+                version,
+                fraction,
+            } => {
+                if !self.is_current_download(kind, &version) {
+                    return;
+                }
+                let fraction = normalized_fraction(fraction);
+                match kind {
+                    DownloadKind::App => self.app_download_progress = fraction,
+                    DownloadKind::Firmware => self.firmware_download_progress = fraction,
+                }
+            }
+            ReleaseMsg::DownloadReady {
+                kind,
+                version,
+                path,
+            } => {
+                if !self.is_current_download(kind, &version) {
+                    return;
+                }
+                match kind {
+                    DownloadKind::App => {
+                        self.app_downloading = false;
+                        self.app_download_progress = 1.0;
+                        self.app_download = Some(path.clone());
+                        effects.push(HostEffect::OpenPath(path));
+                    }
+                    DownloadKind::Firmware => {
+                        self.firmware_downloading = false;
+                        self.firmware_download_progress = 1.0;
+                        self.firmware_image = Some(path.clone());
+                        self.firmware_expected_version = Some(version.clone());
+                        if self.install_after_download {
+                            self.start_firmware_update(path, Some(version));
+                        }
+                    }
+                }
+            }
+            ReleaseMsg::DownloadFailed {
+                kind,
+                version,
+                error,
+            } => {
+                if !self.is_current_download(kind, &version) {
+                    return;
+                }
+                self.release_error = Some(error.clone());
+                match kind {
+                    DownloadKind::App => self.app_downloading = false,
+                    DownloadKind::Firmware => {
+                        self.firmware_downloading = false;
+                        self.install_after_download = false;
+                        self.update_error = Some(error.clone());
+                        self.update_phase = Some(format!("Download failed — {error}"));
+                        self.push_log(format!("firmware download failed: {error}"));
+                    }
+                }
+            }
+        }
+    }
+
+    fn is_current_download(&self, kind: DownloadKind, version: &str) -> bool {
+        self.release.as_ref().is_some_and(|catalog| match kind {
+            DownloadKind::App => catalog.app.version == version,
+            DownloadKind::Firmware => catalog.firmware.version == version,
+        })
+    }
+
+    fn handle_hotkey(&mut self, hotkey_id: u32, effects: &mut Vec<HostEffect>) {
+        let slots: Vec<usize> = self
+            .intercept
+            .as_ref()
+            .map(|interception| interception.slots_for_id(hotkey_id).collect())
+            .unwrap_or_default();
+
+        for slot in slots {
+            let Some(input) = self.active_profile().inputs.get(slot).cloned() else {
+                continue;
+            };
+            // Synthesized chords re-enter the global grab. Consuming the
+            // guard prevents a host action from recursively firing itself.
+            if actions::was_just_synthesized(input.emitted.mods, input.emitted.code) {
+                continue;
+            }
+            if matches!(input.action, Action::AppSettings) {
+                push_open_settings(effects);
+            } else {
+                actions::execute(&input.action);
+            }
+        }
+    }
+
+    fn handle_menubar(&mut self, message: MenubarMsg, effects: &mut Vec<HostEffect>) {
+        if let Some(index) = message
+            .id
+            .strip_prefix("profile:")
+            .and_then(|index| index.parse().ok())
+        {
+            self.switch_profile(index);
+        } else if message.id == "open" {
+            push_open_settings(effects);
+        } else if message.id == "quit" {
+            let _ = self.persist();
+            effects.push(HostEffect::Quit);
+        }
+    }
+}
+
+impl Default for HostState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CellSignal {
+    cell: usize,
+    pressed: bool,
+    momentary: bool,
+}
+
+fn cell_signal(event: PadEvent) -> Option<CellSignal> {
+    let signal = match event {
+        PadEvent::Key { index, pressed } if index < 13 => CellSignal {
+            cell: index as usize,
+            pressed,
+            momentary: false,
+        },
+        PadEvent::Key { .. } => return None,
+        PadEvent::Encoder { .. } => CellSignal {
+            cell: CELL_ENCODER,
+            pressed: true,
+            momentary: true,
+        },
+        PadEvent::EncoderButton { pressed } => CellSignal {
+            cell: CELL_ENCODER,
+            pressed,
+            momentary: false,
+        },
+        PadEvent::Joystick { active, .. } => CellSignal {
+            cell: CELL_JOYSTICK,
+            pressed: active,
+            momentary: false,
+        },
+        PadEvent::Touch => CellSignal {
+            cell: CELL_TOUCH,
+            pressed: true,
+            momentary: true,
+        },
+    };
+    Some(signal)
+}
+
+fn normalized_fraction(fraction: f64) -> f64 {
+    if fraction.is_finite() {
+        fraction.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+fn push_open_settings(effects: &mut Vec<HostEffect>) {
+    if !effects.contains(&HostEffect::OpenSettings) {
+        effects.push(HostEffect::OpenSettings);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use super::*;
+    use crate::config::{Slot, SlotKind};
+    use crate::release::{AppRelease, FirmwareRelease, MacOsRelease, ReleaseAsset, ReleaseCatalog};
+
+    fn state() -> HostState {
+        HostState::detached(AppConfig::default())
+    }
+
+    fn catalog(app_version: &str, firmware_version: &str) -> ReleaseCatalog {
+        let asset = |name: &str| ReleaseAsset {
+            name: name.into(),
+            url: format!("https://example.com/{name}"),
+            sha256: "0".repeat(64),
+            size: 1024,
+        };
+        ReleaseCatalog {
+            schema: 1,
+            product: "openmicrokbd".into(),
+            release_url: "https://example.com/release".into(),
+            app: AppRelease {
+                version: app_version.into(),
+                macos: MacOsRelease {
+                    aarch64: asset("arm.dmg"),
+                    x86_64: asset("intel.dmg"),
+                },
+            },
+            firmware: FirmwareRelease {
+                version: firmware_version.into(),
+                board: "openmicro-stm32f072cb".into(),
+                protocol: 2,
+                asset: asset("firmware.bin"),
+            },
+        }
+    }
+
+    fn device_event(event: PadEvent) -> AppEvent {
+        AppEvent::Device(DeviceMsg::Event(event))
+    }
+
+    #[test]
+    fn device_events_map_to_the_exact_sixteen_physical_cells() {
+        let mut host = state();
+
+        assert!(host
+            .handle_event(device_event(PadEvent::Key {
+                index: 12,
+                pressed: true,
+            }))
+            .is_empty());
+        assert!(host.pressed_cells[12]);
+
+        let effects = host.handle_event(device_event(PadEvent::Encoder { cw: true }));
+        assert!(host.pressed_cells[CELL_ENCODER]);
+        assert_eq!(
+            effects,
+            vec![HostEffect::ReleaseCellAfter {
+                cell: CELL_ENCODER,
+                delay: MOMENTARY_RELEASE_DELAY,
+            }]
+        );
+
+        host.handle_event(device_event(PadEvent::EncoderButton { pressed: false }));
+        assert!(!host.pressed_cells[CELL_ENCODER]);
+
+        host.handle_event(device_event(PadEvent::Joystick {
+            dir: 3,
+            active: true,
+        }));
+        assert!(host.pressed_cells[CELL_JOYSTICK]);
+
+        let effects = host.handle_event(device_event(PadEvent::Touch));
+        assert!(host.pressed_cells[CELL_TOUCH]);
+        assert_eq!(
+            effects,
+            vec![HostEffect::ReleaseCellAfter {
+                cell: CELL_TOUCH,
+                delay: MOMENTARY_RELEASE_DELAY,
+            }]
+        );
+
+        host.release_cell(CELL_TOUCH);
+        assert!(!host.pressed_cells[CELL_TOUCH]);
+
+        let before = host.pressed_cells;
+        host.handle_event(device_event(PadEvent::Key {
+            index: 13,
+            pressed: true,
+        }));
+        assert_eq!(host.pressed_cells, before);
+    }
+
+    #[test]
+    fn differing_device_keymap_resyncs_the_visible_profile() {
+        let mut host = state();
+        let (tx, rx) = mpsc::channel();
+        host.device_tx = Some(tx);
+        let profile = host.active_profile().clone();
+
+        host.handle_event(AppEvent::Device(DeviceMsg::Keymap {
+            slots: profile.slots(),
+            joy_threshold: profile.analog.joy_threshold,
+            joy_mode: profile.analog.joy_mode,
+            joy_mouse_speed: profile.analog.joy_mouse_speed,
+            led_brightness: host.config.led_brightness,
+            led_key_pattern: host.config.led_key_pattern,
+            led_ambient_pattern: host.config.led_ambient_pattern,
+        }));
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+
+        let mut changed = profile.slots();
+        changed[0] = Slot {
+            kind: SlotKind::None,
+            mods: 0,
+            code: 0,
+        };
+        host.handle_event(AppEvent::Device(DeviceMsg::Keymap {
+            slots: changed,
+            joy_threshold: profile.analog.joy_threshold,
+            joy_mode: profile.analog.joy_mode,
+            joy_mouse_speed: profile.analog.joy_mouse_speed,
+            led_brightness: host.config.led_brightness,
+            led_key_pattern: host.config.led_key_pattern,
+            led_ambient_pattern: host.config.led_ambient_pattern,
+        }));
+
+        match rx.try_recv().expect("profile sync command") {
+            DeviceCmd::SyncKeymap { slots, .. } => assert_eq!(slots, profile.slots()),
+            _ => panic!("unexpected device command"),
+        }
+        assert!(host.logs.back().unwrap().contains("differs"));
+    }
+
+    #[test]
+    fn release_reducer_ignores_stale_versions_and_clamps_progress() {
+        let mut host = state();
+        host.handle_event(AppEvent::Release(ReleaseMsg::Catalog(catalog(
+            "1.2.3", "4.5.6",
+        ))));
+
+        host.handle_event(AppEvent::Release(ReleaseMsg::DownloadProgress {
+            kind: DownloadKind::App,
+            version: "0.9.0".into(),
+            fraction: 0.75,
+        }));
+        assert_eq!(host.app_download_progress, 0.0);
+
+        host.handle_event(AppEvent::Release(ReleaseMsg::DownloadProgress {
+            kind: DownloadKind::App,
+            version: "1.2.3".into(),
+            fraction: 3.0,
+        }));
+        assert_eq!(host.app_download_progress, 1.0);
+
+        let path = PathBuf::from("OpenMicro.dmg");
+        let effects = host.handle_event(AppEvent::Release(ReleaseMsg::DownloadReady {
+            kind: DownloadKind::App,
+            version: "1.2.3".into(),
+            path: path.clone(),
+        }));
+        assert_eq!(host.app_download, Some(path.clone()));
+        assert_eq!(effects, vec![HostEffect::OpenPath(path)]);
+    }
+
+    #[test]
+    fn downloaded_firmware_can_flow_directly_into_the_update_worker() {
+        let mut host = state();
+        let (tx, rx) = mpsc::channel();
+        host.device_tx = Some(tx);
+        host.install_after_download = true;
+        host.handle_event(AppEvent::Release(ReleaseMsg::Catalog(catalog(
+            "1.2.3", "4.5.6",
+        ))));
+        // A catalog refresh deliberately clears an old install intent; arm
+        // it after accepting the current release, as the UI download action
+        // does.
+        host.install_after_download = true;
+
+        let path = PathBuf::from("firmware.bin");
+        host.handle_event(AppEvent::Release(ReleaseMsg::DownloadReady {
+            kind: DownloadKind::Firmware,
+            version: "4.5.6".into(),
+            path: path.clone(),
+        }));
+
+        match rx.try_recv().expect("firmware update command") {
+            DeviceCmd::StartUpdate {
+                image,
+                expected_version,
+            } => {
+                assert_eq!(image, path);
+                assert_eq!(expected_version.as_deref(), Some("4.5.6"));
+            }
+            _ => panic!("unexpected device command"),
+        }
+        assert!(host.updating);
+        assert_eq!(host.update_phase.as_deref(), Some("Starting…"));
+
+        host.handle_event(AppEvent::Update(UpdateMsg::Progress(0.6)));
+        assert_eq!(host.update_progress, 0.6);
+        host.handle_event(AppEvent::Update(UpdateMsg::Done {
+            version: "4.5.6".into(),
+        }));
+        assert!(!host.updating);
+        assert_eq!(host.update_progress, 1.0);
+        assert!(host
+            .logs
+            .back()
+            .is_some_and(|line| line.contains("update complete")));
+    }
+
+    #[test]
+    fn tray_profile_and_quit_commands_are_reduced_without_process_exit() {
+        let mut host = state();
+        let mut second = config::default_codex_profile();
+        second.name = "Second".into();
+        host.config.profiles.push(second);
+
+        assert!(host
+            .handle_event(AppEvent::Menubar(MenubarMsg {
+                id: "profile:1".into(),
+            }))
+            .is_empty());
+        assert_eq!(host.config.active_profile, 1);
+
+        assert_eq!(
+            host.handle_event(AppEvent::Menubar(MenubarMsg { id: "quit".into() })),
+            vec![HostEffect::Quit]
+        );
+    }
+
+    #[test]
+    fn fractions_reject_non_finite_values() {
+        assert_eq!(normalized_fraction(f64::NAN), 0.0);
+        assert_eq!(normalized_fraction(f64::INFINITY), 0.0);
+        assert_eq!(normalized_fraction(-0.2), 0.0);
+        assert_eq!(normalized_fraction(0.4), 0.4);
+        assert_eq!(normalized_fraction(1.2), 1.0);
+    }
+}
