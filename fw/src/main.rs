@@ -499,7 +499,10 @@ async fn main(spawner: Spawner) {
     let mut usb_config = embassy_usb::Config::new(0x1209, 0x0001);
     usb_config.manufacturer = Some("conol");
     usb_config.product = Some("OpenMicro");
-    usb_config.serial_number = Some("0001");
+    // Every unit reports its own serial: the MCU's factory-programmed
+    // 96-bit unique ID, hex-encoded. Distinguishes pads when several are
+    // plugged in, and gives support/logs a stable per-unit identity.
+    usb_config.serial_number = Some(embassy_stm32::uid::uid_hex());
     usb_config.device_release = version_bcd(FW_VERSION);
 
     static CONFIG_DESC: StaticCell<[u8; 256]> = StaticCell::new();

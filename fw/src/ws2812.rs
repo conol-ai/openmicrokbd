@@ -19,12 +19,6 @@ use embassy_stm32::gpio::OutputOpenDrain;
 pub type LedPin<'d> = Output<'d>;
 
 
-#[cfg(feature = "proto")]
-pub use write as write_key_alias;
-#[cfg(feature = "proto")]
-pub fn write_key(pin: &mut KeyLedPin<'_>, pixels: &[Grb]) {
-    write(pin, pixels)
-}
 
 /// One 8-bit-per-channel colour, kept in GRB wire order.
 #[derive(Clone, Copy, Default)]
