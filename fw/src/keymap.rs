@@ -145,12 +145,34 @@ pub const DEFAULT_JOY_MOUSE_SPEED: u8 = 5;
 /// 0..=255 dims both LED chains; 255 = the hard power-budget cap.
 pub const DEFAULT_LED_BRIGHTNESS: u8 = 255;
 
+/// LED pattern modes on the wire (and in flash), per chain.
+pub const LED_PATTERN_RAINBOW: u8 = 0;
+pub const LED_PATTERN_SOLID: u8 = 1;
+
+/// One chain's pattern: rainbow animation or a solid colour.
+#[derive(Clone, Copy)]
+pub struct LedPattern {
+    pub mode: u8,
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+pub const DEFAULT_LED_PATTERN: LedPattern = LedPattern {
+    mode: LED_PATTERN_RAINBOW,
+    r: 0,
+    g: 0,
+    b: 0,
+};
+
 pub struct KeymapState {
     pub slots: [Slot; SLOT_COUNT],
     pub joy_threshold: u16,
     pub joy_mode: u8,
     pub joy_mouse_speed: u8,
     pub led_brightness: u8,
+    pub key_pattern: LedPattern,
+    pub ug_pattern: LedPattern,
 }
 
 /// The live keymap. All tasks run in thread mode (no ISR touches this), so a
@@ -162,6 +184,8 @@ pub static KEYMAP: Mutex<ThreadModeRawMutex, RefCell<KeymapState>> =
         joy_mode: DEFAULT_JOY_MODE,
         joy_mouse_speed: DEFAULT_JOY_MOUSE_SPEED,
         led_brightness: DEFAULT_LED_BRIGHTNESS,
+        key_pattern: DEFAULT_LED_PATTERN,
+        ug_pattern: DEFAULT_LED_PATTERN,
     }));
 
 pub fn slot(i: usize) -> Slot {
@@ -184,6 +208,13 @@ pub fn led_brightness() -> u8 {
     KEYMAP.lock(|k| k.borrow().led_brightness)
 }
 
+pub fn led_patterns() -> (LedPattern, LedPattern) {
+    KEYMAP.lock(|k| {
+        let k = k.borrow();
+        (k.key_pattern, k.ug_pattern)
+    })
+}
+
 // ---- flash persistence -----------------------------------------------------
 
 /// Last 2 KiB page of the 128 KiB flash, as an offset from the flash base.
@@ -191,12 +222,12 @@ const CONFIG_OFFSET: u32 = 0x1F800;
 const CONFIG_ADDR: u32 = 0x0800_0000 + CONFIG_OFFSET;
 const MAGIC: u32 = 0x4F4D_4B31; // "OMK1"
 /// v1: … slots, checksum(2), pad(2). v2 spent those pad bytes on the two
-/// joystick-mode fields. v3 appends led_brightness + a reserved byte and
-/// moves the checksum after them, growing the blob 108 -> 112 bytes — still
-/// a multiple of the F0's 4-byte programming unit for both flash writes
-/// (body, then magic). Older blobs still load, with the fields they predate
-/// at their defaults.
-const LAYOUT_VERSION: u16 = 3;
+/// joystick-mode fields. v3 appended led_brightness + a reserved byte
+/// (blob 108 -> 112). v4 appends the two 4-byte LED patterns (mode + RGB
+/// per chain) and moves the checksum after them (112 -> 120) — every step
+/// keeps the body a multiple of the F0's 4-byte programming unit. Older
+/// blobs still load, with the fields they predate at their defaults.
+const LAYOUT_VERSION: u16 = 4;
 /// Where v1 put the checksum: right after the slots.
 const V1_CK_OFFSET: usize = 8 + SLOT_COUNT * 4;
 /// v2 field homes (the former v1 checksum + pad area).
@@ -205,7 +236,11 @@ const JOY_SPEED_OFFSET: usize = V1_CK_OFFSET + 1;
 const V2_CK_OFFSET: usize = V1_CK_OFFSET + 2;
 /// v3 field homes (the former v2 checksum area) + one reserved byte.
 const LED_BRIGHTNESS_OFFSET: usize = V2_CK_OFFSET;
-const CK_OFFSET: usize = V2_CK_OFFSET + 2;
+const V3_CK_OFFSET: usize = V2_CK_OFFSET + 2;
+/// v4 field homes: key pattern then underglow pattern, 4 bytes each.
+const KEY_PATTERN_OFFSET: usize = V3_CK_OFFSET;
+const UG_PATTERN_OFFSET: usize = V3_CK_OFFSET + 4;
+const CK_OFFSET: usize = V3_CK_OFFSET + 8;
 const BLOB_LEN: usize = CK_OFFSET + 4;
 
 /// Wrapping byte sum over everything before the (version-dependent) checksum
@@ -231,6 +266,15 @@ fn encode(state: &KeymapState) -> [u8; BLOB_LEN] {
     b[JOY_MODE_OFFSET] = state.joy_mode;
     b[JOY_SPEED_OFFSET] = state.joy_mouse_speed;
     b[LED_BRIGHTNESS_OFFSET] = state.led_brightness;
+    for (off, p) in [
+        (KEY_PATTERN_OFFSET, state.key_pattern),
+        (UG_PATTERN_OFFSET, state.ug_pattern),
+    ] {
+        b[off] = p.mode;
+        b[off + 1] = p.r;
+        b[off + 2] = p.g;
+        b[off + 3] = p.b;
+    }
     let ck = checksum(&b, CK_OFFSET);
     b[CK_OFFSET..CK_OFFSET + 2].copy_from_slice(&ck.to_le_bytes());
     b
@@ -251,7 +295,8 @@ pub fn load_from_flash() -> bool {
     let ck_offset = match version {
         1 => V1_CK_OFFSET,
         2 => V2_CK_OFFSET,
-        3 => CK_OFFSET,
+        3 => V3_CK_OFFSET,
+        4 => CK_OFFSET,
         _ => return false,
     };
     if u16::from_le_bytes([b[ck_offset], b[ck_offset + 1]]) != checksum(&b, ck_offset) {
@@ -277,6 +322,27 @@ pub fn load_from_flash() -> bool {
         } else {
             DEFAULT_LED_BRIGHTNESS
         };
+        let load_pattern = |off: usize| {
+            // An out-of-range mode byte degrades to rainbow, never garbage.
+            let mode = if b[off] <= LED_PATTERN_SOLID {
+                b[off]
+            } else {
+                LED_PATTERN_RAINBOW
+            };
+            LedPattern {
+                mode,
+                r: b[off + 1],
+                g: b[off + 2],
+                b: b[off + 3],
+            }
+        };
+        if version >= 4 {
+            k.key_pattern = load_pattern(KEY_PATTERN_OFFSET);
+            k.ug_pattern = load_pattern(UG_PATTERN_OFFSET);
+        } else {
+            k.key_pattern = DEFAULT_LED_PATTERN;
+            k.ug_pattern = DEFAULT_LED_PATTERN;
+        }
         for i in 0..SLOT_COUNT {
             let o = 8 + i * 4;
             // A corrupt slot (bad kind, or a keyboard code outside u8 range,
@@ -332,6 +398,8 @@ pub fn factory_reset(flash: &mut Flash<'_, Blocking>) -> Result<(), ()> {
         k.joy_mode = DEFAULT_JOY_MODE;
         k.joy_mouse_speed = DEFAULT_JOY_MOUSE_SPEED;
         k.led_brightness = DEFAULT_LED_BRIGHTNESS;
+        k.key_pattern = DEFAULT_LED_PATTERN;
+        k.ug_pattern = DEFAULT_LED_PATTERN;
     });
     flash
         .blocking_erase(CONFIG_OFFSET, CONFIG_OFFSET + 2048)

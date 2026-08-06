@@ -164,6 +164,9 @@ const RAW_HID_DESC: &[u8] = &[
 //   [0x0B]                         -> [0x0B, brightness] (LED brightness 0..=255)
 //   [0x0C, brightness]             -> [0x0C, 0x01] (RAM only, applied within one
 //                                     LED frame; SAVE persists)
+//   [0x0D]                         -> [0x0D, kmode,kr,kg,kb, umode,ur,ug,ub]
+//                                     (per-chain pattern: 0 rainbow, 1 solid RGB)
+//   [0x0E, kmode,kr,kg,kb, umode,ur,ug,ub] -> [0x0E, 0x01] (RAM; SAVE persists)
 const CMD_VERSION: u8 = 0x01;
 const CMD_ENTER_DFU: u8 = 0x02;
 const CMD_GET_KEYMAP: u8 = 0x03;
@@ -176,6 +179,8 @@ const CMD_GET_JOYMODE: u8 = 0x09;
 const CMD_SET_JOYMODE: u8 = 0x0A;
 const CMD_GET_LED: u8 = 0x0B;
 const CMD_SET_LED: u8 = 0x0C;
+const CMD_GET_LEDPATTERN: u8 = 0x0D;
+const CMD_SET_LEDPATTERN: u8 = 0x0E;
 const ENTER_DFU_KEY: &[u8; 4] = b"DFU!";
 const SAVE_KEY: &[u8; 4] = b"SAVE";
 const RESET_KEY: &[u8; 4] = b"RST!";
@@ -820,6 +825,37 @@ async fn main(spawner: Spawner) {
                             info!("app: led brightness -> {=u8}", buf[1]);
                             reply[1] = 0x01;
                         }
+                        CMD_GET_LEDPATTERN => {
+                            let (kp, up) = keymap::led_patterns();
+                            reply[1..5].copy_from_slice(&[kp.mode, kp.r, kp.g, kp.b]);
+                            reply[5..9].copy_from_slice(&[up.mode, up.r, up.g, up.b]);
+                        }
+                        CMD_SET_LEDPATTERN => {
+                            let sanitize = |mode: u8| {
+                                if mode <= keymap::LED_PATTERN_SOLID {
+                                    mode
+                                } else {
+                                    keymap::LED_PATTERN_RAINBOW
+                                }
+                            };
+                            keymap::KEYMAP.lock(|k| {
+                                let mut k = k.borrow_mut();
+                                k.key_pattern = keymap::LedPattern {
+                                    mode: sanitize(buf[1]),
+                                    r: buf[2],
+                                    g: buf[3],
+                                    b: buf[4],
+                                };
+                                k.ug_pattern = keymap::LedPattern {
+                                    mode: sanitize(buf[5]),
+                                    r: buf[6],
+                                    g: buf[7],
+                                    b: buf[8],
+                                };
+                            });
+                            info!("app: led patterns -> key mode {=u8}, ug mode {=u8}", buf[1], buf[5]);
+                            reply[1] = 0x01;
+                        }
                         other => {
                             debug!("app: unknown cmd 0x{=u8:02x}", other);
                             continue;
@@ -1271,14 +1307,18 @@ async fn led_task(mut led_key: ws2812::LedPin<'static>, mut led_ug: ws2812::LedP
         // made the top half of the slider look like nothing happened.
         let bright = keymap::led_brightness() as u32;
         let dim = |base: u32| ((base * bright * bright) / (255 * 255)) as u8;
+        let (key_pat, ug_pat) = keymap::led_patterns();
 
         let mut keys = [ws2812::Grb::default(); 13];
         for (i, px) in keys.iter_mut().enumerate() {
             // key_leds[i] sits under key position i's switch — chain order is
             // the sw index order in the .cohdl, and every position is
             // independent now (the 2U pair each has its own LED and bit).
+            // A pressed key always pops white, whatever the idle pattern.
             *px = if state & (1 << i) != 0 {
                 ws2812::Grb::rgb(255, 255, 255).scaled(dim(24))
+            } else if key_pat.mode == keymap::LED_PATTERN_SOLID {
+                ws2812::Grb::rgb(key_pat.r, key_pat.g, key_pat.b).scaled(dim(6))
             } else {
                 hue(phase.wrapping_add((i as u8) * 20)).scaled(dim(6))
             };
@@ -1287,7 +1327,11 @@ async fn led_task(mut led_key: ws2812::LedPin<'static>, mut led_ug: ws2812::LedP
         // wheel around the board regardless of revision.
         let mut ring = [ws2812::Grb::default(); UG_LEN];
         for (i, px) in ring.iter_mut().enumerate() {
-            *px = hue(phase.wrapping_add((i as u8) * (256 / UG_LEN) as u8)).scaled(dim(8));
+            *px = if ug_pat.mode == keymap::LED_PATTERN_SOLID {
+                ws2812::Grb::rgb(ug_pat.r, ug_pat.g, ug_pat.b).scaled(dim(8))
+            } else {
+                hue(phase.wrapping_add((i as u8) * (256 / UG_LEN) as u8)).scaled(dim(8))
+            };
         }
         #[cfg(not(feature = "proto"))]
         {
