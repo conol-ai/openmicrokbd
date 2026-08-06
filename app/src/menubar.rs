@@ -9,10 +9,10 @@
 //! offers, so the mirror is deferred (documented in the README).
 //!
 //! Menu events arrive on muda's own channel; a handler installed at build
-//! time forwards them as makepad actions, so the UI thread stays the single
-//! place that mutates state. Everything here degrades gracefully: if the
-//! tray can't be created (headless CI, odd Linux session), the app just runs
-//! without it.
+//! time forwards them through the app event bridge, so the UI thread stays
+//! the single place that mutates state. Everything here degrades gracefully:
+//! if the tray can't be created (headless CI, odd Linux session), the app
+//! just runs without it.
 
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
@@ -117,6 +117,13 @@ impl Menubar {
             return;
         };
         let menu = Menu::new();
+        let _ = menu.append(&MenuItem::with_id(
+            "open",
+            crate::i18n::tr("mb_open"),
+            true,
+            None,
+        ));
+        let _ = menu.append(&PredefinedMenuItem::separator());
         let status = MenuItem::with_id(
             "status",
             if connected {
@@ -142,9 +149,6 @@ impl Menubar {
             let _ = menu.append(&item);
         }
         let _ = menu.append(&PredefinedMenuItem::separator());
-        // No "Open" item: neither makepad nor the tray API can portably
-        // raise an existing window, and the PRD forbids dead ends — better
-        // absent than a menu entry that does nothing.
         let _ = menu.append(&MenuItem::with_id(
             "quit",
             crate::i18n::tr("mb_quit"),

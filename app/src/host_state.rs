@@ -37,6 +37,7 @@ const LOG_LIMIT: usize = 8;
 /// Side effects which must be performed by the owning UI/event loop.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostEffect {
+    ShowWindow,
     OpenSettings,
     Quit,
     /// Ask the OS to open a downloaded installer or other path.
@@ -542,7 +543,7 @@ impl HostState {
         {
             self.switch_profile(index);
         } else if message.id == "open" {
-            push_open_settings(effects);
+            effects.push(HostEffect::ShowWindow);
         } else if message.id == "quit" {
             let _ = self.persist();
             effects.push(HostEffect::Quit);
@@ -824,7 +825,7 @@ mod tests {
     }
 
     #[test]
-    fn tray_profile_and_quit_commands_are_reduced_without_process_exit() {
+    fn tray_profile_open_and_quit_commands_are_reduced_without_process_exit() {
         let mut host = state();
         let mut second = config::default_codex_profile();
         second.name = "Second".into();
@@ -836,6 +837,11 @@ mod tests {
             }))
             .is_empty());
         assert_eq!(host.config.active_profile, 1);
+
+        assert_eq!(
+            host.handle_event(AppEvent::Menubar(MenubarMsg { id: "open".into() })),
+            vec![HostEffect::ShowWindow]
+        );
 
         assert_eq!(
             host.handle_event(AppEvent::Menubar(MenubarMsg { id: "quit".into() })),

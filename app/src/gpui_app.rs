@@ -877,10 +877,12 @@ impl OpenMicro {
     fn apply_host_effects(&mut self, effects: Vec<HostEffect>, cx: &mut Context<Self>) {
         for effect in effects {
             match effect {
+                HostEffect::ShowWindow => show_main_window(cx),
                 HostEffect::OpenSettings if self.sheet == Sheet::None => {
                     self.sheet = Sheet::Settings;
+                    show_main_window(cx);
                 }
-                HostEffect::OpenSettings => {}
+                HostEffect::OpenSettings => show_main_window(cx),
                 HostEffect::Quit => {
                     let _ = config::save(&self.host.config);
                     cx.quit();
@@ -4001,39 +4003,46 @@ impl Render for OpenMicro {
     }
 }
 
+fn show_main_window(cx: &mut App) {
+    cx.activate(true);
+    if let Some(handle) = cx.windows().into_iter().next() {
+        let _ = handle.update(cx, |_, window, _| window.activate_window());
+    }
+}
+
 pub fn run() {
-    Application::new()
-        .with_assets(crate::simple_icons::Assets)
-        .run(|cx: &mut App| {
-            gpui_component::init(cx);
-            let _ = cx.text_system().add_fonts(vec![Cow::Borrowed(
-                &include_bytes!("../resources/lucide.ttf")[..],
-            )]);
+    let app = Application::new().with_assets(crate::simple_icons::Assets);
+    app.on_reopen(show_main_window);
+    app.run(|cx: &mut App| {
+        gpui_component::init(cx);
+        let _ = cx.text_system().add_fonts(vec![Cow::Borrowed(
+            &include_bytes!("../resources/lucide.ttf")[..],
+        )]);
 
-            cx.on_window_closed(|cx| {
-                if cx.windows().is_empty() {
-                    cx.quit();
-                }
-            })
-            .detach();
-
-            let bounds = Bounds::centered(None, size(px(820.), px(500.)), cx);
-            cx.open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    is_resizable: false,
-                    app_id: Some("ai.conol.openmicro".into()),
-                    titlebar: Some(TitleBar::title_bar_options()),
-                    ..Default::default()
-                },
-                |window, cx| {
-                    let view = cx.new(|cx| OpenMicro::new(window, cx));
-                    cx.new(|cx| Root::new(view, window, cx))
-                },
-            )
-            .expect("failed to open the OpenMicro window");
-            cx.activate(true);
-        });
+        let bounds = Bounds::centered(None, size(px(820.), px(500.)), cx);
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                is_resizable: false,
+                app_id: Some("ai.conol.openmicro".into()),
+                titlebar: Some(TitleBar::title_bar_options()),
+                ..Default::default()
+            },
+            |window, cx| {
+                window.on_window_should_close(cx, |_window, cx| {
+                    #[cfg(target_os = "macos")]
+                    cx.hide();
+                    #[cfg(not(target_os = "macos"))]
+                    _window.minimize_window();
+                    false
+                });
+                let view = cx.new(|cx| OpenMicro::new(window, cx));
+                cx.new(|cx| Root::new(view, window, cx))
+            },
+        )
+        .expect("failed to open the OpenMicro window");
+        cx.activate(true);
+    });
 }
 
 #[cfg(test)]
