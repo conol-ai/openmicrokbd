@@ -40,5 +40,12 @@
     "typescript": "^7.0.2",
     "vite": "^7.3.6",
     "vitest": "^4.1.10"
+  },
+  "allowScripts": {
+    "@serialport/bindings-cpp@13.0.0": true,
+    "electron@43.2.0": true,
+    "esbuild@0.28.1": true,
+    "esbuild@0.25.12": true,
+    "fsevents@2.3.3": true
   }
 }

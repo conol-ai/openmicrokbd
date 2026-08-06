@@ -41,11 +41,23 @@ npm install
 npm run dev
 ```
 
+`npm run dev` builds the main and preload bundles, serves the renderer at `http://localhost:5173`, and opens the Electron window.
+
 Build and verify with:
 
 ```sh
 npm run build
 npm test
+```
+
+### Install scripts
+
+Several dependencies rely on install scripts: `electron` downloads its platform binary, `@serialport/bindings-cpp` builds its native module, and `esbuild` validates its binary (both the hoisted copy and the one nested under `electron-vite`). The `allowScripts` field in `package.json` whitelists them by exact version for machines that block npm lifecycle scripts globally; keep it in sync when bumping those packages.
+
+If `npm run dev` fails with `Error: Electron uninstall`, the Electron binary was never downloaded because its postinstall did not run. Fetch it with:
+
+```sh
+node node_modules/electron/install.js
 ```
 
 ## Safety
