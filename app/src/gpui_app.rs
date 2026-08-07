@@ -51,6 +51,24 @@ enum Sheet {
     Firmware,
     Applications,
     Icons,
+    KeyPicker,
+}
+
+/// Which field a key picked from the keyboard sheet lands in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum KeyTarget {
+    #[default]
+    SimpleKey,
+    EmittedCode,
+}
+
+/// One key on the picker keyboard: a HID usage, or a bare modifier hold
+/// (HID modifier bit; stored as {mods: bit, code: 0}, which the firmware
+/// reports as a pure modifier press).
+#[derive(Clone, Copy, PartialEq)]
+enum PickedKey {
+    Usage(u16),
+    Modifier(u8),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -138,6 +156,19 @@ fn icon_picker_page(value: &str) -> usize {
         .map(|index| index / ICON_PAGE_SIZE)
         .unwrap_or(0)
 }
+
+/// The picker keyboard, ANSI-flavoured: (cap label, key, width units).
+#[rustfmt::skip]
+const KEY_PICKER_ROWS: &[&[(&str, PickedKey, f32)]] = &[
+    &[("esc", PickedKey::Usage(0x29), 1.0), ("F1", PickedKey::Usage(0x3A), 1.0), ("F2", PickedKey::Usage(0x3B), 1.0), ("F3", PickedKey::Usage(0x3C), 1.0), ("F4", PickedKey::Usage(0x3D), 1.0), ("F5", PickedKey::Usage(0x3E), 1.0), ("F6", PickedKey::Usage(0x3F), 1.0), ("F7", PickedKey::Usage(0x40), 1.0), ("F8", PickedKey::Usage(0x41), 1.0), ("F9", PickedKey::Usage(0x42), 1.0), ("F10", PickedKey::Usage(0x43), 1.0), ("F11", PickedKey::Usage(0x44), 1.0), ("F12", PickedKey::Usage(0x45), 1.0)],
+    &[("`", PickedKey::Usage(0x35), 1.0), ("1", PickedKey::Usage(0x1E), 1.0), ("2", PickedKey::Usage(0x1F), 1.0), ("3", PickedKey::Usage(0x20), 1.0), ("4", PickedKey::Usage(0x21), 1.0), ("5", PickedKey::Usage(0x22), 1.0), ("6", PickedKey::Usage(0x23), 1.0), ("7", PickedKey::Usage(0x24), 1.0), ("8", PickedKey::Usage(0x25), 1.0), ("9", PickedKey::Usage(0x26), 1.0), ("0", PickedKey::Usage(0x27), 1.0), ("-", PickedKey::Usage(0x2D), 1.0), ("=", PickedKey::Usage(0x2E), 1.0), ("⌫", PickedKey::Usage(0x2A), 1.5)],
+    &[("tab", PickedKey::Usage(0x2B), 1.5), ("Q", PickedKey::Usage(0x14), 1.0), ("W", PickedKey::Usage(0x1A), 1.0), ("E", PickedKey::Usage(0x08), 1.0), ("R", PickedKey::Usage(0x15), 1.0), ("T", PickedKey::Usage(0x17), 1.0), ("Y", PickedKey::Usage(0x1C), 1.0), ("U", PickedKey::Usage(0x18), 1.0), ("I", PickedKey::Usage(0x0C), 1.0), ("O", PickedKey::Usage(0x12), 1.0), ("P", PickedKey::Usage(0x13), 1.0), ("[", PickedKey::Usage(0x2F), 1.0), ("]", PickedKey::Usage(0x30), 1.0), ("\\", PickedKey::Usage(0x31), 1.0)],
+    &[("caps", PickedKey::Usage(0x39), 1.9), ("A", PickedKey::Usage(0x04), 1.0), ("S", PickedKey::Usage(0x16), 1.0), ("D", PickedKey::Usage(0x07), 1.0), ("F", PickedKey::Usage(0x09), 1.0), ("G", PickedKey::Usage(0x0A), 1.0), ("H", PickedKey::Usage(0x0B), 1.0), ("J", PickedKey::Usage(0x0D), 1.0), ("K", PickedKey::Usage(0x0E), 1.0), ("L", PickedKey::Usage(0x0F), 1.0), (";", PickedKey::Usage(0x33), 1.0), ("'", PickedKey::Usage(0x34), 1.0), ("⏎", PickedKey::Usage(0x28), 1.6)],
+    &[("⇧", PickedKey::Modifier(0x02), 2.4), ("Z", PickedKey::Usage(0x1D), 1.0), ("X", PickedKey::Usage(0x1B), 1.0), ("C", PickedKey::Usage(0x06), 1.0), ("V", PickedKey::Usage(0x19), 1.0), ("B", PickedKey::Usage(0x05), 1.0), ("N", PickedKey::Usage(0x11), 1.0), ("M", PickedKey::Usage(0x10), 1.0), (",", PickedKey::Usage(0x36), 1.0), (".", PickedKey::Usage(0x37), 1.0), ("/", PickedKey::Usage(0x38), 1.0), ("⇧ R", PickedKey::Modifier(0x20), 2.1)],
+    &[("⌃", PickedKey::Modifier(0x01), 1.4), ("⌥", PickedKey::Modifier(0x04), 1.4), ("⌘", PickedKey::Modifier(0x08), 1.7), ("space", PickedKey::Usage(0x2C), 5.4), ("⌘ R", PickedKey::Modifier(0x80), 1.7), ("⌥ R", PickedKey::Modifier(0x40), 1.4), ("⌃ R", PickedKey::Modifier(0x10), 1.4)],
+    &[("F13", PickedKey::Usage(0x68), 1.0), ("F14", PickedKey::Usage(0x69), 1.0), ("F15", PickedKey::Usage(0x6A), 1.0), ("F16", PickedKey::Usage(0x6B), 1.0), ("F17", PickedKey::Usage(0x6C), 1.0), ("F18", PickedKey::Usage(0x6D), 1.0), ("F19", PickedKey::Usage(0x6E), 1.0), ("F20", PickedKey::Usage(0x6F), 1.0), ("ins", PickedKey::Usage(0x49), 1.0), ("del", PickedKey::Usage(0x4C), 1.0), ("home", PickedKey::Usage(0x4A), 1.0), ("end", PickedKey::Usage(0x4D), 1.0), ("pgup", PickedKey::Usage(0x4B), 1.0), ("pgdn", PickedKey::Usage(0x4E), 1.0)],
+    &[("←", PickedKey::Usage(0x50), 1.0), ("↑", PickedKey::Usage(0x52), 1.0), ("↓", PickedKey::Usage(0x51), 1.0), ("→", PickedKey::Usage(0x4F), 1.0), ("prtsc", PickedKey::Usage(0x46), 1.2), ("scrlk", PickedKey::Usage(0x47), 1.2), ("pause", PickedKey::Usage(0x48), 1.2)],
+];
 
 /// Named single-colour presets the LED pattern spinners cycle through.
 const PATTERN_PALETTE: &[(&str, u8, u8, u8)] = &[
@@ -657,6 +688,7 @@ fn logo_mark() -> Div {
 pub struct OpenMicro {
     host: HostState,
     sheet: Sheet,
+    key_picker_target: KeyTarget,
     recording: RecordTarget,
     advanced: bool,
     macro_draft: Vec<MacroStepEntry>,
@@ -705,6 +737,7 @@ impl OpenMicro {
         let mut this = Self {
             host,
             sheet: Sheet::None,
+            key_picker_target: KeyTarget::SimpleKey,
             recording: RecordTarget::None,
             advanced: false,
             macro_draft: Vec::new(),
@@ -1476,6 +1509,91 @@ impl OpenMicro {
             self.host.config.led_ambient_pattern = pattern;
         }
         self.commit(true, cx);
+    }
+
+    fn open_key_picker(&mut self, target: KeyTarget, cx: &mut Context<Self>) {
+        self.key_picker_target = target;
+        self.sheet = Sheet::KeyPicker;
+        cx.notify();
+    }
+
+    fn apply_picked_key(&mut self, pick: PickedKey, cx: &mut Context<Self>) {
+        let Some(slot) = self.host.selected_slot else {
+            return;
+        };
+        let existing_mods = self.host.active_profile().inputs[slot].emitted.mods;
+        // A modifier cap assigns a bare-modifier hold; a normal cap keeps
+        // any chord modifiers already configured on the slot.
+        let (mods, code) = match pick {
+            PickedKey::Usage(usage) => (existing_mods, usage),
+            PickedKey::Modifier(bit) => (bit, 0),
+        };
+        match self.key_picker_target {
+            KeyTarget::SimpleKey => {
+                behaviors::apply_keystroke(
+                    &mut self.host.active_profile_mut().inputs[slot],
+                    mods,
+                    code,
+                );
+            }
+            KeyTarget::EmittedCode => {
+                let input = &mut self.host.active_profile_mut().inputs[slot];
+                input.emitted.kind = SlotKind::Keyboard;
+                input.emitted.mods = mods;
+                input.emitted.code = code;
+                input.behavior = None;
+            }
+        }
+        self.sheet = Sheet::None;
+        self.commit(true, cx);
+    }
+
+    fn render_key_picker_sheet(&self, cx: &mut Context<Self>) -> Div {
+        let mut body = div().w_full().flex().flex_col().gap(px(5.));
+        for (row_index, row) in KEY_PICKER_ROWS.iter().enumerate() {
+            let mut line = div().w_full().flex().gap(px(4.));
+            for (col_index, (label, key, width)) in row.iter().enumerate() {
+                let pick = *key;
+                line = line.child(
+                    div()
+                        .h(px(30.))
+                        .w(px(30. * width + 4. * (width - 1.)))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(pixel::raised_color())
+                        .rounded(px(2.))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(pixel::key_color()))
+                        .font_family("Monaco")
+                        .text_size(px(10.))
+                        .text_color(pixel::text_color())
+                        .id(("picker-key", row_index * 32 + col_index))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.apply_picked_key(pick, cx)
+                        }))
+                        .child(SharedString::from(*label)),
+                );
+            }
+            body = body.child(line);
+        }
+        controls::modal_frame()
+            .child(controls::modal_header(
+                tr("pick_a_key"),
+                Some(tr("key_picker_note").into()),
+            ))
+            .child(div().w_full().p(px(16.)).child(body))
+            .child(
+                div().w_full().px(px(16.)).pb(px(14.)).flex().justify_end().child(
+                    tiny_button(tr("cancel"))
+                        .id("key-picker-cancel")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.sheet = Sheet::None;
+                            cx.notify();
+                        })),
+                ),
+            )
     }
 
     fn adjust_brightness(&mut self, delta: i16, cx: &mut Context<Self>) {
@@ -2358,13 +2476,15 @@ impl OpenMicro {
                     .child(inspector_field(
                         tr("key"),
                         keycodes::mods_label(input.emitted.mods),
-                        controls::cycle_control(
-                            keycodes::keyboard_name(input.emitted.code).unwrap_or("Unknown key"),
-                            ("simple-key", 0usize).into(),
-                            ("simple-key", 1usize).into(),
-                            cx.listener(|this, _, _, cx| this.cycle_keyboard_usage(-1, cx)),
-                            cx.listener(|this, _, _, cx| this.cycle_keyboard_usage(1, cx)),
-                        ),
+                        tiny_button(keycodes::emitted_key_label(
+                            input.emitted.mods,
+                            input.emitted.code,
+                        ))
+                        .w_full()
+                        .id("open-key-picker-simple")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.open_key_picker(KeyTarget::SimpleKey, cx)
+                        })),
                     ));
             }
             Some(ControlBehavior::App { target }) => {
@@ -2501,13 +2621,27 @@ impl OpenMicro {
                         tr("media_code_2")
                     },
                     format!("USB HID usage 0x{:04X}", input.emitted.code),
-                    controls::cycle_control(
-                        usage_label,
-                        ("emitted-code", 0usize).into(),
-                        ("emitted-code", 1usize).into(),
-                        cx.listener(|this, _, _, cx| this.cycle_emitted_code(-1, cx)),
-                        cx.listener(|this, _, _, cx| this.cycle_emitted_code(1, cx)),
-                    ),
+                    if input.emitted.kind == SlotKind::Keyboard {
+                        tiny_button(keycodes::emitted_key_label(
+                            input.emitted.mods,
+                            input.emitted.code,
+                        ))
+                        .w_full()
+                        .id("open-key-picker-emitted")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.open_key_picker(KeyTarget::EmittedCode, cx)
+                        }))
+                        .into_any_element()
+                    } else {
+                        controls::cycle_control(
+                            usage_label,
+                            ("emitted-code", 0usize).into(),
+                            ("emitted-code", 1usize).into(),
+                            cx.listener(|this, _, _, cx| this.cycle_emitted_code(-1, cx)),
+                            cx.listener(|this, _, _, cx| this.cycle_emitted_code(1, cx)),
+                        )
+                        .into_any_element()
+                    },
                 ))
             })
             .when(input.emitted.kind == SlotKind::Keyboard, |editor| {
@@ -3929,6 +4063,7 @@ impl OpenMicro {
             Sheet::Firmware => self.render_firmware_sheet(cx),
             Sheet::Applications => self.render_applications_sheet(cx),
             Sheet::Icons => self.render_icons_sheet(cx),
+            Sheet::KeyPicker => self.render_key_picker_sheet(cx),
             Sheet::None => div(),
         };
         div()

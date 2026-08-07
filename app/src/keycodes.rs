@@ -88,6 +88,8 @@ pub static KEYBOARD_USAGES: &[KeyDef] = &[
     k(0x2A, "Backspace", Some(0x33), Some(Code::Backspace)),
     k(0x2B, "Tab", Some(0x30), Some(Code::Tab)),
     k(0x2C, "Space", Some(0x31), Some(Code::Space)),
+    // Caps Lock (0x39): assignable as a device output; never a hotkey.
+    k(0x39, "Caps Lock", Some(0x39), None),
     // Punctuation (usage 0x2D..=0x38).
     k(0x2D, "-", Some(0x1B), Some(Code::Minus)),
     k(0x2E, "=", Some(0x18), Some(Code::Equal)),
@@ -181,7 +183,7 @@ pub static KEYBOARD_GROUPS: &[KeyboardGroup] = &[
     },
     KeyboardGroup {
         label: "Common keys",
-        usages: &[0x28, 0x29, 0x2A, 0x2B, 0x2C],
+        usages: &[0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x39],
     },
     KeyboardGroup {
         label: "Symbols",
@@ -308,6 +310,21 @@ const MOD_PAIRS: [(u8, &str, &str); 4] = [
 /// Human-readable modifier prefix from the HID bitmask: "⌃⇧⌘" on macOS,
 /// "Ctrl+Shift+Win+" elsewhere (trailing separator included so a key name
 /// can be appended directly). Left and right variants render the same.
+/// Display label for an emitted keyboard slot: named key, bare modifier
+/// hold ({mods, code 0} — the firmware ORs mods with an empty keycode), or
+/// nothing.
+pub fn emitted_key_label(mods: u8, code: u16) -> String {
+    if code != 0 {
+        keyboard_name(code)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("0x{code:02X}"))
+    } else if mods != 0 {
+        format!("{} (hold)", mods_label(mods))
+    } else {
+        "—".to_string()
+    }
+}
+
 pub fn mods_label(mods: u8) -> String {
     let mac = cfg!(target_os = "macos");
     let mut out = String::new();

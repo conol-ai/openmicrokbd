@@ -303,6 +303,8 @@ pub const STRINGS: &[(&str, &str, &str, &str, &str)] = &[
     ("press_keys", "press keys…", "请按下按键…", "請按下按鍵…", "キーを押してください…"),
     ("backlight_pattern", "Backlight pattern", "背光模式", "背光模式", "バックライトパターン"),
     ("ambient_pattern", "Ambient light", "氛围灯", "氣氛燈", "アンビエントライト"),
+    ("pick_a_key", "Choose a key", "选择按键", "選擇按鍵", "キーを選択"),
+    ("key_picker_note", "Click a key to assign it · modifier caps assign a held modifier", "点击按键完成设置 · 修饰键键帽将设为按住该修饰键", "點擊按鍵完成設定 · 修飾鍵鍵帽將設為按住該修飾鍵", "キーをクリックして割り当て · 修飾キーは押しっぱなしとして設定されます"),
     ("pattern_key_note", "Idle pattern of the key backlight · presses still pop white", "按键背光的空闲模式 · 按下仍会亮白色", "按鍵背光的閒置模式 · 按下仍會亮白色", "キーバックライトの待機パターン · 押すと白く光ります"),
     ("pattern_ambient_note", "The underglow ring around the board", "键盘四周的底部灯环", "鍵盤四周的底部燈環", "ボード周囲のアンダーグローリング"),
     ("pat_rainbow", "Rainbow", "彩虹", "彩虹", "レインボー"),
