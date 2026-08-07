@@ -52,9 +52,13 @@ pub const KIND_CONSUMER: u8 = 2;
 /// the direction slots like any key; in MOUSE mode deflection moves the HID
 /// mouse pointer proportionally and the stick's push switch is left click
 /// (the direction and press slots are ignored, but keep their contents so
-/// switching back restores them).
+/// switching back restores them). GRADE mode is mouse motion tuned for
+/// panel-style control surfaces (DaVinci Resolve colour wheels): deflection
+/// auto-holds the left button and drags on a squared speed curve, releasing
+/// at centre.
 pub const JOY_MODE_KEYS: u8 = 0;
 pub const JOY_MODE_MOUSE: u8 = 1;
+pub const JOY_MODE_GRADE: u8 = 2;
 
 /// One emitted code: 4 bytes on the wire (kind, mods, code LE).
 /// `mods` is the HID modifier bitmask (bit0 LCtrl, bit1 LShift, bit2 LAlt,
@@ -307,7 +311,7 @@ pub fn load_from_flash() -> bool {
         k.joy_threshold = u16::from_le_bytes([b[6], b[7]]).clamp(200, 1900);
         if version >= 2 {
             let mode = b[JOY_MODE_OFFSET];
-            k.joy_mode = if mode <= JOY_MODE_MOUSE {
+            k.joy_mode = if mode <= JOY_MODE_GRADE {
                 mode
             } else {
                 DEFAULT_JOY_MODE

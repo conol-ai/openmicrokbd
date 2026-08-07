@@ -584,16 +584,16 @@ pub fn cycle_joystick_subslot(current_slot: usize, direction: CycleDirection) ->
     JoystickSubslot::ALL[index]
 }
 
-/// Mode-aware subslot navigation for the view: Mouse has no per-input editor,
-/// Arrows exposes only its configurable press switch, and Custom exposes all
-/// five inputs.
+/// Mode-aware subslot navigation for the view: Mouse and Grade have no
+/// per-input editor, Arrows exposes only its configurable press switch, and
+/// Custom exposes all five inputs.
 pub fn cycle_editable_joystick_subslot(
     profile: &Profile,
     current_slot: usize,
     direction: CycleDirection,
 ) -> Option<JoystickSubslot> {
     match JoystickMode::infer(profile) {
-        JoystickMode::Mouse => None,
+        JoystickMode::Mouse | JoystickMode::Grade => None,
         JoystickMode::Arrows => Some(JoystickSubslot::Press),
         JoystickMode::Custom => Some(cycle_joystick_subslot(current_slot, direction)),
     }

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Hardware test for the joystick-mode vendor-HID commands (fw >= 0.3.0).
 
-Exercises 0x09/0x0A (GET/SET_JOYMODE), SAVE persistence, and checks the
-mouse HID interface enumerates. Run with the pad connected over USB:
+Exercises 0x09/0x0A (GET/SET_JOYMODE — mode 0 keys / 1 mouse / 2 grade,
+grade needs fw >= 0.6.0), SAVE persistence, and checks the mouse HID
+interface enumerates. Run with the pad connected over USB:
 
     python3 -m pip install hidapi   # once
     python3 scripts/test-joymode.py
@@ -87,6 +88,15 @@ def main():
     rep = command(dev, [CMD_GET_JOYMODE])
     check("mode readback", rep[1] == 1 and rep[2] == 8, f"mode={rep[1]} speed={rep[2]}")
 
+    rep = command(dev, [CMD_SET_JOYMODE, 2, 4])
+    check("SET_JOYMODE grade/4 acks", rep[1] == 1)
+    rep = command(dev, [CMD_GET_JOYMODE])
+    check(
+        "grade mode readback (fw >= 0.6.0)",
+        rep[1] == 2 and rep[2] == 4,
+        f"mode={rep[1]} speed={rep[2]}",
+    )
+
     rep = command(dev, [CMD_SET_JOYMODE, 1, 99])
     check("speed clamps to 10", command(dev, [CMD_GET_JOYMODE])[2] == 10)
     rep = command(dev, [CMD_SET_JOYMODE, 7, 5])
@@ -104,7 +114,9 @@ def main():
     time.sleep(0.5)
 
     print("persistence (SAVE + re-open):")
-    command(dev, [CMD_SET_JOYMODE, 1, 3])
+    # Grade (2) on purpose: exercises the flash blob's mode validation on
+    # load, the newest acceptance path.
+    command(dev, [CMD_SET_JOYMODE, 2, 3])
     command(dev, [CMD_SET_LED, 100])
     rep = command(dev, [CMD_SAVE, ord("S"), ord("A"), ord("V"), ord("E")], timeout_s=2.0)
     check("SAVE acks", rep[1] == 1)
@@ -112,9 +124,9 @@ def main():
     time.sleep(0.5)
     dev = open_raw()
     rep = command(dev, [CMD_GET_JOYMODE])
-    check("mode survives re-open", rep[1] == 1 and rep[2] == 3)
+    check("mode survives re-open", rep[1] == 2 and rep[2] == 3)
     check("brightness survives re-open", command(dev, [CMD_GET_LED])[1] == 100)
-    print("  (for a full power-cycle test: unplug/replug, then GET_JOYMODE " "should still be mouse/3)")
+    print("  (for a full power-cycle test: unplug/replug, then GET_JOYMODE " "should still be grade/3)")
 
     # Leave the pad in keys mode / default speed / original brightness, saved.
     command(dev, [CMD_SET_JOYMODE, 0, 5])

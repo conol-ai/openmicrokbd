@@ -2927,6 +2927,31 @@ impl OpenMicro {
                         ),
                     ));
             }
+            JoystickMode::Grade => {
+                editor = editor
+                    .child(controls::status_rail(
+                        "ANALOG // GRADE",
+                        tr("joy_grade_detail"),
+                        BadgeTone::Info,
+                    ))
+                    .child(inspector_field(
+                        tr("drag_speed").to_uppercase(),
+                        "1 = precise // 10 = fast",
+                        controls::cycle_control(
+                            profile.analog.joy_mouse_speed.to_string(),
+                            ("joystick-speed", 0usize).into(),
+                            ("joystick-speed", 1usize).into(),
+                            cx.listener(|this, _, _, cx| this.adjust_joystick_speed(-1, cx)),
+                            cx.listener(|this, _, _, cx| this.adjust_joystick_speed(1, cx)),
+                        ),
+                    ))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(pixel::muted_text_color())
+                            .child(tr("joy_grade_howto")),
+                    );
+            }
             JoystickMode::Arrows => {
                 editor = editor
                     .child(controls::status_rail(
@@ -2966,7 +2991,7 @@ impl OpenMicro {
             ),
         ));
 
-        if mode != JoystickMode::Mouse {
+        if !matches!(mode, JoystickMode::Mouse | JoystickMode::Grade) {
             editor = editor.child(pixel::divider()).child(
                 controls::toggle_face(
                     if mode == JoystickMode::Custom {

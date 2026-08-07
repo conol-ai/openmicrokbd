@@ -54,6 +54,23 @@ over the vendor interface (`0x80` reports), so pressing a physical key lights
 its on-screen cell — a built-in hardware test that works with zero OS
 permissions.
 
+## Joystick modes
+
+The joystick editor offers four behaviors, stored on the pad: **arrow keys**
+(direction slots under an optional shared modifier mask), **custom keys**
+(every direction and the push fully configurable), **mouse pointer**
+(proportional HID pointer motion, push = left click), and **color grading** —
+pointer motion with the speed applied squared (the slider spans sub-pixel
+nudges to brisk drags) and the left button auto-held while the stick is
+deflected. In DaVinci Resolve's color page, park the
+pointer over a color wheel and the stick grabs and nudges it like a panel
+trackball, letting go when it returns to center. It is plain mouse input —
+no scripting API, panel drivers, or Studio license involved — so it works in
+the free Resolve (and any other app that drags, e.g. Lightroom sliders).
+Grade mode needs firmware ≥ 0.6.0; on older firmware the app detects the
+silent downgrade to keys mode and reports that the extras need a firmware
+update.
+
 ## Profiles
 
 Named profiles are first-class: full pad configuration (bindings, labels,

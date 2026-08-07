@@ -210,14 +210,18 @@ pub struct InputConfig {
 }
 
 /// What the firmware does with joystick deflection: hold the direction key
-/// slots, or move the HID mouse pointer (push switch = left click). Mirrors
-/// the wire values (0 keys, 1 mouse).
+/// slots, move the HID mouse pointer (push switch = left click), or drag —
+/// grade mode moves the pointer on a squared speed curve with the left
+/// button auto-held while deflected, so the stick works a DaVinci Resolve
+/// colour wheel like a panel trackball. Mirrors the wire values (0 keys,
+/// 1 mouse, 2 grade).
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum JoyMode {
     #[default]
     Keys,
     Mouse,
+    Grade,
 }
 
 impl JoyMode {
@@ -225,14 +229,15 @@ impl JoyMode {
         match self {
             JoyMode::Keys => 0,
             JoyMode::Mouse => 1,
+            JoyMode::Grade => 2,
         }
     }
 
     pub fn from_wire(byte: u8) -> Self {
-        if byte == 1 {
-            JoyMode::Mouse
-        } else {
-            JoyMode::Keys
+        match byte {
+            1 => JoyMode::Mouse,
+            2 => JoyMode::Grade,
+            _ => JoyMode::Keys,
         }
     }
 }
@@ -537,16 +542,18 @@ pub const ARROW_CODES: [u16; 4] = [0x52, 0x51, 0x50, 0x4F];
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum JoystickMode {
     Mouse,
+    Grade,
     Arrows,
     Custom,
 }
 
 impl JoystickMode {
-    pub const ALL: [Self; 3] = [Self::Mouse, Self::Arrows, Self::Custom];
+    pub const ALL: [Self; 4] = [Self::Mouse, Self::Grade, Self::Arrows, Self::Custom];
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::Mouse => "Mouse pointer",
+            Self::Grade => "Color grading",
             Self::Arrows => "Arrow keys",
             Self::Custom => "Custom keys",
         }
@@ -555,6 +562,7 @@ impl JoystickMode {
     pub const fn detail(self) -> &'static str {
         match self {
             Self::Mouse => "Deflection moves the pointer · push is left click",
+            Self::Grade => "Deflection drags slowly · for Resolve color wheels",
             Self::Arrows => "Deflection sends arrow keys · push is configurable",
             Self::Custom => "Every direction and the push are configurable",
         }
@@ -580,8 +588,10 @@ impl JoystickMode {
     }
 
     pub fn infer(profile: &Profile) -> Self {
-        if profile.analog.joy_mode == JoyMode::Mouse {
-            return Self::Mouse;
+        match profile.analog.joy_mode {
+            JoyMode::Mouse => return Self::Mouse,
+            JoyMode::Grade => return Self::Grade,
+            JoyMode::Keys => {}
         }
         if Self::arrow_mods(profile).is_some() {
             return Self::Arrows;
@@ -589,13 +599,14 @@ impl JoystickMode {
         Self::Custom
     }
 
-    /// Move the profile into this mode. `Mouse` and `Custom` only flip
-    /// `joy_mode` — slots keep whatever they held. `Arrows` also rewrites
-    /// the four direction slots as plain arrows (press untouched); modifiers
-    /// are then edited via `set_arrow_mods`.
+    /// Move the profile into this mode. `Mouse`, `Grade` and `Custom` only
+    /// flip `joy_mode` — slots keep whatever they held. `Arrows` also
+    /// rewrites the four direction slots as plain arrows (press untouched);
+    /// modifiers are then edited via `set_arrow_mods`.
     pub fn apply_to(self, profile: &mut Profile) {
         profile.analog.joy_mode = match self {
             Self::Mouse => JoyMode::Mouse,
+            Self::Grade => JoyMode::Grade,
             Self::Arrows | Self::Custom => JoyMode::Keys,
         };
         if self == Self::Arrows && JoystickMode::arrow_mods(profile).is_none() {
@@ -1418,7 +1429,17 @@ mod tests {
             slots_before.as_slice()
         );
 
-        // Leaving Mouse for Arrows restores keys mode; the slots were already
+        // Grade mode likewise only flips the flag; slots stay untouched so a
+        // trip through the grading mode loses nothing.
+        JoystickMode::Grade.apply_to(&mut profile);
+        assert_eq!(JoystickMode::infer(&profile), JoystickMode::Grade);
+        assert_eq!(profile.analog.joy_mode, JoyMode::Grade);
+        assert_eq!(
+            &profile.inputs[SLOT_JOY_UP..=SLOT_JOY_PRESS],
+            slots_before.as_slice()
+        );
+
+        // Leaving Grade for Arrows restores keys mode; the slots were already
         // arrows so they must not be rewritten (press keeps its config).
         JoystickMode::Arrows.apply_to(&mut profile);
         assert_eq!(profile.analog.joy_mode, JoyMode::Keys);

@@ -583,7 +583,7 @@ fn sync_keymap(
     // Pre-0.3 firmware drops these commands; joystick mode and brightness
     // then stay at their defaults on the pad. Everything else synced fine,
     // so report success with a nudge instead of failing the sync.
-    let mode_supported = command(
+    let mut mode_supported = command(
         dev,
         &[CMD_SET_JOYMODE, joy_mode.to_wire(), joy_mouse_speed],
         &mut reply,
@@ -591,6 +591,15 @@ fn sync_keymap(
     )
     .map(|n| expect_ack(n, &reply, "SET_JOYMODE").is_ok())
     .unwrap_or(false);
+    // 0.3/0.4 firmware acks SET_JOYMODE but silently degrades the grade mode
+    // (wire 2) to keys — a readback is the only way to tell, so grade gets
+    // one and joins the "needs a firmware update" nudge on mismatch.
+    if mode_supported && joy_mode == JoyMode::Grade {
+        mode_supported = matches!(
+            command(dev, &[CMD_GET_JOYMODE], &mut reply, REPLY_TIMEOUT),
+            Ok(n) if n >= 2 && reply[1] == JoyMode::Grade.to_wire()
+        );
+    }
     let led_supported = command(
         dev,
         &[CMD_SET_LED, led_brightness],

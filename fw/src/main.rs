@@ -36,7 +36,10 @@
 //! joystick -> arrows/enter. The joystick alternatively runs in MOUSE mode
 //! (keymap.rs joy_mode): a dedicated HID mouse interface carries
 //! proportional pointer motion and the stick's push switch becomes left
-//! click.
+//! click. GRADE mode rides the same interface with the speed applied
+//! squared (sub-pixel creep at 1, brisk at 10) and the left button
+//! auto-held while deflected — hover a DaVinci Resolve colour wheel and the
+//! stick drags it like a panel trackball.
 //!
 //! A vendor-defined HID interface (usage page 0xFF60) carries the app
 //! protocol: version query, DFU reboot, keymap read/write/save, analog
@@ -159,7 +162,7 @@ const RAW_HID_DESC: &[u8] = &[
 //   [0x07]                         -> [0x07, thr_lo, thr_hi] (joystick threshold)
 //   [0x08, thr_lo, thr_hi]         -> [0x08, 0x01] (RAM only; SAVE persists)
 //   [0x09]                         -> [0x09, mode, speed] (joystick mode 0 keys /
-//                                     1 mouse, pointer speed 1..=10)
+//                                     1 mouse / 2 grade, pointer speed 1..=10)
 //   [0x0A, mode, speed]            -> [0x0A, 0x01] (RAM only; SAVE persists)
 //   [0x0B]                         -> [0x0B, brightness] (LED brightness 0..=255)
 //   [0x0C, brightness]             -> [0x0C, 0x01] (RAM only, applied within one
@@ -214,7 +217,7 @@ impl KeyboardTransition {
 static KBD_CH: Channel<ThreadModeRawMutex, KeyboardTransition, 16> = Channel::new();
 static CONSUMER_CH: Channel<ThreadModeRawMutex, MediaKeyboardReport, 8> = Channel::new();
 
-/// One HID mouse frame (mouse-mode joystick). Every frame carries the FULL
+/// One HID mouse frame (mouse/grade-mode joystick). Every frame carries the FULL
 /// button state, so newest-wins eviction on overload can never strand a
 /// click: whatever report goes out last is the truth.
 #[derive(Clone, Copy)]
@@ -227,6 +230,18 @@ static MOUSE_CH: Channel<ThreadModeRawMutex, MouseFrame, 8> = Channel::new();
 /// Current mouse button bitmask (bit 0 = left, from the joystick push
 /// switch). Written by scan_task, folded into motion frames by adc_task.
 static MOUSE_BUTTONS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+/// Grade-mode auto-drag: set by adc_task while the stick is deflected.
+/// OR-ed into every frame's bit 0 alongside the push switch, so a push
+/// release mid-deflection cannot lift the hold a colour-wheel drag depends
+/// on (and vice versa).
+static GRADE_DRAG: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// The full button truth for an outgoing frame: push switch OR auto-drag.
+fn mouse_buttons() -> u8 {
+    MOUSE_BUTTONS.load(core::sync::atomic::Ordering::Relaxed)
+        | GRADE_DRAG.load(core::sync::atomic::Ordering::Relaxed) as u8
+}
 
 fn force_send_mouse(frame: MouseFrame) {
     if MOUSE_CH.try_send(frame).is_err() {
@@ -803,7 +818,7 @@ async fn main(spawner: Spawner) {
                             reply[2] = keymap::joy_mouse_speed();
                         }
                         CMD_SET_JOYMODE => {
-                            let mode = if buf[1] <= keymap::JOY_MODE_MOUSE {
+                            let mode = if buf[1] <= keymap::JOY_MODE_GRADE {
                                 buf[1]
                             } else {
                                 keymap::DEFAULT_JOY_MODE
@@ -963,19 +978,23 @@ async fn scan_task(
         enc_sw_last = e;
 
         // Joystick push: a held key slot in keys mode, mouse button 1 in
-        // mouse mode. The mode can change while the switch is down (app
-        // sync), so retract a stale assertion before honouring the new mode.
+        // the pointer modes (mouse and grade). The mode can change while the
+        // switch is down (app sync), so retract a stale assertion before
+        // honouring the new mode.
         let j = joy_sw.is_high();
-        let mouse_mode = keymap::joy_mode() == keymap::JOY_MODE_MOUSE;
-        if mouse_mode && joy_key_held {
+        let pointer_mode = matches!(
+            keymap::joy_mode(),
+            keymap::JOY_MODE_MOUSE | keymap::JOY_MODE_GRADE
+        );
+        if pointer_mode && joy_key_held {
             set_held(keymap::SLOT_JOY_PRESS, false);
             joy_key_held = false;
         }
-        if !mouse_mode && joy_click_held {
+        if !pointer_mode && joy_click_held {
             joy_click_held = false;
             MOUSE_BUTTONS.store(0, core::sync::atomic::Ordering::Relaxed);
             force_send_mouse(MouseFrame {
-                buttons: 0,
+                buttons: mouse_buttons(),
                 dx: 0,
                 dy: 0,
             });
@@ -983,12 +1002,11 @@ async fn scan_task(
         if j != joy_sw_last {
             info!("joystick switch {}", if j { "UP" } else { "DOWN" });
             let down = !j;
-            if mouse_mode {
+            if pointer_mode {
                 joy_click_held = down;
-                let buttons = down as u8;
-                MOUSE_BUTTONS.store(buttons, core::sync::atomic::Ordering::Relaxed);
+                MOUSE_BUTTONS.store(down as u8, core::sync::atomic::Ordering::Relaxed);
                 force_send_mouse(MouseFrame {
-                    buttons,
+                    buttons: mouse_buttons(),
                     dx: 0,
                     dy: 0,
                 });
@@ -1063,9 +1081,13 @@ async fn encoder_task(mut enc_a: ExtiInput<'static>, mut enc_b: ExtiInput<'stati
 /// Joystick, 50 Hz ADC poll. Keys mode: deflection past the (configurable)
 /// threshold holds that direction's slot until the stick returns to centre.
 /// Mouse mode: deflection past a small fixed dead zone moves the HID mouse
-/// pointer proportionally, scaled by the app-tunable speed. Threshold
-/// crossings post app events in both modes, so the app's live feedback keeps
-/// working whatever the stick means.
+/// pointer proportionally, scaled by the app-tunable speed. Grade mode: the
+/// same motion with the speed applied squared (fine floor, real top pace)
+/// and the left button auto-held while deflected — park the pointer over a
+/// DaVinci Resolve colour wheel and the stick grabs and drags it like a
+/// panel trackball, letting go at centre. Threshold crossings post app
+/// events in every mode, so the app's live feedback keeps working whatever
+/// the stick means.
 #[embassy_executor::task]
 async fn adc_task(
     mut adc: Adc<'static, peripherals::ADC1>,
@@ -1088,6 +1110,17 @@ async fn adc_task(
     /// Fractional-motion denominator: px/frame = deflection × speed / DIV.
     /// Full deflection (~1848 counts) at speed 5 ≈ 18 px per 20 ms frame.
     const MOUSE_DIV: i32 = 512;
+    /// Grade-mode denominator, used with the speed applied SQUARED (1..100
+    /// across the slider): full deflection spans ≈0.2 px/frame at speed 1 to
+    /// ≈23 px/frame at speed 10. The squared curve buys two decades of range
+    /// — sub-pixel precision at the bottom, real pace at the top (a flat 10x
+    /// tested too slow on Resolve's colour wheels).
+    const GRADE_DIV: i32 = 8192;
+    /// Grade-mode drag release threshold, in ADC counts around centre —
+    /// deliberately inside MOUSE_DEADZONE so the auto-held button only lets
+    /// go once the stick is clearly home, and jitter at the dead-zone edge
+    /// cannot machine-gun clicks on whatever the pointer is over.
+    const DRAG_RELEASE: i32 = 120;
     fn past_deadzone(centred: i32) -> i32 {
         if centred > MOUSE_DEADZONE {
             centred - MOUSE_DEADZONE
@@ -1098,7 +1131,8 @@ async fn adc_task(
         }
     }
     let mut last: u8 = DIR_NONE;
-    let mut was_mouse = false;
+    let mut last_mode = keymap::JOY_MODE_KEYS;
+    let mut dragging = false;
     let mut acc_x: i32 = 0;
     let mut acc_y: i32 = 0;
     let mut n: u32 = 0;
@@ -1136,27 +1170,38 @@ async fn adc_task(
         };
 
         // The app can flip the mode while the stick is deflected; hand the
-        // active direction over so neither mode strands a held key.
-        let mouse = keymap::joy_mode() == keymap::JOY_MODE_MOUSE;
-        if mouse != was_mouse {
-            was_mouse = mouse;
+        // active direction over so no mode strands a held key, and drop any
+        // grade-mode drag so the button cannot stay latched.
+        let mode = keymap::joy_mode();
+        let keys = mode == keymap::JOY_MODE_KEYS;
+        if mode != last_mode {
+            last_mode = mode;
             acc_x = 0;
             acc_y = 0;
             if last != DIR_NONE {
-                set_held(DIR_SLOTS[last as usize], !mouse);
+                set_held(DIR_SLOTS[last as usize], keys);
+            }
+            if dragging {
+                dragging = false;
+                GRADE_DRAG.store(false, core::sync::atomic::Ordering::Relaxed);
+                force_send_mouse(MouseFrame {
+                    buttons: mouse_buttons(),
+                    dx: 0,
+                    dy: 0,
+                });
             }
         }
 
         if dir != last {
             info!("joystick dir {=u8} (x={=u16} y={=u16})", dir, x, y);
             if last != DIR_NONE {
-                if !mouse {
+                if keys {
                     set_held(DIR_SLOTS[last as usize], false);
                 }
                 post_event(3, last, 0);
             }
             if dir != DIR_NONE {
-                if !mouse {
+                if keys {
                     set_held(DIR_SLOTS[dir as usize], true);
                 }
                 post_event(3, dir, 1);
@@ -1164,17 +1209,60 @@ async fn adc_task(
             last = dir;
         }
 
-        if mouse {
+        if !keys {
+            let grade = mode == keymap::JOY_MODE_GRADE;
+            let cx = past_deadzone(x as i32 - 2048);
+            let cy = past_deadzone(y as i32 - 2048);
+
+            // Grade mode: deflection grabs (button down, BEFORE any motion
+            // frame so the host sees press-then-drag), returning to centre
+            // lets go. Fresh grab, fresh fractions — residue from the last
+            // drag must not jump the wheel on contact.
+            if grade {
+                if !dragging && (cx != 0 || cy != 0) {
+                    dragging = true;
+                    GRADE_DRAG.store(true, core::sync::atomic::Ordering::Relaxed);
+                    acc_x = 0;
+                    acc_y = 0;
+                    force_send_mouse(MouseFrame {
+                        buttons: mouse_buttons(),
+                        dx: 0,
+                        dy: 0,
+                    });
+                } else if dragging
+                    && (x as i32 - 2048).abs() < DRAG_RELEASE
+                    && (y as i32 - 2048).abs() < DRAG_RELEASE
+                {
+                    dragging = false;
+                    GRADE_DRAG.store(false, core::sync::atomic::Ordering::Relaxed);
+                    acc_x = 0;
+                    acc_y = 0;
+                    force_send_mouse(MouseFrame {
+                        buttons: mouse_buttons(),
+                        dx: 0,
+                        dy: 0,
+                    });
+                }
+            }
+
             let speed = keymap::joy_mouse_speed() as i32;
-            acc_x += past_deadzone(x as i32 - 2048) * speed;
-            acc_y += past_deadzone(y as i32 - 2048) * speed;
-            let dx = (acc_x / MOUSE_DIV).clamp(-127, 127) as i8;
-            let dy = (acc_y / MOUSE_DIV).clamp(-127, 127) as i8;
+            let (gain, div) = if grade {
+                (speed * speed, GRADE_DIV)
+            } else {
+                (speed, MOUSE_DIV)
+            };
+            acc_x += cx * gain;
+            acc_y += cy * gain;
+            let dx = (acc_x / div).clamp(-127, 127) as i8;
+            let dy = (acc_y / div).clamp(-127, 127) as i8;
             if dx != 0 || dy != 0 {
-                acc_x -= dx as i32 * MOUSE_DIV;
-                acc_y -= dy as i32 * MOUSE_DIV;
-                let buttons = MOUSE_BUTTONS.load(core::sync::atomic::Ordering::Relaxed);
-                force_send_mouse(MouseFrame { buttons, dx, dy });
+                acc_x -= dx as i32 * div;
+                acc_y -= dy as i32 * div;
+                force_send_mouse(MouseFrame {
+                    buttons: mouse_buttons(),
+                    dx,
+                    dy,
+                });
             }
         }
     }

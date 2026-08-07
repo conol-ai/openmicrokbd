@@ -86,7 +86,14 @@ device** (`keymap.rs`):
   pad at exactly 192 with no jitter, a finger at 242–1015, and the trigger at
   25% over a self-calibrating baseline.
 - **Joystick** — 50 Hz ADC poll with an app-tunable deflection threshold
-  (`SET_ANALOG`, persisted with the keymap).
+  (`SET_ANALOG`, persisted with the keymap). Three modes (`SET_JOYMODE`,
+  persisted): **keys** holds the direction slots, **mouse** moves a dedicated
+  HID pointer proportionally (push = left click), and **grade** is the mouse
+  with the speed applied squared (sub-pixel fine at 1, brisk at 10) and the
+  left button auto-held while deflected — park the pointer over a DaVinci
+  Resolve colour wheel and the stick grabs and drags it like a panel
+  trackball, releasing at centre (with hysteresis, so dead-zone jitter can't
+  machine-gun clicks).
 - **LEDs**: pressed keys light white over an idle rainbow; the underglow
   ring rotates hue. Brightness is capped in `ws2812.rs` (`scaled(n/64)`)
   to keep all 21 LEDs inside the 500 mA VBUS budget.
@@ -148,6 +155,12 @@ any IN report starting `0x80` is an unsolicited input event, not a reply:
 | `[0x06, 'R','S','T','!']` | Acks `[0x06, ok]` — factory defaults, saved config wiped |
 | `[0x07]` | Replies `[0x07, thr_lo, thr_hi]` — joystick threshold (u16 LE) |
 | `[0x08, thr_lo, thr_hi]` | Acks `[0x08, 0x01]` — set threshold in RAM (SAVE persists) |
+| `[0x09]` | Replies `[0x09, mode, speed]` — joystick mode (0 keys / 1 mouse / 2 grade) + pointer speed 1–10 |
+| `[0x0A, mode, speed]` | Acks `[0x0A, 0x01]` — set joystick mode/speed in RAM (SAVE persists) |
+| `[0x0B]` | Replies `[0x0B, brightness]` — LED brightness 0–255 |
+| `[0x0C, brightness]` | Acks `[0x0C, 0x01]` — set brightness in RAM, applied within one LED frame (SAVE persists) |
+| `[0x0D]` | Replies `[0x0D, kmode,kr,kg,kb, umode,ur,ug,ub]` — per-chain LED pattern (0 rainbow, 1 solid RGB) |
+| `[0x0E, kmode,kr,kg,kb, umode,ur,ug,ub]` | Acks `[0x0E, 0x01]` — set patterns in RAM (SAVE persists) |
 
 Event reports (`[0x80, src, a, b]`, best-effort, dropped when no host reads):
 src 0 = key (a = position 0–12, b = pressed), 1 = encoder rotate (a = 1 CW),
