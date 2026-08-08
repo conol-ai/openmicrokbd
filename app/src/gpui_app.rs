@@ -10,10 +10,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
-    div, point, prelude::*, px, relative, size, svg, AnyElement, App, Application, Bounds, Context,
-    Div, Entity, Hsla, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render,
-    ScrollHandle, SharedString, Styled, Subscription, Timer, Window, WindowAppearance,
-    WindowBounds, WindowOptions,
+    div, point, prelude::*, px, relative, size, svg, AnyElement, App, Application, Bounds,
+    Context, Div, Entity, Hsla, InteractiveElement, IntoElement, KeyBinding, KeyDownEvent, Menu,
+    MenuItem, ParentElement, Render, ScrollHandle, SharedString, Styled, Subscription, Timer,
+    Window, WindowAppearance, WindowBounds, WindowOptions,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
@@ -36,6 +36,10 @@ use crate::i18n::{self, tr};
 use crate::keycodes;
 use crate::pixel::{self, BadgeTone};
 use crate::release::{self, DownloadKind};
+
+// Quit is a real GPUI action (not just a tray menu id) so macOS gives it the
+// standard Cmd+Q route: app menu item + global key binding, wired in run().
+gpui::actions!(openmicro, [Quit]);
 
 const CELL_ENCODER: usize = 13;
 const CELL_JOYSTICK: usize = 14;
@@ -4175,6 +4179,16 @@ pub fn run() {
     app.on_reopen(show_main_window);
     app.run(|cx: &mut App| {
         gpui_component::init(cx);
+        // The close button only hides the resident host, so quitting is its
+        // own explicit action — GPUI provides no implicit Cmd+Q. `cx.quit()`
+        // runs the on_app_quit hook, which saves the config like the tray's
+        // Quit does.
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        cx.set_menus(vec![Menu {
+            name: "OpenMicro".into(),
+            items: vec![MenuItem::action(tr("mb_quit"), Quit)],
+        }]);
         let _ = cx.text_system().add_fonts(vec![Cow::Borrowed(
             &include_bytes!("../resources/lucide.ttf")[..],
         )]);

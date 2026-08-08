@@ -1,6 +1,6 @@
 [package]
 name = "openmicro-app"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 license = "MIT"
 description = "OpenMicro companion app: profiles, key actions, firmware updates (GPUI)"
