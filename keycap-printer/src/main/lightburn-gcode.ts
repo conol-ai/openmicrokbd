@@ -73,7 +73,7 @@ export function buildLightBurnGCode(job: EngraveJobData): string[] {
       for (let index = 1; index < polyline.length; index += 1) burnTo(polyline[index], 1);
     }
 
-    for (const line of plans[pass % plans.length]) {
+    for (const line of plans.length > 0 ? plans[pass % plans.length] : []) {
       const first = line.runs[0];
       const last = line.runs.at(-1)!;
       travelTo(overscanPoint(first.start, unitVector(first.start, first.end), -RASTER_OVERSCAN_MM));

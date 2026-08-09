@@ -47,6 +47,13 @@ describe("HY-Laser status parsing", () => {
     expect(isEngraveJobData({ edges: [], fillPlans: [{ segments: [], intensities: [] }], powerPercent: 100, speedPercent: 10, passes: 1 })).toBe(false);
     expect(isEngraveJobData({ edges: [], fillPlans: [], powerPercent: 100, speedPercent: 10, passes: 1 })).toBe(false);
     expect(isEngraveJobData({
+      edges: [[{ x: 0, y: 0 }, { x: 1, y: 0 }]],
+      fillPlans: [],
+      powerPercent: 100,
+      speedPercent: 10,
+      passes: 1
+    })).toBe(true);
+    expect(isEngraveJobData({
       edges: [],
       fillPlans: [{ segments: [[{ x: 0, y: 0 }, { x: 1, y: 0 }]], intensities: [1.1] }],
       powerPercent: 100,

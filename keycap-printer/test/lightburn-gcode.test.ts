@@ -85,6 +85,37 @@ describe("LightBurn-compatible G-code", () => {
     ]);
   });
 
+  it("supports skeleton jobs that trace edges without any fill", () => {
+    expect(buildLightBurnGCode({
+      edges: [[{ x: 0, y: 0 }, { x: 1, y: 0 }]],
+      fillPlans: [],
+      powerPercent: 100,
+      speedPercent: 10,
+      passes: 2
+    })).toEqual([
+      "G00 G17 G40 G21 G54",
+      "G90",
+      "M8",
+      "M5",
+      "G91",
+      "M3",
+      "G1 X1 F600 S1000",
+      "G1 S0",
+      "M5",
+      "M9",
+      "G0 X-1",
+      "M8",
+      "M3",
+      "G1 X1 F600 S1000",
+      "G1 S0",
+      "M5",
+      "M9",
+      "G0 X-1",
+      "G90",
+      "M2"
+    ]);
+  });
+
   it("cycles through the fill plans across passes", () => {
     const lines = buildLightBurnGCode({
       edges: [],

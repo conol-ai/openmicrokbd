@@ -3,6 +3,7 @@ import { icons, type IconNode } from "lucide";
 import { siApple, siDiscord, siGithub, siYoutube } from "simple-icons";
 import {
   buildIconJob,
+  buildSamplerJob,
   buildSimpleIconJob,
   DEFAULT_SETTINGS,
   feedFromPercent,
@@ -55,6 +56,18 @@ describe("Lucide toolpath generation", () => {
       expect(edge.length).toBeGreaterThan(3);
       expect(edge[0]).toEqual(edge.at(-1));
     }
+  });
+
+  it("builds edge-only jobs in skeleton mode", () => {
+    const job = buildIconJob(icons.Square, { ...DEFAULT_SETTINGS, skeletonMode: true });
+    const full = buildIconJob(icons.Square, DEFAULT_SETTINGS);
+
+    expect(job.fillPlans).toHaveLength(0);
+    expect(job.edges.length).toBeGreaterThanOrEqual(2);
+    expect(job.edges).toEqual(full.edges);
+    expect(job.stats.scanlineCount).toBe(0);
+    expect(job.stats.edgeCount).toBe(job.edges.length);
+    expect(job.stats.fitsKeycap).toBe(true);
   });
 
   it("supports compact SVG arc flags used by the Barrel icon", () => {
@@ -123,6 +136,24 @@ describe("Lucide toolpath generation", () => {
       expect(job.edges.length, icon.title).toBeGreaterThan(0);
       expect(job.stats.grayscaleLevels, icon.title).toBeGreaterThan(1);
     }
+  });
+
+  it("builds full jobs from an arbitrary ink sampler", () => {
+    const job = buildSamplerJob({
+      bounds: { minX: -2, maxX: 2, minY: -1, maxY: 1 },
+      isInk: (x, y) => Math.abs(x) <= 2 && Math.abs(y) <= 1
+    }, DEFAULT_SETTINGS);
+
+    expect(job.fillPlans).toHaveLength(SCAN_DIRECTIONS_DEG.length);
+    expect(job.fillPlans[0].segments.every(([a, b]) => a.y === b.y)).toBe(true);
+    expect(job.fillPlans[1].segments.every(([a, b]) => a.x === b.x)).toBe(true);
+    expect(job.edges).toHaveLength(1);
+    expect(job.edges[0][0]).toEqual(job.edges[0].at(-1));
+    const bounds = job.stats.bounds!;
+    expect(bounds.maxX).toBeGreaterThanOrEqual(2.04);
+    expect(bounds.maxX).toBeLessThanOrEqual(2.15);
+    expect(bounds.minY).toBeLessThanOrEqual(-1.04);
+    expect(bounds.minY).toBeGreaterThanOrEqual(-1.15);
   });
 
   it("preserves holes in compound filled brand paths", () => {

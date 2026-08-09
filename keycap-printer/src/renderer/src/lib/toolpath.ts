@@ -53,6 +53,7 @@ export interface LaserSettings {
   engraveFeed: number;
   passes: number;
   curveQuality: number;
+  skeletonMode: boolean;
 }
 
 export interface Point {
@@ -107,7 +108,8 @@ export const DEFAULT_SETTINGS: LaserSettings = {
   power: powerFromPercent(ENGRAVE_POWER_PERCENT),
   engraveFeed: feedFromPercent(ENGRAVE_SPEED_PERCENT),
   passes: 1,
-  curveQuality: 36
+  curveQuality: 36,
+  skeletonMode: false
 };
 
 export function normalizeSettings(settings: Partial<LaserSettings> = {}): LaserSettings {
@@ -127,7 +129,8 @@ export function normalizeSettings(settings: Partial<LaserSettings> = {}): LaserS
     passes: clampInteger(settings.passes, 1, 20, DEFAULT_SETTINGS.passes),
     curveQuality: clampInteger(settings.curveQuality, 8, 96, DEFAULT_SETTINGS.curveQuality),
     mirrorX: Boolean(settings.mirrorX),
-    mirrorY: Boolean(settings.mirrorY)
+    mirrorY: Boolean(settings.mirrorY),
+    skeletonMode: Boolean(settings.skeletonMode)
   };
 }
 
@@ -140,6 +143,17 @@ export function buildIconJob(iconNode: IconNode, settings: Partial<LaserSettings
     (angleDeg) => rasterizeStrokeRows(rotatePolylines(centerlines, -angleDeg, origin), normalized.lineWidth),
     normalized
   );
+}
+
+export interface InkSampler {
+  bounds: Bounds;
+  isInk(x: number, y: number): boolean;
+}
+
+export function buildSamplerJob(sampler: InkSampler, settings: Partial<LaserSettings>): LaserJob {
+  const normalized = normalizeSettings(settings);
+  const origin = iconCenter(normalized);
+  return buildLaserJob((angleDeg) => rasterizeSamplerRows(sampler, angleDeg, origin), normalized);
 }
 
 export function buildSimpleIconJob(pathData: string, settings: Partial<LaserSettings>): LaserJob {
@@ -162,11 +176,14 @@ function buildLaserJob(rowsForAngle: (angleDeg: number) => RasterRows, settings:
   let grayscaleLevels = 0;
 
   for (const angleDeg of SCAN_DIRECTIONS_DEG) {
+    if (settings.skeletonMode && angleDeg !== 0) continue;
     const rows = rowsForAngle(angleDeg);
     const raster = rasterRowsToToolpath(rows);
-    const segments = rotatePolylinesBack(raster.segments, angleDeg, origin);
-    fillPlans.push({ angleDeg, segments, intensities: raster.intensities });
-    bounds = unionBounds(bounds, fillPlanBounds(segments, angleDeg));
+    if (!settings.skeletonMode) {
+      const segments = rotatePolylinesBack(raster.segments, angleDeg, origin);
+      fillPlans.push({ angleDeg, segments, intensities: raster.intensities });
+      bounds = unionBounds(bounds, fillPlanBounds(segments, angleDeg));
+    }
     if (angleDeg === 0) {
       pixelCount = raster.pixelCount;
       scanlineCount = raster.scanlineCount;
@@ -175,8 +192,14 @@ function buildLaserJob(rowsForAngle: (angleDeg: number) => RasterRows, settings:
     }
   }
 
+  if (settings.skeletonMode) {
+    bounds = polylineBounds(edges);
+    scanlineCount = 0;
+    grayscaleLevels = edges.length > 0 ? 1 : 0;
+  }
+
   const workArea = keycapBounds(settings);
-  const baseStats = pathStats([...edges, ...fillPlans[0].segments]);
+  const baseStats = pathStats([...edges, ...(fillPlans[0]?.segments ?? [])]);
 
   return {
     edges,
@@ -412,6 +435,40 @@ function emptyRasterizedToolpath(): RasterizedToolpath {
   return { segments: [], intensities: [], bounds: null, pixelCount: 0, scanlineCount: 0, grayscaleLevels: 0 };
 }
 
+function rasterizeSamplerRows(sampler: InkSampler, angleDeg: number, origin: Point): RasterRows {
+  const rows: RasterRows = new Map();
+  const radians = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+
+  // The scan frame holds geometry rotated by -angle; ink lookups rotate back by +angle.
+  const corners = [
+    { x: sampler.bounds.minX, y: sampler.bounds.minY },
+    { x: sampler.bounds.maxX, y: sampler.bounds.minY },
+    { x: sampler.bounds.minX, y: sampler.bounds.maxY },
+    { x: sampler.bounds.maxX, y: sampler.bounds.maxY }
+  ].map((corner) => rotatePointAround(corner, cos, -sin, origin));
+  const halfPixel = RASTER_PIXEL_MM / 2;
+  const minColumn = Math.floor((Math.min(...corners.map((corner) => corner.x)) - halfPixel) / RASTER_PIXEL_MM);
+  const maxColumn = Math.ceil((Math.max(...corners.map((corner) => corner.x)) + halfPixel) / RASTER_PIXEL_MM);
+  const minRow = Math.floor((Math.min(...corners.map((corner) => corner.y)) - halfPixel) / RASTER_PIXEL_MM);
+  const maxRow = Math.ceil((Math.max(...corners.map((corner) => corner.y)) + halfPixel) / RASTER_PIXEL_MM);
+
+  for (let row = minRow; row <= maxRow; row += 1) {
+    const y = row * RASTER_PIXEL_MM;
+    for (let column = minColumn; column <= maxColumn; column += 1) {
+      const x = column * RASTER_PIXEL_MM;
+      const mask = sampleCoverageMask(x, y, (sample) => {
+        const machine = rotatePointAround(sample, cos, sin, origin);
+        return sampler.isInk(machine.x, machine.y);
+      });
+      addCoverageMask(rows, row, column, mask);
+    }
+  }
+
+  return rows;
+}
+
 function rotatePolylines(lines: Point[][], angleDeg: number, origin: Point): Point[][] {
   if (angleDeg === 0) return lines;
   const radians = (angleDeg * Math.PI) / 180;
@@ -465,6 +522,16 @@ function fillPlanBounds(segments: Point[][], angleDeg: number): Bounds | null {
     minY: roundRasterCoordinate(minY - expandY),
     maxY: roundRasterCoordinate(maxY + expandY)
   };
+}
+
+function polylineBounds(lines: Point[][]): Bounds | null {
+  let bounds: Bounds | null = null;
+  for (const line of lines) {
+    for (const point of line) {
+      bounds = unionBounds(bounds, { minX: point.x, maxX: point.x, minY: point.y, maxY: point.y });
+    }
+  }
+  return bounds;
 }
 
 function unionBounds(a: Bounds | null, b: Bounds | null): Bounds | null {

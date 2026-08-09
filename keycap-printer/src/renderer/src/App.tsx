@@ -48,10 +48,13 @@ import {
   powerToPercent,
   type LaserSettings
 } from "@/lib/toolpath";
+import { buildTextJob, DEFAULT_TEXT_SPEC, FALLBACK_FONT_FAMILIES, FONT_WEIGHTS, type TextSpec } from "@/lib/text-raster";
 import { cn } from "@/lib/utils";
 
 const ICON_BATCH_SIZE = 180;
 const JOG_FEED = 1000;
+const SELECT_CLASS =
+  "h-9 w-full min-w-0 appearance-none rounded-md border border-input bg-background px-2.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20";
 const JOG_STEPS = [0.1, 1, 10] as const;
 const COMMON_ICONS = [
   "Keyboard", "Command", "Code", "Terminal", "Cpu", "Zap", "Power", "Settings", "Wifi", "Bluetooth",
@@ -66,6 +69,7 @@ const COMMON_BRANDS = [
 ];
 
 type IconLibrary = "lucide" | "simple";
+type LibraryTab = IconLibrary | "text";
 
 interface IconEntryBase {
   key: string;
@@ -107,16 +111,18 @@ const SIMPLE_ICON_ENTRIES: SimpleIconEntry[] = Object.values(simpleIcons)
 
 export function App() {
   const [settings, setSettings] = useState<LaserSettings>(DEFAULT_SETTINGS);
-  const [iconLibrary, setIconLibrary] = useState<IconLibrary>("lucide");
+  const [iconLibrary, setIconLibrary] = useState<LibraryTab>("lucide");
   const [selectedKeys, setSelectedKeys] = useState<Record<IconLibrary, string>>({ lucide: "Keyboard", simple: "github" });
+  const [textSpec, setTextSpec] = useState<TextSpec>(DEFAULT_TEXT_SPEC);
+  const [fontFamilies, setFontFamilies] = useState<string[]>(FALLBACK_FONT_FAMILIES);
   const [query, setQuery] = useState("");
   const [visibleIcons, setVisibleIcons] = useState(ICON_BATCH_SIZE);
   const [jogStep, setJogStep] = useState<number>(1);
   const consoleRef = useRef<HTMLPreElement>(null);
   const controller = useLaserController();
 
-  const iconEntries: IconEntry[] = iconLibrary === "lucide" ? LUCIDE_ICON_ENTRIES : SIMPLE_ICON_ENTRIES;
-  const selectedKey = selectedKeys[iconLibrary];
+  const iconEntries: IconEntry[] = iconLibrary === "simple" ? SIMPLE_ICON_ENTRIES : LUCIDE_ICON_ENTRIES;
+  const selectedKey = iconLibrary === "text" ? "" : selectedKeys[iconLibrary];
   const selected = iconEntries.find((entry) => entry.key === selectedKey) ?? iconEntries[0];
   const filteredIcons = useMemo(
     () => iconEntries.filter((entry) => !query.trim() || entry.search.includes(query.trim().toLowerCase())),
@@ -124,6 +130,10 @@ export function App() {
   );
   const jobResult = useMemo(() => {
     try {
+      if (iconLibrary === "text") {
+        if (!textSpec.text.trim()) return { job: null, error: null };
+        return { job: buildTextJob(textSpec, settings), error: null };
+      }
       if (!selected) return { job: null, error: null };
       const job = selected.kind === "lucide"
         ? buildIconJob(selected.node, settings)
@@ -132,7 +142,7 @@ export function App() {
     } catch (error) {
       return { job: null, error: error instanceof Error ? error.message : String(error) };
     }
-  }, [selected, settings]);
+  }, [iconLibrary, textSpec, selected, settings]);
   const job = jobResult.job;
 
   const connected = controller.connection === "connected";
@@ -171,10 +181,27 @@ export function App() {
   }
 
   function changeIconLibrary(value: string) {
-    if (value !== "lucide" && value !== "simple") return;
+    if (value !== "lucide" && value !== "simple" && value !== "text") return;
     setIconLibrary(value);
     setQuery("");
     setVisibleIcons(ICON_BATCH_SIZE);
+    if (value === "text") loadLocalFontFamilies();
+  }
+
+  async function loadLocalFontFamilies() {
+    const queryLocalFonts = (window as { queryLocalFonts?: () => Promise<Array<{ family: string }>> }).queryLocalFonts;
+    if (!queryLocalFonts) return;
+    try {
+      const fonts = await queryLocalFonts();
+      const families = [...new Set(fonts.map((font) => font.family))].sort((a, b) => a.localeCompare(b));
+      if (families.length > 0) setFontFamilies(families);
+    } catch {
+      // Enumeration denied: keep the fallback list; any installed family still works when typed.
+    }
+  }
+
+  function updateTextSpec<Key extends keyof TextSpec>(key: Key, value: TextSpec[Key]) {
+    setTextSpec((current) => ({ ...current, [key]: value }));
   }
 
   function selectIcon(key: string) {
@@ -198,16 +225,20 @@ export function App() {
 
   const rasterSummary = job ? [
     "Protocol: LightBurn-compatible GRBL-M3 raster",
-    `Library: ${selected.kind === "lucide" ? "Lucide" : "Simple Icons"}`,
-    `Icon: ${selected.label}`,
+    `Library: ${iconLibrary === "text" ? "Text" : iconLibrary === "lucide" ? "Lucide" : "Simple Icons"}`,
+    iconLibrary === "text"
+      ? `Text: ${textSpec.text} (${textSpec.fontFamily} ${textSpec.fontWeight}, ${textSpec.fontSizeMm} mm)`
+      : `Icon: ${selected.label}`,
     `Pixels: ${job.stats.pixelCount}`,
     `Scanlines: ${job.stats.scanlineCount}`,
     `Runs: ${job.stats.motionSegments}`,
     `Edge contours: ${job.stats.edgeCount}`,
-    "Scan cycle: horizontal, vertical, 45 deg per pass",
+    settings.skeletonMode ? "Mode: skeleton (edges only)" : "Scan cycle: horizontal, vertical, 45 deg per pass",
     `Grayscale levels: ${job.stats.grayscaleLevels}`,
     "Resolution: 0.1 mm",
-    selected.kind === "lucide" ? `Line width: ${settings.lineWidth.toFixed(1)} mm` : "Fill: solid brand silhouette",
+    iconLibrary === "text"
+      ? "Fill: rendered glyph silhouettes"
+      : iconLibrary === "lucide" ? `Line width: ${settings.lineWidth.toFixed(1)} mm` : "Fill: solid brand silhouette",
     `Power: ${powerToPercent(settings.power).toFixed(0)}%`,
     `Speed: ${feedToPercent(settings.engraveFeed).toFixed(0)}%`,
     `Passes: ${settings.passes}`,
@@ -229,23 +260,77 @@ export function App() {
 
         <div className="space-y-2 p-3 pb-2">
           <Tabs value={iconLibrary} onValueChange={changeIconLibrary}>
-            <TabsList className="grid w-full grid-cols-2">
+            <TabsList className="grid w-full grid-cols-3">
               <TabsTrigger value="lucide">Lucide</TabsTrigger>
-              <TabsTrigger value="simple">Simple Icons</TabsTrigger>
+              <TabsTrigger value="simple">Brands</TabsTrigger>
+              <TabsTrigger value="text">Text</TabsTrigger>
             </TabsList>
           </Tabs>
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={query}
-              onChange={(event) => { setQuery(event.target.value); setVisibleIcons(ICON_BATCH_SIZE); }}
-              className="pl-8"
-              placeholder={iconLibrary === "lucide" ? "Search Lucide icons" : "Search brand logos"}
-              aria-label={iconLibrary === "lucide" ? "Search Lucide icons" : "Search Simple Icons logos"}
-            />
-          </div>
+          {iconLibrary !== "text" ? (
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={(event) => { setQuery(event.target.value); setVisibleIcons(ICON_BATCH_SIZE); }}
+                className="pl-8"
+                placeholder={iconLibrary === "lucide" ? "Search Lucide icons" : "Search brand logos"}
+                aria-label={iconLibrary === "lucide" ? "Search Lucide icons" : "Search Simple Icons logos"}
+              />
+            </div>
+          ) : null}
         </div>
 
+        {iconLibrary === "text" ? (
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+            <label className="block space-y-1.5 text-[11px] font-medium text-muted-foreground">
+              <span>Text</span>
+              <Input
+                value={textSpec.text}
+                onChange={(event) => updateTextSpec("text", event.target.value)}
+                placeholder="Aa"
+                aria-label="Text to engrave"
+              />
+            </label>
+            <label className="block space-y-1.5 text-[11px] font-medium text-muted-foreground">
+              <span>Font family</span>
+              <select
+                value={textSpec.fontFamily}
+                onChange={(event) => updateTextSpec("fontFamily", event.target.value)}
+                className={SELECT_CLASS}
+                aria-label="Font family"
+              >
+                {(fontFamilies.includes(textSpec.fontFamily) ? fontFamilies : [textSpec.fontFamily, ...fontFamilies]).map((family) => (
+                  <option key={family} value={family}>{family}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block space-y-1.5 text-[11px] font-medium text-muted-foreground">
+              <span>Font weight</span>
+              <select
+                value={textSpec.fontWeight}
+                onChange={(event) => updateTextSpec("fontWeight", Number(event.target.value))}
+                className={SELECT_CLASS}
+                aria-label="Font weight"
+              >
+                {FONT_WEIGHTS.map((weight) => (
+                  <option key={weight.value} value={weight.value}>{weight.label}</option>
+                ))}
+              </select>
+            </label>
+            <NumberField label="Font size (mm)" value={textSpec.fontSizeMm} min={1} max={70} step={0.5} onChange={(value) => updateTextSpec("fontSizeMm", value)} />
+            <div
+              className="grid min-h-24 place-items-center overflow-hidden rounded-md border border-border bg-muted/30 px-2 py-4"
+              style={{ fontFamily: `"${textSpec.fontFamily}"`, fontWeight: textSpec.fontWeight }}
+              aria-hidden
+            >
+              <span className="max-w-full truncate text-3xl">{textSpec.text.trim() || "Aa"}</span>
+            </div>
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              Size sets the font's em height in mm; rendered glyphs are usually about 70% of it. Weights not shipped by the font are synthesized.
+            </p>
+          </div>
+        ) : (
+        <>
         <div className="flex items-center justify-between px-4 py-1.5 text-[11px] font-medium text-muted-foreground">
           <span>Icons</span>
           <span className="font-mono">{filteredIcons.length}</span>
@@ -273,13 +358,15 @@ export function App() {
             </button>
           ))}
         </div>
+        </>
+        )}
       </aside>
 
       <section className="min-w-0 overflow-y-auto">
         <header className="sticky top-0 z-20 flex h-[73px] items-center justify-between gap-5 border-b border-border bg-background/95 px-5 backdrop-blur">
           <div className="min-w-0">
             <p className="truncate text-[11px] text-muted-foreground">USB CDC / VID 303A / PID 4001 / 115200 baud</p>
-            <h2 className="mt-0.5 truncate text-xl font-semibold tracking-normal">{selected.label}</h2>
+            <h2 className="mt-0.5 truncate text-xl font-semibold tracking-normal">{iconLibrary === "text" ? (textSpec.text.trim() || "Text") : selected.label}</h2>
           </div>
           <div className={cn(
             "flex h-8 shrink-0 items-center gap-2 rounded-full border px-3 text-xs font-medium",
@@ -336,6 +423,7 @@ export function App() {
                   <NumberField label="Speed %" value={feedToPercent(settings.engraveFeed)} min={1} max={100} step={1} onChange={(value) => updateSetting("engraveFeed", feedFromPercent(value))} />
                   <NumberField label="Passes" value={settings.passes} min={1} max={20} step={1} onChange={(value) => updateSetting("passes", value)} />
                 </div>
+                <CheckField label="Skeleton (edges only, no fill)" checked={settings.skeletonMode} onChange={(value) => updateSetting("skeletonMode", value)} />
               </SettingsGroup>
             </fieldset>
           </section>

@@ -96,7 +96,8 @@ export function isEngraveJobData(value: unknown): value is EngraveJobData {
   if (typeof job.speedPercent !== "number" || !Number.isFinite(job.speedPercent) || job.speedPercent < 1 || job.speedPercent > 100) return false;
   if (typeof job.passes !== "number" || !Number.isInteger(job.passes) || job.passes < 1 || job.passes > 20) return false;
   if (!Array.isArray(job.edges) || job.edges.length > 10_000) return false;
-  if (!Array.isArray(job.fillPlans) || job.fillPlans.length < 1 || job.fillPlans.length > 3) return false;
+  if (!Array.isArray(job.fillPlans) || job.fillPlans.length > 3) return false;
+  if (job.fillPlans.length === 0 && job.edges.length === 0) return false;
 
   const budget = { points: 0 };
   for (const edge of job.edges) {
