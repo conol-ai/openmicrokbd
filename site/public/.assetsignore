@@ -1,0 +1,2 @@
+# Source material not served on the site (wrangler skips these on deploy)
+product photo.jpg

@@ -53,7 +53,7 @@ site/
     ├── js/theme-init.js      # sets the theme before first paint (no flash)
     ├── js/main.js            # theme toggle, scroll reveals, parallax, interactive replica, WebAudio blips
     ├── fonts/                # self-hosted Press Start 2P + VT323 (latin subsets, OFL)
-    ├── assets/               # WebP art (day/night pairs), prototype photo, og image, favicons
+    ├── assets/               # WebP art (day/night pairs), product photo, og image, favicons
     ├── _headers              # security headers (CSP etc.) + cache policy
     ├── robots.txt
     └── sitemap.xml
