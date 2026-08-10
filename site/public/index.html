@@ -26,6 +26,7 @@
 <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
 <link rel="icon" href="/assets/favicon-32.png" type="image/png" sizes="32x32" />
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" />
+<link rel="alternate" type="application/atom+xml" title="OpenMicroKbd Blog" href="/blog/feed.xml" />
 
 <!-- Self-hosted pixel fonts: Press Start 2P for headings/labels, VT323 for body copy -->
 <link rel="preload" href="/fonts/press-start-2p-latin.woff2" as="font" type="font/woff2" crossorigin />
@@ -76,6 +77,7 @@
       <a href="#demo">Try It</a>
       <a href="#blueprint">Blueprint</a>
       <a href="#real">Prototype</a>
+      <a href="/blog/">Blog</a>
     </nav>
 
     <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle day and night theme" aria-pressed="false">
@@ -527,14 +529,26 @@
         <li class="tree__row">
           <span class="tree__branch" aria-hidden="true">├─</span>
           <span class="tree__glyph glyph-folder" aria-hidden="true"></span>
-          <span class="tree__name">src/</span>
+          <span class="tree__name">hw/v1/src/</span>
           <span class="tree__desc">The schematic — written in CoHDL, typed and compiler-checked. The PCB is a program.</span>
         </li>
         <li class="tree__row">
           <span class="tree__branch" aria-hidden="true">├─</span>
           <span class="tree__glyph glyph-folder" aria-hidden="true"></span>
-          <span class="tree__name">out/</span>
+          <span class="tree__name">hw/v1/out/</span>
           <span class="tree__desc">What the compiler emits: netlist, BOM, footprints, layout constraints.</span>
+        </li>
+        <li class="tree__row">
+          <span class="tree__branch" aria-hidden="true">├─</span>
+          <span class="tree__glyph glyph-folder" aria-hidden="true"></span>
+          <span class="tree__name">hw/v1/pcb/</span>
+          <span class="tree__desc">The routed board, ready to open in KiCad.</span>
+        </li>
+        <li class="tree__row">
+          <span class="tree__branch" aria-hidden="true">├─</span>
+          <span class="tree__glyph glyph-folder" aria-hidden="true"></span>
+          <span class="tree__name">hw/v1/fab/</span>
+          <span class="tree__desc">Gerbers, BOM, pick-and-place — upload straight to a fab.</span>
         </li>
         <li class="tree__row">
           <span class="tree__branch" aria-hidden="true">├─</span>
@@ -547,18 +561,6 @@
           <span class="tree__glyph glyph-folder" aria-hidden="true"></span>
           <span class="tree__name">app/</span>
           <span class="tree__desc">The config app — Rust + GPUI. Remap live, save to the board, flash firmware.</span>
-        </li>
-        <li class="tree__row">
-          <span class="tree__branch" aria-hidden="true">├─</span>
-          <span class="tree__glyph glyph-folder" aria-hidden="true"></span>
-          <span class="tree__name">pcb/</span>
-          <span class="tree__desc">The routed board, ready to open in KiCad.</span>
-        </li>
-        <li class="tree__row">
-          <span class="tree__branch" aria-hidden="true">├─</span>
-          <span class="tree__glyph glyph-folder" aria-hidden="true"></span>
-          <span class="tree__name">fab/</span>
-          <span class="tree__desc">Gerbers, BOM, pick-and-place — upload straight to a fab.</span>
         </li>
         <li class="tree__row">
           <span class="tree__branch" aria-hidden="true">└─</span>
@@ -627,11 +629,11 @@
         <a class="btn btn--ghost" href="#top">Back to Top ▲</a>
       </div>
       <nav class="footer__links" aria-label="Footer">
-        <a href="https://github.com/conol-ai/openmicrokbd/tree/main/src" target="_blank" rel="noopener">src/</a>
+        <a href="https://github.com/conol-ai/openmicrokbd/tree/main/hw" target="_blank" rel="noopener">hw/</a>
         <a href="https://github.com/conol-ai/openmicrokbd/tree/main/fw" target="_blank" rel="noopener">fw/</a>
         <a href="https://github.com/conol-ai/openmicrokbd/tree/main/app" target="_blank" rel="noopener">app/</a>
-        <a href="https://github.com/conol-ai/openmicrokbd/tree/main/fab" target="_blank" rel="noopener">fab/</a>
         <a href="https://github.com/conol-ai/openmicrokbd#readme" target="_blank" rel="noopener">README.md</a>
+        <a href="/blog/">blog</a>
       </nav>
       <p class="footer__fine">MIT licensed · under $50 in parts · no permission required</p>
       <p class="footer__heart">made with ♥ and solder</p>

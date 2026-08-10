@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="day">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OpenMicroKbd: an open-source build of OpenAI's $230 Codex Micro macropad · OpenMicroKbd</title>
+<meta name="description" content="An MIT-licensed, wired USB-C macropad that recreates the Codex Micro's control surface for about $37 in parts — open schematic written in CoHDL, Rust + Embassy firmware, a GPUI companion app, and a fab-ready manufacturing package." />
+<link rel="canonical" href="https://openmicrokbd.org/blog/openmicrokbd-launch/" />
+
+<meta property="og:type" content="article" />
+<meta property="og:site_name" content="OpenMicroKbd" />
+<meta property="og:title" content="OpenMicroKbd: an open-source build of OpenAI's $230 Codex Micro macropad" />
+<meta property="og:description" content="Thirteen keys, a knob, a stick, a touch pad — about $37 in parts, every layer open. The PCB is written, not drawn." />
+<meta property="og:url" content="https://openmicrokbd.org/blog/openmicrokbd-launch/" />
+<meta property="og:image" content="https://openmicrokbd.org/assets/og.jpg" />
+<meta property="article:published_time" content="2026-08-10" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="OpenMicroKbd: an open-source build of OpenAI's $230 Codex Micro macropad" />
+<meta name="twitter:description" content="Thirteen keys, a knob, a stick, a touch pad — about $37 in parts, every layer open. The PCB is written, not drawn." />
+<meta name="twitter:image" content="https://openmicrokbd.org/assets/og.jpg" />
+
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f2e2bd" />
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#131a3a" />
+
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+<link rel="icon" href="/assets/favicon-32.png" type="image/png" sizes="32x32" />
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" />
+<link rel="alternate" type="application/atom+xml" title="OpenMicroKbd Blog" href="/blog/feed.xml" />
+
+<link rel="preload" href="/fonts/press-start-2p-latin.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="/fonts/vt323-latin.woff2" as="font" type="font/woff2" crossorigin />
+
+<link rel="stylesheet" href="/css/style.css" />
+<link rel="stylesheet" href="/css/blog.css" />
+<script src="/js/theme-init.js"></script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+
+<div class="progress-track" aria-hidden="true"><div class="progress-fill" id="progressFill"></div></div>
+
+<header class="nav" id="nav">
+  <div class="nav__inner">
+    <a class="brand" href="/" aria-label="OpenMicroKbd — home">
+      <span class="logo-mark" aria-hidden="true">
+        <i class="lm-knob"></i>
+        <i class="lm-key lm-key--voice"></i>
+        <i class="lm-key lm-key--a"></i>
+        <i class="lm-key lm-key--b"></i>
+        <i class="lm-key lm-key--c"></i>
+      </span>
+      <span class="brand__text">OPEN MICRO KBD</span>
+    </a>
+
+    <nav class="nav__links" aria-label="Sections">
+      <a href="/#paradox">The Paradox</a>
+      <a href="/#features">Features</a>
+      <a href="/#demo">Try It</a>
+      <a href="/#blueprint">Blueprint</a>
+      <a href="/blog/" aria-current="true">Blog</a>
+    </nav>
+
+    <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle day and night theme" aria-pressed="false">
+      <span class="theme-toggle__track" aria-hidden="true">
+        <span class="theme-toggle__icon theme-toggle__icon--sun"></span>
+        <span class="theme-toggle__icon theme-toggle__icon--moon"></span>
+        <span class="theme-toggle__knob"></span>
+      </span>
+      <span class="theme-toggle__label" id="themeLabel">DAY</span>
+    </button>
+
+    <button class="nav__burger" id="navBurger" type="button" aria-label="Open menu" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+</header>
+
+<main class="blog-main" id="content">
+
+<header class="post-head">
+  <p class="section-kicker">THE BLOG · LAUNCH POST</p>
+  <h1>OpenMicroKbd: an open-source build of OpenAI's $230 Codex Micro macropad</h1>
+  <p class="post-meta"><span>Tony Huang</span><span>August 10, 2026</span><span>~10 min read</span></p>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <div class="toc-title">CONTENTS</div>
+  <ul>
+    <li><a href="#project-snapshot">Project snapshot</a></li>
+    <li><a href="#why-build-one-at-all">Why build one at all</a></li>
+    <li><a href="#part-one-a-pcb-complicated-enough-to-be-useful">Part one: a PCB complicated enough to be useful</a>
+      <ul>
+        <li><a href="#what-one-board-actually-costs">What one board actually costs</a></li>
+        <li><a href="#from-requirements-to-routed-copper">From requirements to routed copper</a></li>
+        <li><a href="#the-pcb-is-written-not-drawn">The PCB is written, not drawn</a></li>
+      </ul>
+    </li>
+    <li><a href="#part-two-the-enclosure">Part two: the enclosure</a></li>
+    <li><a href="#part-three-firmware-and-its-failure-modes">Part three: firmware and its failure modes</a>
+      <ul>
+        <li><a href="#deep-dive-one-the-keymap-lives-on-the-device">Deep dive one: the keymap lives on the device</a></li>
+        <li><a href="#deep-dive-two-dfu-without-a-resident-bootloader">Deep dive two: DFU without a resident bootloader</a></li>
+        <li><a href="#deep-dive-three-fitting-21-leds-inside-the-usb-budget">Deep dive three: fitting 21 LEDs inside the USB budget</a></li>
+        <li><a href="#deep-dive-four-usb-disciplines-the-core-clock">Deep dive four: USB disciplines the core clock</a></li>
+        <li><a href="#deep-dive-five-the-pin-map-is-generated-not-copied">Deep dive five: the pin map is generated, not copied</a></li>
+      </ul>
+    </li>
+    <li><a href="#part-four-the-companion-app">Part four: the companion app</a></li>
+    <li><a href="#scope-and-what-you-are-choosing">Scope, and what you are choosing</a></li>
+    <li><a href="#build-one">Build one</a></li>
+  </ul>
+</nav>
+
+<article class="post-body">
+
+<p>In July 2026, OpenAI shipped its first branded hardware: the <strong>Codex Micro</strong>, a <strong>$230</strong> macropad built with Work Louder. Thirteen keys, a dial, a joystick, a touch sensor, RGB lighting, Bluetooth, and a CNC aluminium and polycarbonate case.</p>
+
+<p><strong>OpenMicroKbd</strong> is an open-source board that recreates that control layout. MIT licensed, wired USB-C, and <strong>about $37 in parts and assembly</strong> for one board. The schematic, firmware, companion app, routed board, and the full manufacturing package are all published — you can send the Gerbers to a fab today.</p>
+
+<p><em>This is an independent open-source project, not affiliated with, endorsed by, or sponsored by OpenAI. "Codex Micro" refers to OpenAI's product; all trademarks belong to their respective owners. I will not sell OpenMicroKbd — the point is that you can make it without me.</em></p>
+
+<h2 id="project-snapshot">Project snapshot</h2>
+<ul>
+<li><strong>Device</strong> — wired USB-C macropad: 13 low-profile switches, an encoder, a joystick, a capacitive touch pad, 21 addressable LEDs</li>
+<li><strong>Cost</strong> — about <strong>$37 for one assembled board</strong> (PCB + turnkey SMT + switches + keycaps, one-off prototype pricing)</li>
+<li><strong>Stack</strong> — <code>STM32F072</code> · Rust + Embassy firmware · Rust + GPUI desktop app · MIT</li>
+<li><strong>Repository</strong> — <a href="https://github.com/conol-ai/openmicrokbd" rel="noopener">github.com/conol-ai/openmicrokbd</a></li>
+<li><strong>Published</strong> — CoHDL schematic source, generated netlist / BOM / footprints, the routed <code>openmicro.kicad_pcb</code>, a fab-ready Gerber package, firmware, and the host app</li>
+<li><strong>Not a substitute for</strong> — the commercial device's wireless operation, its battery, or its machined case</li>
+</ul>
+
+<p>It began as a recreation of the Codex Micro's layout, but it is not limited to Codex. It targets AI-assisted coding, terminal workflows, video editing, color grading, and other work built around shortcuts and scrubbing.</p>
+
+<p>Every input's emitted code is <strong>configurable and stored in the board's own flash</strong>. Out of the box the keys send F13–F20 and Shift+F13–F17 — deliberately chosen because those are interceptable on every OS and collide with nothing — but you can reassign any key to a different keycode, a modifier-qualified combination, or a media usage, save it to the device, and it keeps that mapping on any machine you plug it into.</p>
+
+<h2 id="why-build-one-at-all">Why build one at all</h2>
+
+<p>The Codex Micro is genuinely interesting hardware. Its six frosted <strong>Agent Keys</strong> display thread state: idle, thinking, complete, needs human, error.</p>
+
+<p>That status integration is tied to the <strong>ChatGPT desktop app</strong>, which bridges thread state to the LEDs. Use Codex CLI, a browser, VS Code, or JetBrains and those six keys go static or dark. There is no public device SDK.</p>
+
+<p>Reactions converged on that mismatch. <em>Ars Technica</em> asked why OpenAI's first branded hardware was a light-up keyboard. <em>The New Stack</em> asked whether anyone needed one. <em>TechCrunch</em> called it fun for some coders and mystifying to others. An HN reader put the engineering objection more bluntly: <em>"This is just a Macropad, right? All of the smarts are on the PC side. So why is it so expensive?"</em></p>
+
+<p>Price is the hook, but it is not really the argument.</p>
+
+<blockquote class="pullquote">
+<p><strong>The problem worth solving is not that the macropad costs $230. It is that a general-purpose input device keeps its most interesting behavior behind one application.</strong></p>
+</blockquote>
+
+<p>So the goal here was a board with the same physical vocabulary and none of that boundary: <strong>open schematic, open firmware, open host app, and a manufacturing package anyone can send to a fab</strong>.</p>
+
+<p>There was a second motive, and it is the reason this particular board exists rather than some easier one. I have been building <strong>CoHDL</strong>, a hardware description language for PCBs, and I needed to prove it on something real with awkward requirements: a key matrix, a rotary encoder, an analog joystick, a capacitive touch pad, two LED chains, and a USB power budget to respect. Small enough to finish. Complicated enough to be a fair test.</p>
+
+<p>A complete device here has four layers — <strong>PCB, enclosure, firmware, host application</strong> — and the sections below follow that boundary.</p>
+
+<h2 id="part-one-a-pcb-complicated-enough-to-be-useful">Part one: a PCB complicated enough to be useful</h2>
+
+<p>The board uses an <strong><code>STM32F072CBT6</code></strong> Cortex-M0 with 128 KiB of flash and 16 KiB of SRAM. It includes an 8 MHz HSE crystal and a 2×3 SWD debug socket. It measures <strong>95 × 95 mm</strong> on a 4-layer stackup: signal, two ground planes, signal.</p>
+
+<p>Controls occupy a square <strong>4×4 grid at 19.05 mm spacing</strong>:</p>
+<ul>
+<li>13 <strong>Kailh Choc V2</strong> switches, each with a <code>1N4148W</code> diode — thirteen independent 1U positions</li>
+<li>An <code>EC11</code> encoder with push</li>
+<li>An <code>RKJXV</code> analog joystick with push</li>
+<li>A capacitive touch electrode implemented directly as PCB copper</li>
+</ul>
+
+<p>Lighting uses two WS2812-compatible chains, <strong>21 LEDs total</strong>: 13 reverse-mount <code>SK6812MINI-E</code> LEDs beneath the keys, and 8 more around the perimeter as underglow. <code>USBLC6</code> provides USB ESD protection, and an <code>AP2112</code> regulates 3.3 V.</p>
+
+<h3 id="what-one-board-actually-costs">What one board actually costs</h3>
+
+<p>These are real quoted prices for a single prototype run. The <strong>SMT</strong> line is a turnkey quote: it covers the components <em>and</em> machine assembly, so the component detail below is nested inside it rather than added on top.</p>
+
+<div class="table-scroll">
+<table>
+<thead>
+<tr><th>Line</th><th>Cost</th></tr>
+</thead>
+<tbody>
+<tr><td>PCB (4-layer, 95 × 95 mm)</td><td>$6.93</td></tr>
+<tr><td>SMT assembly — turnkey, parts + placement</td><td>$18.14</td></tr>
+<tr><td>13 × Kailh Choc switches</td><td>$2.97</td></tr>
+<tr><td>Keycap set</td><td>$8.85</td></tr>
+<tr class="total"><td><strong>Total, one assembled board</strong></td><td><strong>$36.90</strong></td></tr>
+</tbody>
+</table>
+</div>
+
+<p>Inside that SMT quote, the component spend breaks down as follows — <strong>$7.67 of parts</strong>, with the rest of the line being the fab's assembly service:</p>
+
+<div class="table-scroll">
+<table>
+<thead>
+<tr><th>Component</th><th>Qty</th><th>Cost</th></tr>
+</thead>
+<tbody>
+<tr><td><code>STM32F072CBT6</code></td><td>1</td><td>$2.88</td></tr>
+<tr><td><code>EC11</code> encoder</td><td>1</td><td>$1.64</td></tr>
+<tr><td><code>RKJXV</code> joystick</td><td>1</td><td>$0.97</td></tr>
+<tr><td>Passives</td><td>1 set</td><td>$0.84</td></tr>
+<tr><td>21 × <code>SK6812MINI-E</code> LEDs</td><td>21</td><td>$0.90</td></tr>
+<tr><td>8 MHz crystal</td><td>1</td><td>$0.13</td></tr>
+<tr><td><code>AP2112</code> LDO</td><td>1</td><td>$0.10</td></tr>
+<tr><td><code>USBLC6</code> ESD protection</td><td>1</td><td>$0.05</td></tr>
+<tr><td>USB-C port</td><td>1</td><td>$0.15</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>Two things worth saying plainly about that number.</p>
+
+<p>First, <strong>it is a one-off prototype quote</strong>, with hand-populated through-hole parts and no shipping, spare boards, or failed attempts included. Different fabs, finishes, and shipping choices move it; add a spare board and a courier and it climbs. My labour is priced at zero throughout.</p>
+
+<p>Second — and more importantly:</p>
+
+<blockquote class="pullquote">
+<p><strong>$37 and $230 are not the same kind of number, and this is not a like-for-like comparison.</strong></p>
+</blockquote>
+
+<p>The commercial device runs <strong>wireless over Bluetooth</strong>, and carries the power management and cell to do it — Work Louder's equivalent Creator Micro 2 PRO lists a 2100 mAh battery. This board is wired-only: no radio, no antenna, no RF layout, no wireless stack, no charging circuit, and no radio certification. The commercial unit also arrives in a <strong>CNC aluminium and polycarbonate case</strong>; this one gets a 3D print. And the $230 buys assembly at volume, testing, packaging, distribution, warranty, support, and margin — none of which appear in a prototype quote.</p>
+
+<p>The honest claim is not "six times cheaper." It is that <strong>an open board with the same control surface costs tens of dollars to make</strong>, and you can inspect and change every layer of it.</p>
+
+<h3 id="from-requirements-to-routed-copper">From requirements to routed copper</h3>
+
+<p>The workflow started with concrete requirements given to an agent: control layout, matrix, power rails, USB, LEDs, MCU resources, mechanical constraints. That conversation became <strong>CoHDL source</strong> for the schematic-level design.</p>
+
+<p>CoHDL emitted the netlist, BOM, footprints, and constraints. The design then went to <strong><a href="https://quilter.ai" rel="noopener">Quilter.ai</a></strong> for physical layout. The resulting boards were ordered from a fab and populated.</p>
+
+<p>An agent also assisted with firmware and host-app development. It did not produce a finished system from one prompt. Pin assignments, component choices, generated outputs, layout, soldering, bring-up, behavior, and failure modes all required review and debugging.</p>
+
+<h3 id="the-pcb-is-written-not-drawn">The PCB is written, not drawn</h3>
+
+<p>The schematic for this board is not a drawing. It is source code:</p>
+
+<pre><code>inst sw: [SW_KEY; 13]
+inst d: [diode::D_1N4148W; 13]
+
+net ROW1: mcu.PA10, sw[2..=5].A
+net COL1: mcu.PB5, d[0, 3, 7, 10].Cathode
+</code></pre>
+
+<p>Power intent can be attached to a net:</p>
+
+<pre><code>#[intent("AP2112K enable tied to VIN — always on when USB is present")]
+#[high_current(500mA)]
+net V3V3 [3.3V]: ldo.VOUT, mcu.VDD, mcu.VDDA, mcu.VBAT, mcu.VDDIO2, joy.X_END_B, joy.Y_END_B,
+                 c_vdda.A, c_vdd_a.A, c_vdd_b.A, c_vdda_hf.A
+</code></pre>
+
+<p><code>[3.3V]</code> is a <strong>unit annotation</strong>. <code>#[intent(...)]</code> makes design intent <em>a checkable attribute rather than an unverified comment</em>. The compiler checks units, pin-connection obligations, and power-integrity rules, then writes netlist, BOM, footprint, and constraint artifacts under <code>hw/v1/out/</code>. It also generates the firmware pin map from the hardware source.</p>
+
+<p>Two honest boundaries. <strong>CoHDL produced the schematic and its generated outputs; Quilter.ai did the physical layout</strong> — the routing is not written. And <strong>the compiler is not public yet</strong>, which matters: source hardware is most useful when someone else can run the whole toolchain. For now CoHDL is a demonstrated but unreproducible part of this project.</p>
+
+<h2 id="part-two-the-enclosure">Part two: the enclosure</h2>
+
+<p>A bare PCB is not a satisfactory desktop device. It rocks on components or standoffs, exposes solder joints, and makes a side-mounted USB connector awkward to reach.</p>
+
+<p>The prototype wears a <strong>single-piece 3D-printed case</strong>, and the repository ships the exact <strong>board outline as DXF</strong> under <code>hw/v1/mechanical/</code> — everything needed to model a case around the board. The printable case model itself is still being tidied up for release.</p>
+
+<p>The enclosure is also the layer most worth remixing, and the easiest to change safely. Tilt, feet, material, encoder height, and USB-cable clearance can all vary without touching the electronics. If you design a variant, publish the editable source beside the printable output, and <strong>leave the SWD socket accessible</strong> — it is the recovery path if a firmware update goes wrong.</p>
+
+<h2 id="part-three-firmware-and-its-failure-modes">Part three: firmware and its failure modes</h2>
+
+<p>Firmware lives under <code>fw/</code> and uses <strong>Rust with Embassy</strong> for <code>thumbv6m</code>. The current build occupies about <strong>22 KiB of 128 KiB flash</strong> and roughly <strong>5 KiB of 16 KiB static RAM</strong>, with LTO and <code>opt-level="s"</code>.</p>
+
+<p>There is no separate RTOS, and the crate's own <code>unsafe</code> is confined to a handful of narrow, commented blocks: the WS2812 inline-asm bit timing, the DFU no-init-RAM handoff into the ROM bootloader, and one memory-mapped flash read.</p>
+
+<p>The <strong>COL2ROW</strong> matrix scans at <strong>1 kHz with 5 ms debounce</strong>. The exact GPIO assignments come from the generated pin map — more on that below.</p>
+
+<p>USB exposes a composite HID device — keyboard, consumer control, and a mouse interface that carries the joystick's pointer modes — plus a vendor interface on usage page <code>0xFF60</code> with <strong>32-byte reports</strong>. <code>bcdDevice</code> carries the Cargo semantic version, letting the updater decide whether an update is needed <em>without opening the vendor interface</em>.</p>
+
+<h3 id="deep-dive-one-the-keymap-lives-on-the-device">Deep dive one: the keymap lives on the device</h3>
+
+<p>Every input is a <strong>slot</strong>, and there are 24 of them: 13 keys, three for the encoder, five for the joystick, three for the touch pad. Each slot is four bytes:</p>
+
+<pre><code>pub struct Slot {
+    pub kind: u8,   // none / keyboard / consumer
+    pub mods: u8,   // HID modifier bitmask — ctrl, shift, alt, gui
+    pub code: u16,  // keyboard usage, or consumer usage
+}
+</code></pre>
+
+<p>That <code>mods</code> byte is what makes the board more than an F-key pad. A slot can emit a plain keycode, a <strong>modifier-qualified combination</strong>, or a consumer usage like play/pause. The factory defaults use F13–F20 plain and Shift+F13–F17 for the remaining five keys, so nothing collides with an existing OS shortcut out of the box — but none of that is baked in.</p>
+
+<p>The whole table is <strong>persisted in the last 2 KiB flash page</strong>, at offset <code>0x1F800</code>. The blob is 120 bytes in today's layout: an <code>"OMK1"</code> magic, a layout version, analog tuning, the 24 slots, lighting settings, and a checksum — and the loader still accepts every earlier layout version. Vendor HID commands manage it — <code>GET_KEYMAP</code>, <code>SET_KEYMAP</code>, <code>SAVE</code>, <code>FACTORY_RESET</code>.</p>
+
+<p>The save path is ordered deliberately. The body is written first and <strong>the magic word is written last, as its own operation</strong>. If power dies mid-save, the header stays erased, the magic check fails on next boot, and the board comes up on factory defaults rather than a half-written keymap. The checksum catches the subtler tear where power drops between body and magic during a re-save.</p>
+
+<p>Corrupt slots degrade rather than propagate: a bad <code>kind</code>, or a keyboard code above <code>0xFF</code>, becomes a disabled slot instead of a wrong keypress.</p>
+
+<h3 id="deep-dive-two-dfu-without-a-resident-bootloader">Deep dive two: DFU without a resident bootloader</h3>
+
+<p>The app requests DFU with a vendor HID command. The device acknowledges it, writes a magic word into no-init RAM, and reboots.</p>
+
+<p>Early startup checks and clears that marker <em>before peripheral initialization</em>, then jumps to STM32 ROM system memory at <strong><code>0x1FFF_C800</code></strong>, as documented by ST AN2606.</p>
+
+<p>The chip re-enumerates as ST DFU device <strong><code>0483:df11</code></strong> on the same USB-C port, and the app speaks <strong>DfuSe (AN3156)</strong> over libusb directly: erase the covered 2 KiB pages, program in <code>wTransferSize</code> blocks, set the address pointer, manifest. No custom resident bootloader consumes flash, requires versioning, or has to coordinate with the application image.</p>
+
+<p>Before any of that happens, the app <strong>sanity-checks the image</strong> — it validates the Cortex-M0 vector table against 128 K flash and 16 K RAM, so pointing it at the wrong <code>.bin</code> is refused before a single page is erased.</p>
+
+<p>The failure mode still matters. <code>BOOT0</code> is held low, so ROM entry is software-only. If power fails mid-programming, the application may be gone and the board will <strong>not</strong> automatically return to DFU. Recovery is the SWD socket.</p>
+
+<p>That trade is acceptable for a board with an exposed debug socket. It would need reconsideration in a sealed consumer product.</p>
+
+<h3 id="deep-dive-three-fitting-21-leds-inside-the-usb-budget">Deep dive three: fitting 21 LEDs inside the USB budget</h3>
+
+<p>Twenty-one addressable LEDs can still exceed the <strong>USB 2.0 500 mA budget</strong> at full white. Firmware limits every channel using <code>scaled(n / 64)</code>, across both the 13 key LEDs and the 8 perimeter LEDs sharing VBUS.</p>
+
+<p>This is a <strong>static ceiling, not a dynamic current model</strong>. It neither estimates draw from the current color mix nor negotiates higher USB-C current. The worst case is predictable, but the LEDs never reach their standalone rated brightness.</p>
+
+<p>The protocol is bit-banged, and its cycle counts assume a <strong>48 MHz core</strong>. Clock configuration is therefore <em>part of driver correctness</em>, not merely performance tuning.</p>
+
+<h3 id="deep-dive-four-usb-disciplines-the-core-clock">Deep dive four: USB disciplines the core clock</h3>
+
+<p>Although the board includes an <strong>8 MHz HSE crystal</strong>, the current firmware does not depend on it. HSI48 drives the CPU and USB peripheral at 48 MHz.</p>
+
+<p>The STM32 <strong>Clock Recovery System</strong> disciplines HSI48 against USB Start-of-Frame packets. USB becomes the timing reference, keeping the core at the frequency the LED driver assumes while leaving the crystal available for future firmware and debugging.</p>
+
+<p>The boundary is explicit: this design assumes a USB-connected device. It would be a poor clock strategy for a wireless, battery-powered variant running for long periods without SOF packets — one concrete example of how far the two designs diverge once a radio is involved.</p>
+
+<h3 id="deep-dive-five-the-pin-map-is-generated-not-copied">Deep dive five: the pin map is generated, not copied</h3>
+
+<p>Firmware does not choose its pins independently. CoHDL generates the pin map from the hardware source.</p>
+
+<p>That removes a common <strong>two-file failure</strong>: changing a schematic pin while forgetting the corresponding firmware constant. Generated files are not automatically correct; <em>they preserve bad choices as reliably as good ones</em>. The narrower benefit still holds — electrical intent and firmware assumptions cannot silently drift apart.</p>
+
+<h2 id="part-four-the-companion-app">Part four: the companion app</h2>
+
+<p>The <strong>Rust and GPUI</strong> app under <code>app/</code> does three things.</p>
+
+<p>It <strong>finds the pad</strong> over the vendor HID interface (<code>1209:0001</code>, usage page <code>0xFF60</code>) and shows live connection state, the running firmware version via an in-band query, and the serial.</p>
+
+<p>It <strong>updates firmware</strong> over the DFU path described above — pick a <code>.bin</code>, press Install, and it validates, reboots to ROM DFU, programs, waits for re-enumeration, and confirms the new version.</p>
+
+<p>And it <strong>edits the keymap</strong>, reading the current table off the device, letting you reassign any slot, and writing it back into flash. Because the mapping lives on the board, it travels with the hardware: configure it once, plug it into a different machine, and the keys behave the same with no software installed there.</p>
+
+<p>Separately, the app can bind a key to a <strong>host-side action</strong> — running a shell command (<code>sh -c</code>, or <code>cmd /C</code> on Windows) or opening a URL, file, or app through the OS default handler. Those bindings are host-side by nature and live in the app's own configuration; a keyboard cannot launch your build script by itself. So there are two layers available, and the trade-off between them is explicit: <strong>device-resident keymaps are portable, host-side actions are more powerful.</strong></p>
+
+<h2 id="scope-and-what-you-are-choosing">Scope, and what you are choosing</h2>
+
+<p>A different device with different priorities, not a feature-for-feature substitute:</p>
+<ul>
+<li><strong>Wired only</strong> — USB-C, with no radio and no battery. The commercial device works wirelessly over Bluetooth.</li>
+<li><strong>Printed case, not machined</strong> — the enclosure is FDM plastic rather than CNC aluminium and polycarbonate.</li>
+<li><strong>Rust and Embassy instead of QMK/ZMK</strong> — a small async firmware with direct control over USB, updating, keymap persistence, and peripherals, in exchange for the tooling ecosystem those projects have built. It is not VIA-compatible; keymap editing goes through this project's own app.</li>
+<li><strong>No Codex integration</strong> — no ChatGPT desktop bridge and no agent-status choreography. The vendor HID interface is open and documented in the firmware source for anyone who wants to build one.</li>
+<li><strong>The CoHDL compiler is not public yet</strong> — you can read the schematic source and every generated artifact, but you cannot yet regenerate them yourself.</li>
+</ul>
+
+<p>The commercial product arrives assembled, enclosed, tested, and supported. This project asks you to supply assembly and time, in exchange for <em>a board you can modify</em>.</p>
+
+<h2 id="build-one">Build one</h2>
+
+<p>The repository is <a href="https://github.com/conol-ai/openmicrokbd" rel="noopener">github.com/conol-ai/openmicrokbd</a>:</p>
+<ul>
+<li>CoHDL schematic source — <code>hw/v1/src/</code></li>
+<li>Generated netlist, BOM, footprints, constraints — <code>hw/v1/out/</code></li>
+<li>The routed board — <code>hw/v1/pcb/openmicro.kicad_pcb</code>, opens in KiCad 10+</li>
+<li><strong>Fab-ready manufacturing package</strong> — <code>hw/v1/fab/</code></li>
+<li>Board outline DXF — <code>hw/v1/mechanical/</code></li>
+<li>Datasheets for every active, connector, and electromechanical part — <code>hw/v1/docs/</code></li>
+<li>Firmware — <code>fw/</code></li>
+<li>Companion app — <code>app/</code></li>
+</ul>
+
+<p>Build the firmware and app from source:</p>
+
+<pre><code>git clone https://github.com/conol-ai/openmicrokbd
+cd openmicrokbd
+scripts/build-firmware.sh dist        # production binary + debug ELF
+cd app &amp;&amp; cargo run --release --locked
+</code></pre>
+
+<p>To order boards, upload <code>hw/v1/fab/openmicro-gerbers.zip</code> with the assembly BOM and the SMT placement CSV. The board is <strong>4-layer, 95 × 95 mm, 1.6 mm FR-4</strong>; DRC reports <strong>zero unconnected items</strong>, and the remaining clearance and silkscreen flags are documented and accepted in <code>hw/v1/fab/README.md</code>. Two ordering notes that matter: specify <strong>ENIG</strong> so the capacitive touch pad works properly, and note that the through-hole parts — switches, encoder, joystick — are <strong>hand-populated</strong>, since the pick-and-place file covers SMD only.</p>
+
+<p>If you build one, <strong>keep the SWD socket reachable</strong>. Because <code>BOOT0</code> is held low, that socket is the recovery path after a power loss during a firmware update.</p>
+
+<blockquote class="pullquote">
+<p><strong>The manufacturing files are in the repository. The point was never to show you a board — it was to let you make one.</strong></p>
+</blockquote>
+
+<p>Thanks to <strong>Quilter.ai</strong> for the physical layout, and to the readers who challenged the original product's closed feedback path. The useful criticism was never that a macropad is silly. It was that <strong>a general-purpose input device should stay general-purpose</strong>.</p>
+
+<p>One last thing, for anyone who scrolled past the code. That schematic was never drawn in an editor — it was <strong>written, type-checked, and compiled</strong>. The language is called <strong>CoHDL</strong>, and it is the part of this project I am most interested in. Its compiler is not public yet, so the generated files in <code>hw/v1/out/</code> are the only evidence I can offer today. It gets its own write-up when it opens.</p>
+
+<p>Until then the keyboard is the argument. <strong>The PCB is written, not drawn</strong> — and you can read every line of it today.</p>
+
+</article>
+
+<div class="post-foot">
+  <a class="btn btn--primary" href="https://github.com/conol-ai/openmicrokbd" target="_blank" rel="noopener">★ Get the Blueprint on GitHub</a>
+  <a class="btn btn--ghost" href="/blog/">← All Posts</a>
+</div>
+
+</main>
+
+<footer class="footer--mini">
+  <div class="inner">
+    <span>OpenMicroKbd · MIT licensed · made with ♥ and solder</span>
+    <nav aria-label="Footer">
+      <a href="/">Home</a>
+      <a href="/#demo">Try It</a>
+      <a href="/blog/">Blog</a>
+      <a href="https://github.com/conol-ai/openmicrokbd" rel="noopener">GitHub</a>
+      <a href="/blog/feed.xml">Feed</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="/js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="day">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Blog · OpenMicroKbd</title>
+<meta name="description" content="Build logs and write-ups from OpenMicroKbd — the open-source keyboard built around your needs." />
+<link rel="canonical" href="https://openmicrokbd.org/blog/" />
+
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="OpenMicroKbd" />
+<meta property="og:title" content="Blog · OpenMicroKbd" />
+<meta property="og:description" content="Build logs and write-ups from OpenMicroKbd — the open-source keyboard built around your needs." />
+<meta property="og:url" content="https://openmicrokbd.org/blog/" />
+<meta property="og:image" content="https://openmicrokbd.org/assets/og.jpg" />
+<meta name="twitter:card" content="summary_large_image" />
+
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f2e2bd" />
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#131a3a" />
+
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+<link rel="icon" href="/assets/favicon-32.png" type="image/png" sizes="32x32" />
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" />
+<link rel="alternate" type="application/atom+xml" title="OpenMicroKbd Blog" href="/blog/feed.xml" />
+
+<link rel="preload" href="/fonts/press-start-2p-latin.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="/fonts/vt323-latin.woff2" as="font" type="font/woff2" crossorigin />
+
+<link rel="stylesheet" href="/css/style.css" />
+<link rel="stylesheet" href="/css/blog.css" />
+<script src="/js/theme-init.js"></script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+
+<div class="progress-track" aria-hidden="true"><div class="progress-fill" id="progressFill"></div></div>
+
+<header class="nav" id="nav">
+  <div class="nav__inner">
+    <a class="brand" href="/" aria-label="OpenMicroKbd — home">
+      <span class="logo-mark" aria-hidden="true">
+        <i class="lm-knob"></i>
+        <i class="lm-key lm-key--voice"></i>
+        <i class="lm-key lm-key--a"></i>
+        <i class="lm-key lm-key--b"></i>
+        <i class="lm-key lm-key--c"></i>
+      </span>
+      <span class="brand__text">OPEN MICRO KBD</span>
+    </a>
+
+    <nav class="nav__links" aria-label="Sections">
+      <a href="/#paradox">The Paradox</a>
+      <a href="/#features">Features</a>
+      <a href="/#demo">Try It</a>
+      <a href="/#blueprint">Blueprint</a>
+      <a href="/blog/" aria-current="true">Blog</a>
+    </nav>
+
+    <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle day and night theme" aria-pressed="false">
+      <span class="theme-toggle__track" aria-hidden="true">
+        <span class="theme-toggle__icon theme-toggle__icon--sun"></span>
+        <span class="theme-toggle__icon theme-toggle__icon--moon"></span>
+        <span class="theme-toggle__knob"></span>
+      </span>
+      <span class="theme-toggle__label" id="themeLabel">DAY</span>
+    </button>
+
+    <button class="nav__burger" id="navBurger" type="button" aria-label="Open menu" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+</header>
+
+<main class="blog-main" id="content">
+
+<header class="blog-head">
+  <p class="section-kicker">DEV LOG</p>
+  <h1 class="section-title">THE BLOG</h1>
+  <p class="section-lede">Build logs and write-ups. Every entry as open as the board.</p>
+</header>
+
+<a class="post-card" href="/blog/openmicrokbd-launch/">
+  <p class="post-card__date">2026 · 08 · 10</p>
+  <p class="post-card__title">OpenMicroKbd: an open-source build of OpenAI's $230 Codex Micro macropad</p>
+  <p class="post-card__excerpt">Thirteen keys, a knob, a stick, a touch pad — about $37 in parts, every layer open. Why the board exists, what it really costs, five firmware deep dives, and the language its schematic is written in.</p>
+  <p class="post-card__read">READ ▸</p>
+</a>
+
+<p class="blog-feedline">Subscribe with the <a href="/blog/feed.xml">Atom feed</a>.</p>
+
+</main>
+
+<footer class="footer--mini">
+  <div class="inner">
+    <span>OpenMicroKbd · MIT licensed · made with ♥ and solder</span>
+    <nav aria-label="Footer">
+      <a href="/">Home</a>
+      <a href="/#demo">Try It</a>
+      <a href="https://github.com/conol-ai/openmicrokbd" rel="noopener">GitHub</a>
+      <a href="/blog/feed.xml">Feed</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="/js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,208 @@
+/* ============================================================
+   OPEN MICRO KBD — blog styles
+   Loaded after style.css; reuses its tokens, nav, buttons and
+   theme machinery. Long-form article typography in the same
+   cozy pixel language: VT323 body, Press Start headings,
+   CRT-styled code blocks, pixel-panel tables and quotes.
+   ============================================================ */
+
+.blog-main {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 150px 24px 90px;
+}
+
+/* ---------- post header ---------- */
+.post-head {
+  background: var(--panel);
+  padding: 30px 28px 26px;
+  margin-bottom: 34px;
+  box-shadow:
+    0 0 0 var(--px) var(--panel-edge),
+    0 0 0 calc(var(--px)*2) var(--panel-edge-2),
+    inset 0 var(--px) 0 0 rgba(255,255,255,.30),
+    calc(var(--px)*2) calc(var(--px)*2) 0 0 rgba(0,0,0,.16);
+  transition: background-color var(--t-theme) var(--ease);
+}
+.post-head .section-kicker { text-align: left; margin-bottom: 12px; }
+.post-head h1 {
+  font-size: clamp(16px, 2.6vw, 24px);
+  line-height: 1.7;
+  margin: 0 0 16px;
+  color: var(--ink);
+  text-shadow: 3px 3px 0 rgba(58,36,24,.14);
+}
+html[data-theme="night"] .post-head h1 { text-shadow: 3px 3px 0 rgba(0,0,0,.5); }
+.post-meta { font-size: 20px; color: var(--ink-dim); display: flex; flex-wrap: wrap; gap: 6px 18px; }
+
+/* ---------- table of contents ---------- */
+.toc {
+  background: var(--panel-2);
+  padding: 18px 22px 16px;
+  margin: 0 0 40px;
+  box-shadow: 0 0 0 var(--px) var(--panel-edge-2), var(--px) var(--px) 0 0 rgba(0,0,0,.12);
+  transition: background-color var(--t-theme) var(--ease);
+}
+.toc-title {
+  font-family: "Press Start 2P", monospace;
+  font-size: 9px; letter-spacing: .18em; color: var(--ink-dim);
+  margin-bottom: 12px;
+}
+.toc ul { list-style: none; margin: 0; padding: 0; font-size: 21px; }
+.toc > ul > li { margin: 7px 0; }
+.toc ul ul { padding-left: 22px; margin: 4px 0; }
+.toc ul ul li { margin: 4px 0; }
+.toc a { color: var(--ink-soft); text-decoration: none; box-shadow: 0 2px 0 var(--panel-edge); transition: color 140ms; }
+.toc a:hover { color: var(--ink); }
+.toc ul ul a { box-shadow: none; color: var(--ink-dim); }
+.toc ul ul a:hover { color: var(--ink-soft); }
+
+/* ---------- article body ---------- */
+.post-body { font-size: 22px; line-height: 1.62; }
+.post-body h2 {
+  font-size: 15px; margin: 2.3em 0 .8em; color: var(--ink);
+  text-shadow: 2px 2px 0 rgba(58,36,24,.14);
+  scroll-margin-top: 110px;
+}
+html[data-theme="night"] .post-body h2 { text-shadow: 2px 2px 0 rgba(0,0,0,.5); }
+.post-body h3 { font-size: 11px; margin: 2em 0 .7em; color: var(--ink-soft); letter-spacing: .06em; scroll-margin-top: 110px; }
+.post-body p { margin: 0 0 1.1em; }
+.post-body a { color: var(--ink); box-shadow: 0 2px 0 var(--sun-deep); text-decoration: none; transition: color 140ms; }
+.post-body a:hover { color: var(--sun-deep); }
+.post-body strong { color: var(--ink); }
+.post-body em { font-style: italic; }
+.post-body ul, .post-body ol { margin: 0 0 1.25em; padding-left: 1.3em; }
+.post-body li { margin: .4em 0; }
+.post-body hr { border: 0; border-top: 3px dashed var(--panel-edge); margin: 2.4em 0; }
+
+/* inline code: pixel chip */
+.post-body code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .72em;
+  background: var(--panel-2);
+  padding: 2px 7px;
+  box-shadow: 0 0 0 2px var(--panel-edge);
+  transition: background-color var(--t-theme) var(--ease);
+}
+
+/* code blocks: little CRT monitors */
+.post-body pre {
+  background: var(--screen-bg);
+  color: var(--screen-ink);
+  background-image: repeating-linear-gradient(180deg, rgba(0,0,0,.18) 0 2px, transparent 2px 4px);
+  padding: 18px 20px;
+  margin: 0 0 1.5em;
+  overflow-x: auto;
+  box-shadow: 0 0 0 3px #0a1410, 0 0 0 calc(var(--px) + 3px) var(--wood-mid), 0 0 0 calc(var(--px)*2 + 3px) var(--wood-dark), calc(var(--px)*2) calc(var(--px)*2) 0 0 rgba(0,0,0,.2);
+  transition: background-color var(--t-theme) var(--ease), color var(--t-theme) var(--ease);
+}
+.post-body pre code {
+  background: none; box-shadow: none; padding: 0;
+  font-size: 15px; line-height: 1.6; color: inherit;
+}
+
+/* tables: pixel panels */
+.post-body table {
+  border-collapse: collapse; width: 100%; margin: 0 0 1.6em;
+  font-size: 20px;
+  background: var(--panel);
+  box-shadow: 0 0 0 var(--px) var(--panel-edge-2), var(--px) var(--px) 0 0 rgba(0,0,0,.14);
+  transition: background-color var(--t-theme) var(--ease);
+}
+.post-body th, .post-body td { padding: 9px 14px; text-align: left; border-bottom: 2px solid var(--panel-edge); }
+.post-body th {
+  font-family: "Press Start 2P", monospace; font-size: 9px; letter-spacing: .08em;
+  background: var(--panel-2); color: var(--ink-soft); border-bottom: 3px solid var(--panel-edge-2);
+}
+.post-body td:last-child, .post-body th:last-child { text-align: right; white-space: nowrap; }
+.post-body tbody tr:last-child td { border-bottom: 0; }
+.post-body tr.total td { border-top: 3px solid var(--panel-edge-2); color: var(--ink); }
+.table-scroll { overflow-x: auto; margin: 0 0 1.6em; }
+.table-scroll table { margin: 0; }
+
+/* pull quotes: sun-edged pixel banner */
+.post-body blockquote { margin: 0 0 1.4em; }
+blockquote.pullquote {
+  background: var(--panel);
+  border-left: 6px solid var(--sun);
+  padding: 18px 22px;
+  box-shadow: 0 0 0 var(--px) var(--panel-edge-2), var(--px) var(--px) 0 0 rgba(0,0,0,.14);
+  transition: background-color var(--t-theme) var(--ease);
+}
+blockquote.pullquote p { margin: 0; font-size: 24px; line-height: 1.5; color: var(--ink); }
+blockquote.plain {
+  border-left: 4px solid var(--panel-edge);
+  padding: 4px 0 4px 18px;
+  color: var(--ink-soft);
+}
+blockquote.plain p { margin: 0; }
+
+/* ---------- post footer nav ---------- */
+.post-foot {
+  margin-top: 56px; padding-top: 22px;
+  border-top: 4px dashed var(--panel-edge);
+  display: flex; gap: 14px; flex-wrap: wrap; align-items: center;
+}
+
+/* ---------- blog index ---------- */
+.blog-head { text-align: center; margin-bottom: 48px; }
+.blog-head .section-title { margin-bottom: 10px; }
+.blog-head .section-lede { color: var(--ink-soft); }
+.post-card {
+  display: block; text-decoration: none;
+  background: var(--panel);
+  padding: 26px 26px 24px;
+  margin-bottom: 26px;
+  box-shadow:
+    0 0 0 var(--px) var(--panel-edge),
+    0 0 0 calc(var(--px)*2) var(--panel-edge-2),
+    inset 0 var(--px) 0 0 rgba(255,255,255,.28),
+    var(--px) var(--px) 0 0 rgba(0,0,0,.14);
+  transition: transform 200ms var(--ease), box-shadow 200ms var(--ease), background-color var(--t-theme) var(--ease);
+}
+.post-card:hover {
+  transform: translateY(-6px);
+  box-shadow:
+    0 0 0 var(--px) var(--sun),
+    0 0 0 calc(var(--px)*2) var(--panel-edge-2),
+    inset 0 var(--px) 0 0 rgba(255,255,255,.28),
+    calc(var(--px)*2) calc(var(--px)*3) 0 0 rgba(0,0,0,.2);
+}
+.post-card__date { font-family: "Press Start 2P", monospace; font-size: 9px; letter-spacing: .12em; color: var(--ink-dim); margin: 0 0 14px; }
+.post-card__title { font-family: "Press Start 2P", monospace; font-size: 13px; line-height: 1.8; color: var(--ink); margin: 0 0 14px; }
+.post-card__excerpt { font-size: 21px; color: var(--ink-soft); margin: 0 0 16px; }
+.post-card__read { font-family: "Press Start 2P", monospace; font-size: 10px; color: var(--sun-deep); }
+html[data-theme="night"] .post-card__read { color: var(--sun); }
+.blog-feedline { text-align: center; font-size: 19px; color: var(--ink-dim); margin-top: 40px; }
+.blog-feedline a { color: var(--ink-soft); box-shadow: 0 2px 0 var(--ink-dim); text-decoration: none; }
+.blog-feedline a:hover { color: var(--ink); }
+
+/* ---------- mini footer (blog pages) ---------- */
+.footer--mini {
+  background: var(--panel);
+  box-shadow: 0 0 0 var(--px) var(--panel-edge-2), inset 0 var(--px) 0 rgba(255,255,255,.25);
+  padding: 26px 24px;
+  transition: background-color var(--t-theme) var(--ease);
+}
+.footer--mini .inner {
+  max-width: 860px; margin: 0 auto;
+  display: flex; flex-wrap: wrap; gap: 12px 26px; align-items: center; justify-content: space-between;
+  font-size: 19px; color: var(--ink-soft);
+}
+.footer--mini nav { display: flex; gap: 18px; flex-wrap: wrap; }
+.footer--mini a { color: var(--ink-soft); text-decoration: none; box-shadow: 0 2px 0 var(--ink-dim); transition: color 140ms; }
+.footer--mini a:hover { color: var(--ink); }
+
+/* ---------- responsive ---------- */
+@media (max-width: 860px) {
+  .blog-main { padding-top: 130px; }
+  .post-body { font-size: 21px; }
+  .post-head h1 { font-size: 15px; }
+}
+@media (max-width: 560px) {
+  .blog-main { padding: 118px 16px 70px; }
+  .post-head { padding: 22px 18px; }
+  .post-body table { font-size: 18px; }
+  .post-body th, .post-body td { padding: 7px 9px; }
+  blockquote.pullquote p { font-size: 21px; }
+}

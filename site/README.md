@@ -49,7 +49,9 @@ site/
 └── public/                   # everything served, as-is
     ├── index.html            # all sections: hero / ticker / paradox / features / demo / works / blueprint / prototype / footer
     ├── 404.html              # pixel-styled "unassigned slot" page (not_found_handling: 404-page)
+    ├── blog/                 # blog index, posts (one folder per post), Atom feed.xml
     ├── css/style.css         # day+night themes via [data-theme] on <html>, pixel UI primitives, all animations
+    ├── css/blog.css          # long-form article styles on the same tokens (loaded after style.css)
     ├── js/theme-init.js      # sets the theme before first paint (no flash)
     ├── js/main.js            # theme toggle, scroll reveals, parallax, interactive replica, WebAudio blips
     ├── fonts/                # self-hosted Press Start 2P + VT323 (latin subsets, OFL)
