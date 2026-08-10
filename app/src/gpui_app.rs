@@ -12,8 +12,8 @@ use std::time::Duration;
 use gpui::{
     div, point, prelude::*, px, relative, size, svg, AnyElement, App, Application, Bounds,
     Context, Div, Entity, Hsla, InteractiveElement, IntoElement, KeyBinding, KeyDownEvent, Menu,
-    MenuItem, ParentElement, Render, ScrollHandle, SharedString, Styled, Subscription, Timer,
-    Window, WindowAppearance, WindowBounds, WindowOptions,
+    MenuItem, ParentElement, PathPromptOptions, Render, ScrollHandle, SharedString, Styled,
+    Subscription, Timer, Window, WindowAppearance, WindowBounds, WindowOptions,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
@@ -1611,16 +1611,48 @@ impl OpenMicro {
         self.commit(true, cx);
     }
 
-    fn choose_firmware_image(&mut self, cx: &mut Context<Self>) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("OpenMicro firmware", &["bin"])
-            .pick_file()
-        {
-            self.host.firmware_image = Some(path);
-            self.host.firmware_expected_version = None;
-            self.host.update_error = None;
-            cx.notify();
-        }
+    /// Native open-file panel. This must stay asynchronous: a blocking dialog
+    /// (rfd's `pick_file`) spins the main run loop inside the gpui handler
+    /// while `App` is mutably borrowed, and the first gpui task the loop
+    /// drains aborts with a `BorrowMutError`.
+    fn pick_file(
+        window: &Window,
+        cx: &mut Context<Self>,
+        on_pick: impl FnOnce(&mut Self, PathBuf, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn_in(window, async move |weak, cx| {
+            if let Ok(Ok(Some(mut paths))) = paths.await {
+                if let Some(path) = paths.pop() {
+                    let _ = weak.update_in(cx, |this, window, cx| {
+                        on_pick(this, path, window, cx);
+                        cx.notify();
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn choose_firmware_image(&mut self, window: &Window, cx: &mut Context<Self>) {
+        Self::pick_file(window, cx, |this, path, _, _| {
+            // The panel has no extension filter; keep rfd's old .bin guarantee.
+            if path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("bin"))
+            {
+                this.host.firmware_image = Some(path);
+                this.host.firmware_expected_version = None;
+                this.host.update_error = None;
+            } else {
+                this.host.update_error = Some("Choose a firmware .bin first.".into());
+            }
+        });
     }
 
     fn install_firmware(&mut self, cx: &mut Context<Self>) {
@@ -1661,37 +1693,38 @@ impl OpenMicro {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("OpenMicro profile", &["json"])
-            .pick_file()
-        else {
-            return;
-        };
-        match config::import_from(&path, mode, &mut self.host.config) {
-            Ok(detail) => {
-                self.push_log(detail);
-                let _ = self.host.persist();
-                let _ = self.host.sync_device();
-                self.sync_inputs(window, cx);
-                self.apply_configured_theme(window, cx);
+        Self::pick_file(window, cx, move |this, path, window, cx| {
+            match config::import_from(&path, mode, &mut this.host.config) {
+                Ok(detail) => {
+                    this.push_log(detail);
+                    let _ = this.host.persist();
+                    let _ = this.host.sync_device();
+                    this.sync_inputs(window, cx);
+                    this.apply_configured_theme(window, cx);
+                }
+                Err(error) => this.push_log(format!("import failed: {error}")),
             }
-            Err(error) => self.push_log(format!("import failed: {error}")),
-        }
-        cx.notify();
+        });
     }
 
     fn export_config(&mut self, cx: &mut Context<Self>) {
-        let Some(path) = rfd::FileDialog::new()
-            .set_file_name("openmicro-profiles.json")
-            .save_file()
-        else {
-            return;
-        };
-        match config::export_to(&path, &self.host.config) {
-            Ok(()) => self.push_log(format!("exported {}", path.display())),
-            Err(error) => self.push_log(format!("export failed: {error}")),
-        }
-        cx.notify();
+        // Async for the same reason as pick_file.
+        let directory = dirs::download_dir()
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let path = cx.prompt_for_new_path(&directory, Some("openmicro-profiles.json"));
+        cx.spawn(async move |weak, cx| {
+            if let Ok(Ok(Some(path))) = path.await {
+                let _ = weak.update(cx, |this, cx| {
+                    match config::export_to(&path, &this.host.config) {
+                        Ok(()) => this.push_log(format!("exported {}", path.display())),
+                        Err(error) => this.push_log(format!("export failed: {error}")),
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     fn delete_active_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2800,12 +2833,8 @@ impl OpenMicro {
                                 .flex()
                                 .gap(px(8.))
                                 .child(tiny_button(tr("browse")).id("browse-open-target").on_click(
-                                    cx.listener(|this, _, window, cx| {
-                                        let mut dialog = rfd::FileDialog::new();
-                                        if cfg!(target_os = "macos") {
-                                            dialog = dialog.set_directory("/Applications");
-                                        }
-                                        if let Some(path) = dialog.pick_file() {
+                                    cx.listener(|_, _, window, cx| {
+                                        Self::pick_file(window, cx, |this, path, window, cx| {
                                             if let Some(slot) = this.host.selected_slot {
                                                 if let Action::Open { target } =
                                                     &mut this.host.active_profile_mut().inputs[slot]
@@ -2816,7 +2845,7 @@ impl OpenMicro {
                                                 this.commit(false, cx);
                                                 this.sync_inputs(window, cx);
                                             }
-                                        }
+                                        });
                                     }),
                                 ))
                                 .child(tiny_button(tr("test")).id("test-open-target").on_click(
@@ -3757,8 +3786,8 @@ impl OpenMicro {
                                 tiny_button(tr("choose_bin"))
                                     .id("choose-firmware-bin")
                                     .on_click(
-                                        cx.listener(|this, _, _, cx| {
-                                            this.choose_firmware_image(cx)
+                                        cx.listener(|this, _, window, cx| {
+                                            this.choose_firmware_image(window, cx)
                                         }),
                                     ),
                             )
