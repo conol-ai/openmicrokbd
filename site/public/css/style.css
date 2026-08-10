@@ -999,6 +999,13 @@ html[data-theme="night"] .works__punch { color: var(--sun); text-shadow: 3px 3px
   display: flex; flex-direction: column; align-items: flex-start; gap: 18px;
 }
 .inv__foot p { margin: 0; font-size: 21px; color: var(--ink-soft); max-width: 56ch; }
+.inv__ctas { display: flex; flex-wrap: wrap; gap: 14px; }
+.inv__note { font-size: 19px; color: var(--ink-dim) !important; }
+.inv__code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .72em; background: var(--panel-2); padding: 2px 6px;
+  box-shadow: 0 0 0 2px var(--panel-edge);
+}
 
 /* ---------- 15. REAL THING / POLAROID ---------- */
 .polaroid-wrap { display: grid; grid-template-columns: minmax(0,420px) 1fr; gap: 44px; align-items: center; }
