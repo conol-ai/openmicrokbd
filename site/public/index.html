@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="day">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OpenMicroKbd — The open-source keyboard built around your needs.</title>
+<meta name="description" content="OpenMicroKbd is a fully open macro pad: 13 keys, a knob, a joystick, a touch pad — open hardware, open firmware, open software. Under $50 in parts. The schematic is source code. A blueprint anyone can replicate." />
+<link rel="canonical" href="https://openmicrokbd.org/" />
+
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="OpenMicroKbd" />
+<meta property="og:title" content="OpenMicroKbd — The open-source keyboard built around your needs." />
+<meta property="og:description" content="A fully open macro pad: 13 keys, a knob, a joystick, a touch pad. Open hardware, open firmware, open software — under $50 in parts." />
+<meta property="og:url" content="https://openmicrokbd.org/" />
+<meta property="og:image" content="https://openmicrokbd.org/assets/og.jpg" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="OpenMicroKbd — The open-source keyboard built around your needs." />
+<meta name="twitter:description" content="A fully open macro pad: 13 keys, a knob, a joystick, a touch pad. Open hardware, open firmware, open software — under $50 in parts." />
+<meta name="twitter:image" content="https://openmicrokbd.org/assets/og.jpg" />
+
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f2e2bd" />
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#131a3a" />
+
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+<link rel="icon" href="/assets/favicon-32.png" type="image/png" sizes="32x32" />
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" />
+
+<!-- Self-hosted pixel fonts: Press Start 2P for headings/labels, VT323 for body copy -->
+<link rel="preload" href="/fonts/press-start-2p-latin.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="/fonts/vt323-latin.woff2" as="font" type="font/woff2" crossorigin />
+
+<link rel="stylesheet" href="/css/style.css" />
+<!-- Sets data-theme from localStorage/OS before first paint to avoid a theme flash -->
+<script src="/js/theme-init.js"></script>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareSourceCode",
+  "name": "OpenMicroKbd",
+  "url": "https://openmicrokbd.org/",
+  "codeRepository": "https://github.com/conol-ai/openmicrokbd",
+  "license": "https://opensource.org/license/mit/",
+  "programmingLanguage": ["Rust", "CoHDL"],
+  "description": "An open-source macro pad: 13 keys, rotary encoder, analog joystick, capacitive touch pad, per-key + underglow RGB. Open hardware, open firmware, open software."
+}
+</script>
+</head>
+<body>
+
+<a class="skip-link" href="#top">Skip to content</a>
+
+<!-- ============ SCROLL PROGRESS BAR ============ -->
+<div class="progress-track" aria-hidden="true"><div class="progress-fill" id="progressFill"></div></div>
+
+<!-- ============ NAV ============ -->
+<header class="nav" id="nav">
+  <div class="nav__inner">
+    <a class="brand" href="#top" aria-label="OpenMicroKbd — home">
+      <!-- CSS/DOM-drawn pixel logo mark: a tiny keycap grid with a knob -->
+      <span class="logo-mark" aria-hidden="true">
+        <i class="lm-knob"></i>
+        <i class="lm-key lm-key--voice"></i>
+        <i class="lm-key lm-key--a"></i>
+        <i class="lm-key lm-key--b"></i>
+        <i class="lm-key lm-key--c"></i>
+      </span>
+      <span class="brand__text">OPEN MICRO KBD</span>
+    </a>
+
+    <nav class="nav__links" aria-label="Sections">
+      <a href="#paradox">The Paradox</a>
+      <a href="#features">Features</a>
+      <a href="#demo">Try It</a>
+      <a href="#blueprint">Blueprint</a>
+      <a href="#real">Prototype</a>
+    </nav>
+
+    <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle day and night theme" aria-pressed="false">
+      <span class="theme-toggle__track" aria-hidden="true">
+        <span class="theme-toggle__icon theme-toggle__icon--sun"></span>
+        <span class="theme-toggle__icon theme-toggle__icon--moon"></span>
+        <span class="theme-toggle__knob"></span>
+      </span>
+      <span class="theme-toggle__label" id="themeLabel">DAY</span>
+    </button>
+
+    <button class="nav__burger" id="navBurger" type="button" aria-label="Open menu" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+</header>
+
+<main id="top">
+
+<!-- ============ 1. HERO ============ -->
+<section class="hero" id="hero">
+  <div class="hero__sky" aria-hidden="true">
+    <!-- drifting pixel clouds (parallax layers) -->
+    <div class="clouds" data-parallax="0.12">
+      <span class="cloud cloud--1"></span>
+      <span class="cloud cloud--2"></span>
+      <span class="cloud cloud--3"></span>
+    </div>
+    <div class="clouds clouds--far" data-parallax="0.05">
+      <span class="cloud cloud--4"></span>
+      <span class="cloud cloud--5"></span>
+    </div>
+    <!-- night-only twinkling stars, generated by JS -->
+    <div class="stars" id="stars"></div>
+    <div class="hero__hills"><span class="hill hill--back"></span><span class="hill hill--front"></span></div>
+  </div>
+
+  <div class="hero__inner">
+    <div class="hero__copy">
+      <p class="hero__eyebrow">OPEN HARDWARE · OPEN FIRMWARE · OPEN SOFTWARE</p>
+      <h1 class="hero__title">
+        <span class="hero__title-line">OPEN</span>
+        <span class="hero__title-line">MICRO</span>
+        <span class="hero__title-line hero__title-line--accent">KBD</span>
+      </h1>
+      <p class="press-start"><span class="blink">▮</span> PRESS START</p>
+      <p class="hero__tagline">The open-source keyboard built around your needs.</p>
+      <p class="hero__sub">Thirteen keys, a knob, a stick, a touch pad. Zero locked doors. Everything you need to command your agents — for less than fifty dollars.</p>
+      <div class="hero__cta">
+        <a class="btn btn--primary" href="https://github.com/conol-ai/openmicrokbd" target="_blank" rel="noopener">View on GitHub</a>
+        <a class="btn btn--ghost" href="#demo">Try It Live</a>
+      </div>
+      <ul class="hero__stats">
+        <li><b>13</b><span>KEYS</span></li>
+        <li><b>1</b><span>KNOB</span></li>
+        <li><b>21</b><span>RGB LEDS</span></li>
+        <li><b>&lt;$50</b><span>TOTAL</span></li>
+      </ul>
+    </div>
+
+    <div class="hero__art" id="heroArt">
+      <div class="hero__art-frame">
+        <!-- stacked day/night images crossfaded by theme -->
+        <img class="swap-img swap-img--day" src="/assets/hero_keyboard_day.webp" alt="Pixel-art illustration of the OpenMicroKbd macro pad in warm daylight" width="1536" height="1024" fetchpriority="high" />
+        <img class="swap-img swap-img--night" src="/assets/hero_keyboard_night.webp" alt="" aria-hidden="true" width="1248" height="832" />
+      </div>
+      <span class="hero__art-shadow" aria-hidden="true"></span>
+    </div>
+  </div>
+
+  <a class="scroll-hint" href="#paradox" aria-label="Scroll down">
+    <span class="scroll-hint__txt">SCROLL</span>
+    <span class="scroll-hint__arrow" aria-hidden="true"></span>
+  </a>
+</section>
+
+<!-- ============ 2. TICKER ============ -->
+<div class="ticker" aria-hidden="true">
+  <div class="ticker__track">
+    <!-- duplicated content for a seamless -50% loop -->
+    <div class="ticker__group">
+      <span>HARDWARE OPEN</span><b>✦</b><span>FIRMWARE OPEN</span><b>✦</b><span>SOFTWARE OPEN</span><b>✦</b><span>UNDER $50</span><b>✦</b><span>THE PCB IS WRITTEN, NOT DRAWN</span><b>✦</b><span>A BLUEPRINT ANYONE CAN REPLICATE</span><b>✦</b>
+    </div>
+    <div class="ticker__group">
+      <span>HARDWARE OPEN</span><b>✦</b><span>FIRMWARE OPEN</span><b>✦</b><span>SOFTWARE OPEN</span><b>✦</b><span>UNDER $50</span><b>✦</b><span>THE PCB IS WRITTEN, NOT DRAWN</span><b>✦</b><span>A BLUEPRINT ANYONE CAN REPLICATE</span><b>✦</b>
+    </div>
+  </div>
+</div>
+<p class="sr-only">Hardware open. Firmware open. Software open. Under fifty dollars. The PCB is written, not drawn. A blueprint anyone can replicate.</p>
+
+<!-- ============ 3. THE $230 PARADOX ============ -->
+<section class="section paradox" id="paradox">
+  <div class="wrap">
+    <header class="section-head reveal">
+      <p class="section-kicker">CHAPTER I</p>
+      <h2 class="section-title">THE $230 PARADOX</h2>
+      <p class="section-lede">A company that built its name on open research shipped a keyboard you can't open. So we drew the blueprint instead.</p>
+    </header>
+
+    <div class="vs">
+      <article class="card card--rival reveal reveal--left">
+        <div class="card__tag">THE RIVAL</div>
+        <h3 class="card__title">Codex Micro Keyboard</h3>
+        <p class="card__price card__price--bad">$230</p>
+        <ul class="speclist">
+          <li class="no">Closed hardware</li>
+          <li class="no">Closed firmware</li>
+          <li class="no">Closed software</li>
+          <li class="no">Works only with Codex</li>
+          <li class="no">You buy it. You don't own it.</li>
+        </ul>
+        <p class="card__foot">Nice keycaps. Locked doors.</p>
+      </article>
+
+      <div class="vs__badge reveal" aria-hidden="true">
+        <span class="vs__badge-inner">VS</span>
+      </div>
+
+      <article class="card card--ours reveal reveal--right">
+        <div class="card__tag card__tag--good">OURS</div>
+        <h3 class="card__title">Open Micro Kbd</h3>
+        <p class="card__price card__price--good">&lt; $50</p>
+        <ul class="speclist">
+          <li class="yes">Open hardware — the schematic is code</li>
+          <li class="yes">Open firmware — flash it yourself</li>
+          <li class="yes">Open software — config app included</li>
+          <li class="yes">Works with any AI</li>
+          <li class="yes">Build it, fork it, sell it. It's yours.</li>
+        </ul>
+        <p class="card__foot">A blueprint anyone can replicate.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 4. FEATURES ============ -->
+<section class="section features" id="features">
+  <div class="wrap">
+    <header class="section-head reveal">
+      <p class="section-kicker">CHAPTER II</p>
+      <h2 class="section-title">SIX KEYS AND A STICK</h2>
+      <p class="section-lede">Seven ideas, thirteen keys, one knob. Every one of them remappable.</p>
+    </header>
+
+    <div class="feat-grid" data-stagger>
+      <article class="feat reveal" tabindex="0">
+        <div class="feat__icon icon-voice" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+        <h3 class="feat__title">Voice Key</h3>
+        <p class="feat__body">Push-to-talk prompting. Hold the key, speak your mind, release — the whole prompt lands transcribed in one go. Typeless prompting for AI agents.</p>
+        <p class="feat__meta">HOLD · SPEAK · SHIP</p>
+      </article>
+
+      <article class="feat reveal" tabindex="0">
+        <div class="feat__icon icon-knob" aria-hidden="true"><i class="dial"></i><i class="tick"></i></div>
+        <h3 class="feat__title">The Knob</h3>
+        <p class="feat__body">Turn it to dial reasoning effort — quick answers on the left, deep thinking on the right. Not talking to an agent? It's a volume wheel.</p>
+        <p class="feat__meta">FAST ↔ DEEP</p>
+      </article>
+
+      <article class="feat reveal" tabindex="0">
+        <div class="feat__icon icon-stick" aria-hidden="true"><i class="base"></i><i class="stem"></i><i class="ball"></i></div>
+        <h3 class="feat__title">The Stick</h3>
+        <p class="feat__body">An analog joystick where you'd least expect one. Glide the mouse pointer, send arrow keys — or grade DaVinci Resolve color wheels by feel.</p>
+        <p class="feat__meta">MOUSE · ARROWS · GRADE</p>
+      </article>
+
+      <article class="feat reveal" tabindex="0">
+        <div class="feat__icon icon-multi" aria-hidden="true"><i></i><i></i><i></i></div>
+        <h3 class="feat__title">Multi-Task Keys</h3>
+        <p class="feat__body">Assign a key to each running task. Tap to jump between them while the work keeps churning in the background. Your agents never wait on you.</p>
+        <p class="feat__meta">SWITCH · NEVER STOP</p>
+      </article>
+
+      <article class="feat reveal" tabindex="0">
+        <div class="feat__icon icon-perm" aria-hidden="true"><i class="shield"></i><i class="bang"></i></div>
+        <h3 class="feat__title">Permission Key</h3>
+        <p class="feat__body">When an agent stops to ask for permission, one press pulls up exactly what needs your attention. No more hunting through terminals.</p>
+        <p class="feat__meta">ONE PRESS · FULL CONTEXT</p>
+      </article>
+
+      <article class="feat reveal" tabindex="0">
+        <div class="feat__icon icon-macro" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        <h3 class="feat__title">Macros</h3>
+        <p class="feat__body">Every repeated ritual of your day — the same five commands, the same paste, the same push — compressed into a single satisfying click.</p>
+        <p class="feat__meta">MANY → ONE</p>
+      </article>
+
+      <article class="feat reveal" tabindex="0">
+        <div class="feat__icon icon-profile" aria-hidden="true"><i></i><i></i><i></i></div>
+        <h3 class="feat__title">Fully Customizable</h3>
+        <p class="feat__body">Keys, knob, stick, pad — 24 keymap slots, every one remappable in the config app. Changes land live and persist on the board. Build profiles and flip between them instantly.</p>
+        <p class="feat__meta">24 SLOTS · PROFILES</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 5. INTERACTIVE DEMO ============ -->
+<section class="section demo" id="demo">
+  <div class="wrap">
+    <header class="section-head reveal">
+      <p class="section-kicker">CHAPTER III</p>
+      <h2 class="section-title">TRY IT</h2>
+      <p class="section-lede">A working replica of the real layout, right here in the page. Click the keys — or use your real keyboard: <kbd>1</kbd>–<kbd>6</kbd> and <kbd>Q</kbd>–<kbd>U</kbd>. Drag or scroll the knob, flick the stick, tap the pad.</p>
+    </header>
+
+    <div class="demo__grid reveal">
+      <!-- ---- the macro pad replica: real 4×4 frame ---- -->
+      <div class="pad-wrap">
+        <div class="pad" id="pad">
+          <div class="pad__grid" id="padKeys">
+            <!-- row 1: encoder · two keys · joystick — matches the board -->
+            <div class="cell cell--knob">
+              <div class="knob" id="knob" role="slider" tabindex="0"
+                   aria-label="Rotary encoder — reasoning effort" aria-valuemin="0" aria-valuemax="100" aria-valuenow="45" aria-valuetext="Balanced">
+                <div class="knob__dial" id="knobDial"><span class="knob__mark"></span></div>
+              </div>
+              <span class="cell__lbl" aria-hidden="true">KNOB</span>
+            </div>
+            <button class="key key--fn key--voice" data-fn="voice" data-bind="1" type="button"><span class="key__cap"><span class="key__glyph glyph-mic" aria-hidden="true"></span><span class="key__lbl">VOICE</span></span></button>
+            <button class="key key--fn key--multi" data-fn="multi" data-bind="2" type="button"><span class="key__cap"><span class="key__glyph glyph-win" aria-hidden="true"></span><span class="key__lbl">TASKS</span></span></button>
+            <div class="cell cell--joy">
+              <div class="joy" id="joy" role="button" tabindex="0"
+                   aria-label="Analog joystick — drag to glide, press to cycle modes. Arrow keys nudge, Enter cycles modes.">
+                <span class="joy__well" aria-hidden="true"></span>
+                <span class="joy__nub" id="joyNub" aria-hidden="true"></span>
+              </div>
+              <span class="cell__lbl" aria-hidden="true">STICK</span>
+            </div>
+
+            <!-- row 2 -->
+            <button class="key key--fn key--perm"    data-fn="perm"    data-bind="3" type="button"><span class="key__cap"><span class="key__glyph glyph-shield" aria-hidden="true"></span><span class="key__lbl">PERM</span></span></button>
+            <button class="key key--fn key--macro"   data-fn="macro"   data-bind="4" type="button"><span class="key__cap"><span class="key__glyph glyph-bolt" aria-hidden="true"></span><span class="key__lbl">MACRO</span></span></button>
+            <button class="key key--fn key--profile" data-fn="profile" data-bind="5" type="button"><span class="key__cap"><span class="key__glyph glyph-layers" aria-hidden="true"></span><span class="key__lbl">PROF</span></span></button>
+            <button class="key key--fn key--knobkey" data-fn="knob"    data-bind="6" type="button"><span class="key__cap"><span class="key__glyph glyph-dial" aria-hidden="true"></span><span class="key__lbl">EFFORT</span></span></button>
+
+            <!-- row 3: yours to map -->
+            <button class="key key--blank" data-fn="blank" data-bind="q" data-blankname="UNASSIGNED · SLOT 07" aria-label="Unassigned key, slot 7" type="button"><span class="key__cap"><span class="key__glyph glyph-plus" aria-hidden="true"></span></span></button>
+            <button class="key key--blank" data-fn="blank" data-bind="w" data-blankname="UNASSIGNED · SLOT 08" aria-label="Unassigned key, slot 8" type="button"><span class="key__cap"><span class="key__glyph glyph-plus" aria-hidden="true"></span></span></button>
+            <button class="key key--blank" data-fn="blank" data-bind="e" data-blankname="UNASSIGNED · SLOT 09" aria-label="Unassigned key, slot 9" type="button"><span class="key__cap"><span class="key__glyph glyph-plus" aria-hidden="true"></span></span></button>
+            <button class="key key--blank" data-fn="blank" data-bind="r" data-blankname="UNASSIGNED · SLOT 10" aria-label="Unassigned key, slot 10" type="button"><span class="key__cap"><span class="key__glyph glyph-plus" aria-hidden="true"></span></span></button>
+
+            <!-- row 4: touch pad · two more keys · the happy key -->
+            <div class="cell cell--touch">
+              <div class="touch" id="touchPad" role="button" tabindex="0"
+                   aria-label="Capacitive touch pad — click or press Enter to tap.">
+                <span class="touch__ring" aria-hidden="true"></span>
+                <span class="touch__dot" aria-hidden="true"></span>
+              </div>
+              <span class="cell__lbl" aria-hidden="true">TOUCH</span>
+            </div>
+            <button class="key key--blank" data-fn="blank" data-bind="t" data-blankname="UNASSIGNED · SLOT 11" aria-label="Unassigned key, slot 11" type="button"><span class="key__cap"><span class="key__glyph glyph-plus" aria-hidden="true"></span></span></button>
+            <button class="key key--blank" data-fn="blank" data-bind="y" data-blankname="UNASSIGNED · SLOT 12" aria-label="Unassigned key, slot 12" type="button"><span class="key__cap"><span class="key__glyph glyph-plus" aria-hidden="true"></span></span></button>
+            <button class="key key--happy" data-fn="happy" data-bind="u" aria-label="The happy key" type="button"><span class="key__cap"><span class="key__glyph glyph-smile" aria-hidden="true"></span></span></button>
+          </div>
+        </div>
+        <p class="pad__hint">13 keys · encoder · joystick · touch pad · 21 RGB LEDs · black PCB</p>
+      </div>
+
+      <!-- ---- the monitor ---- -->
+      <div class="monitor">
+        <div class="monitor__bezel">
+          <div class="monitor__screen" id="screen">
+            <div class="monitor__bar">
+              <span class="monitor__dot"></span>
+              <span class="monitor__title" id="screenTitle">OPEN MICRO KBD · READY</span>
+              <span class="monitor__ver">v0.6</span>
+            </div>
+
+            <div class="monitor__body">
+              <!-- IDLE -->
+              <div class="scene scene--idle is-active" data-scene="idle">
+                <p class="scene__lead">Press a key to begin.</p>
+                <p class="scene__dim">Six of these thirteen keys are mapped for this demo.<br />The rest — and the stick, and the pad — are yours.</p>
+                <div class="idle-keys" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span></div>
+              </div>
+
+              <!-- VOICE -->
+              <div class="scene scene--voice" data-scene="voice">
+                <p class="scene__label">VOICE KEY · PUSH TO TALK</p>
+                <div class="wave" id="wave" aria-hidden="true"></div>
+                <p class="scene__rec"><span class="rec-dot"></span> LISTENING…</p>
+                <p class="transcript"><span id="transcript"></span><span class="caret">▮</span></p>
+              </div>
+
+              <!-- KNOB -->
+              <div class="scene scene--knob" data-scene="knob">
+                <p class="scene__label">THE KNOB · REASONING EFFORT</p>
+                <div class="effort">
+                  <div class="effort__track"><div class="effort__fill" id="effortFill"></div><div class="effort__thumb" id="effortThumb"></div></div>
+                  <div class="effort__ends"><span>FAST</span><span>DEEP</span></div>
+                </div>
+                <p class="effort__value" id="effortValue">BALANCED</p>
+                <p class="scene__dim" id="effortNote">Turn the knob. Not talking to an agent? Same wheel, now it's volume.</p>
+              </div>
+
+              <!-- JOYSTICK -->
+              <div class="scene scene--joy" data-scene="joy">
+                <p class="scene__label">THE STICK · <span id="joyModeLabel">MOUSE MODE</span></p>
+                <div class="joyfield" id="joyField" aria-hidden="true"><span class="joyfield__dot" id="joyDot"></span></div>
+                <div class="joymodes" id="joyModes" aria-hidden="true">
+                  <span class="pbadge is-on" data-m="MOUSE">MOUSE</span>
+                  <span class="pbadge" data-m="GRADE">GRADE</span>
+                  <span class="pbadge" data-m="ARROWS">ARROWS</span>
+                </div>
+                <p class="scene__dim" id="joyNote">Proportional pointer glide — the push switch is left click. Press the stick to cycle modes.</p>
+              </div>
+
+              <!-- TOUCH -->
+              <div class="scene scene--touch" data-scene="touch">
+                <p class="scene__label">TOUCH PAD · TAP</p>
+                <p class="scene__big" id="touchGesture">TAP</p>
+                <div class="gestures" id="gestures" aria-hidden="true">
+                  <span class="pbadge is-on" data-g="tap">TAP</span>
+                  <span class="pbadge pbadge--off" data-g="swl">SWIPE ← · RSVD</span>
+                  <span class="pbadge pbadge--off" data-g="swr">SWIPE → · RSVD</span>
+                </div>
+                <p class="scene__dim">Tap to trigger anything. Two swipe slots are already reserved in the protocol for a future multi-zone pad.</p>
+              </div>
+
+              <!-- MULTI-TASK -->
+              <div class="scene scene--multi" data-scene="multi">
+                <p class="scene__label">MULTI-TASK KEYS · 3 RUNNING</p>
+                <div class="tasks" id="tasks">
+                  <div class="task" data-i="0"><span class="task__id">T1</span><span class="task__name">refactor/auth-service</span><span class="task__state">RUNNING</span></div>
+                  <div class="task" data-i="1"><span class="task__id">T2</span><span class="task__name">write e2e tests</span><span class="task__state">RUNNING</span></div>
+                  <div class="task" data-i="2"><span class="task__id">T3</span><span class="task__name">migrate db schema</span><span class="task__state">QUEUED</span></div>
+                </div>
+                <p class="scene__dim">Tap again to switch. Work continues in the background.</p>
+              </div>
+
+              <!-- PERMISSION -->
+              <div class="scene scene--perm" data-scene="perm">
+                <p class="scene__label">PERMISSION KEY</p>
+                <div class="popup" id="popup">
+                  <p class="popup__head">AGENT REQUESTS PERMISSION</p>
+                  <p class="popup__cmd">$ rm -rf ./build &amp;&amp; npm run deploy</p>
+                  <p class="popup__q">Allow?</p>
+                  <div class="popup__btns">
+                    <button class="pxbtn pxbtn--yes" type="button" data-perm="allow">ALLOW</button>
+                    <button class="pxbtn pxbtn--no" type="button" data-perm="deny">DENY</button>
+                  </div>
+                </div>
+                <p class="scene__dim" id="permResult">One press brings up exactly what needs your attention.</p>
+              </div>
+
+              <!-- MACRO -->
+              <div class="scene scene--macro" data-scene="macro">
+                <p class="scene__label">MACRO KEY · "SHIP IT"</p>
+                <ul class="combo" id="combo">
+                  <li>git add -A</li>
+                  <li>git commit -m "ship"</li>
+                  <li>npm run build</li>
+                  <li>npm test</li>
+                  <li>git push origin main</li>
+                </ul>
+                <p class="scene__dim">Five steps. One press.</p>
+              </div>
+
+              <!-- PROFILE -->
+              <div class="scene scene--profile" data-scene="profile">
+                <p class="scene__label">PROFILES · TAP TO CYCLE</p>
+                <div class="profiles" id="profiles">
+                  <span class="pbadge" data-p="CODE">CODE</span>
+                  <span class="pbadge" data-p="EDIT">EDIT</span>
+                  <span class="pbadge" data-p="COLOR">COLOR</span>
+                  <span class="pbadge" data-p="GAME">GAME</span>
+                </div>
+                <p class="scene__big" id="profileName">CODE</p>
+                <p class="scene__dim" id="profileNote">13 keys remapped. Same hardware, different life.</p>
+              </div>
+
+              <!-- BLANK / HAPPY -->
+              <div class="scene scene--blank" data-scene="blank">
+                <p class="scene__label" id="blankLabel">UNASSIGNED SLOT</p>
+                <p class="scene__big">— — —</p>
+                <p class="scene__dim">Open the config app and make it whatever you need.<br />What it becomes is entirely up to you.</p>
+              </div>
+
+              <div class="scene scene--happy" data-scene="happy">
+                <p class="scene__label">THE HAPPY KEY</p>
+                <p class="scene__big scene__big--wide">:)</p>
+                <p class="scene__dim">Not every key needs a purpose. This one just makes us smile.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="monitor__foot">
+          <button class="pxbtn pxbtn--sound" id="soundToggle" type="button" aria-pressed="true">
+            <span class="spk" aria-hidden="true"></span><span id="soundLabel">SOUND: ON</span>
+          </button>
+          <span class="monitor__log" id="lastKey" role="status">—</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 6. WORKS WITH ANY AI ============ -->
+<section class="section works" id="works">
+  <div class="wrap">
+    <header class="section-head reveal">
+      <p class="section-kicker">CHAPTER IV</p>
+      <h2 class="section-title">TALKS TO ANY AI</h2>
+      <p class="section-lede">No handshake with a single vendor. If it takes keystrokes, it takes Open Micro Kbd.</p>
+    </header>
+
+    <p class="row-label reveal">AGENTS</p>
+    <div class="badge-row" data-stagger>
+      <div class="badge reveal"><span class="badge__mark badge__mark--claude" aria-hidden="true"></span><b>Claude Code</b><i>terminal agent</i></div>
+      <div class="badge reveal"><span class="badge__mark badge__mark--codex" aria-hidden="true"></span><b>Codex</b><i>yes, that one too</i></div>
+      <div class="badge reveal"><span class="badge__mark badge__mark--conol" aria-hidden="true"></span><b>Conol</b><i>agent runner</i></div>
+      <div class="badge badge--wild reveal"><span class="badge__mark badge__mark--any" aria-hidden="true"></span><b>+ any agent</b><i>it can talk to any AI</i></div>
+    </div>
+
+    <p class="row-label reveal">AND EVERYTHING ELSE</p>
+    <div class="badge-row" data-stagger>
+      <div class="badge badge--alt reveal"><span class="badge__mark badge__mark--pr" aria-hidden="true"></span><b>Premiere</b><i>cut faster</i></div>
+      <div class="badge badge--alt reveal"><span class="badge__mark badge__mark--dv" aria-hidden="true"></span><b>DaVinci Resolve</b><i>grade by joystick</i></div>
+      <div class="badge badge--alt reveal"><span class="badge__mark badge__mark--lr" aria-hidden="true"></span><b>Lightroom</b><i>exposure wheel</i></div>
+      <div class="badge badge--alt badge--wild reveal"><span class="badge__mark badge__mark--game" aria-hidden="true"></span><b>Even games</b><i>hotkeys, obviously</i></div>
+    </div>
+
+    <p class="works__punch reveal">What it becomes is entirely up to you.</p>
+  </div>
+</section>
+
+<!-- ============ 7. THE BLUEPRINT ============ -->
+<section class="section blueprint" id="blueprint">
+  <div class="wrap">
+    <header class="section-head reveal">
+      <p class="section-kicker">CHAPTER V</p>
+      <h2 class="section-title">THE BLUEPRINT</h2>
+      <p class="section-lede">Not a product you wait for — a repository you clone. The schematic is source code and the compiler checks it. Gerbers, firmware, config app: all of it, in the open.</p>
+    </header>
+
+    <div class="inv reveal">
+      <div class="inv__bar">
+        <span class="inv__bar-title">INVENTORY · openmicrokbd</span>
+        <span class="inv__bar-meta">MIT LICENSE</span>
+      </div>
+      <ul class="tree">
+        <li class="tree__row tree__row--root">
+          <span class="tree__glyph glyph-folder" aria-hidden="true"></span>
+          <span class="tree__name">openmicrokbd/</span>
+          <span class="tree__desc">The whole thing. Clone it and go.</span>
+        </li>
+        <li class="tree__row">
+          <span class="tree__branch" aria-hidden="true">├─</span>
+          <span class="tree__glyph glyph-folder" aria-hidden="true"></span>
+          <span class="tree__name">src/</span>
+          <span class="tree__desc">The schematic — written in CoHDL, typed and compiler-checked. The PCB is a program.</span>
+        </li>
+        <li class="tree__row">
+          <span class="tree__branch" aria-hidden="true">├─</span>
+          <span class="tree__glyph glyph-folder" aria-hidden="true"></span>
+          <span class="tree__name">out/</span>
+          <span class="tree__desc">What the compiler emits: netlist, BOM, footprints, layout constraints.</span>
+        </li>
+        <li class="tree__row">
+          <span class="tree__branch" aria-hidden="true">├─</span>
+          <span class="tree__glyph glyph-folder" aria-hidden="true"></span>
+          <span class="tree__name">fw/</span>
+          <span class="tree__desc">Rust firmware on embassy: key matrix, twin RGB chains, USB HID, one-click updates.</span>
+        </li>
+        <li class="tree__row">
+          <span class="tree__branch" aria-hidden="true">├─</span>
+          <span class="tree__glyph glyph-folder" aria-hidden="true"></span>
+          <span class="tree__name">app/</span>
+          <span class="tree__desc">The config app — Rust + GPUI. Remap live, save to the board, flash firmware.</span>
+        </li>
+        <li class="tree__row">
+          <span class="tree__branch" aria-hidden="true">├─</span>
+          <span class="tree__glyph glyph-folder" aria-hidden="true"></span>
+          <span class="tree__name">pcb/</span>
+          <span class="tree__desc">The routed board, ready to open in KiCad.</span>
+        </li>
+        <li class="tree__row">
+          <span class="tree__branch" aria-hidden="true">├─</span>
+          <span class="tree__glyph glyph-folder" aria-hidden="true"></span>
+          <span class="tree__name">fab/</span>
+          <span class="tree__desc">Gerbers, BOM, pick-and-place — upload straight to a fab.</span>
+        </li>
+        <li class="tree__row">
+          <span class="tree__branch" aria-hidden="true">└─</span>
+          <span class="tree__glyph glyph-file" aria-hidden="true"></span>
+          <span class="tree__name">README.md</span>
+          <span class="tree__desc">Every step, every part, every price.</span>
+        </li>
+      </ul>
+      <div class="inv__foot">
+        <p>A blueprint anyone can replicate — compile it, solder it, flash it, fork it. Under $50 in parts, and no permission required.</p>
+        <a class="btn btn--primary btn--big" href="https://github.com/conol-ai/openmicrokbd" target="_blank" rel="noopener">★ Get the Blueprint on GitHub</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 8. THE REAL THING ============ -->
+<section class="section real" id="real">
+  <div class="wrap">
+    <header class="section-head reveal">
+      <p class="section-kicker">CHAPTER VI</p>
+      <h2 class="section-title">THE REAL THING</h2>
+      <p class="section-lede">Pixel art is fun. Here's the one on our desk.</p>
+    </header>
+
+    <div class="polaroid-wrap reveal">
+      <figure class="polaroid">
+        <div class="polaroid__win">
+          <img src="/assets/prototype.jpg" alt="Photo of the hand-built OpenMicroKbd prototype: black PCB, white 3D-printed case, red low-profile switches, a white knob and a yellow smiley keycap" width="1045" height="1568" loading="lazy" />
+        </div>
+        <figcaption class="polaroid__cap">
+          <span class="polaroid__cap-title">PROTOTYPE #001</span>
+          <span class="polaroid__cap-body">Hand-soldered, 3D-printed, flashed on the kitchen table. Some keycaps are still naked, the knob is a placeholder, and the cable came out of a drawer. It works.</span>
+        </figcaption>
+      </figure>
+
+      <ul class="build-notes">
+        <li><b>PCB</b><span>Black, hand-soldered, written in CoHDL</span></li>
+        <li><b>CASE</b><span>3D-printed, single piece</span></li>
+        <li><b>SWITCHES</b><span>Low-profile Choc V2 linears — quiet enough for a call</span></li>
+        <li><b>LIGHTS</b><span>13 per-key + 8 underglow RGB</span></li>
+        <li><b>BRAIN</b><span>STM32F072 running Rust on embassy</span></li>
+        <li><b>UPDATES</b><span>Flashed over USB from the app — no buttons held</span></li>
+        <li><b>STATUS</b><span>Working prototype · v0.6 · still improving</span></li>
+        <li><b>COST</b><span>Under $50 in parts, one afternoon of time</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ============ 9. FOOTER ============ -->
+<footer class="footer" id="footer">
+  <div class="footer__banner" aria-hidden="true">
+    <img class="swap-img swap-img--day" src="/assets/landscape_day.webp" alt="" width="1536" height="1024" loading="lazy" />
+    <img class="swap-img swap-img--night" src="/assets/landscape_night.webp" alt="" width="1536" height="1024" loading="lazy" />
+    <span class="footer__banner-fade"></span>
+  </div>
+
+  <div class="footer__inner">
+    <div class="footer__panel">
+      <p class="footer__slogan">The open-source keyboard built around your needs.</p>
+      <div class="footer__cta">
+        <a class="btn btn--primary" href="https://github.com/conol-ai/openmicrokbd" target="_blank" rel="noopener">View on GitHub</a>
+        <a class="btn btn--ghost" href="#top">Back to Top ▲</a>
+      </div>
+      <nav class="footer__links" aria-label="Footer">
+        <a href="https://github.com/conol-ai/openmicrokbd/tree/main/src" target="_blank" rel="noopener">src/</a>
+        <a href="https://github.com/conol-ai/openmicrokbd/tree/main/fw" target="_blank" rel="noopener">fw/</a>
+        <a href="https://github.com/conol-ai/openmicrokbd/tree/main/app" target="_blank" rel="noopener">app/</a>
+        <a href="https://github.com/conol-ai/openmicrokbd/tree/main/fab" target="_blank" rel="noopener">fab/</a>
+        <a href="https://github.com/conol-ai/openmicrokbd#readme" target="_blank" rel="noopener">README.md</a>
+      </nav>
+      <p class="footer__fine">MIT licensed · under $50 in parts · no permission required</p>
+      <p class="footer__heart">made with ♥ and solder</p>
+    </div>
+  </div>
+</footer>
+
+<script src="/js/main.js"></script>
+</body>
+</html>

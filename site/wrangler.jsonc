@@ -1,0 +1,20 @@
+// openmicrokbd.org — static site on Cloudflare Workers (assets-only, no Worker script)
+// Deploy from this directory: npx wrangler deploy
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "openmicrokbd-site",
+  "compatibility_date": "2026-08-09",
+  "assets": {
+    "directory": "./public",
+    "not_found_handling": "404-page",
+    "html_handling": "auto-trailing-slash"
+  },
+  // Preview URL on workers.dev in addition to the custom domain.
+  "workers_dev": true,
+  // Requires the openmicrokbd.org zone to exist on the Cloudflare account.
+  // Wrangler provisions DNS + certificates for custom domains automatically.
+  "routes": [
+    { "pattern": "openmicrokbd.org", "custom_domain": true },
+    { "pattern": "www.openmicrokbd.org", "custom_domain": true }
+  ]
+}

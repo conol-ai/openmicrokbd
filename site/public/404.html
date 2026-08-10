@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>404 — OpenMicroKbd</title>
+<meta name="robots" content="noindex" />
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+<link rel="preload" href="/fonts/press-start-2p-latin.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="/fonts/vt323-latin.woff2" as="font" type="font/woff2" crossorigin />
+<style>
+  @font-face {
+    font-family: "Press Start 2P"; font-style: normal; font-weight: 400; font-display: swap;
+    src: url("/fonts/press-start-2p-latin.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "VT323"; font-style: normal; font-weight: 400; font-display: swap;
+    src: url("/fonts/vt323-latin.woff2") format("woff2");
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100svh; display: grid; place-items: center;
+    background: #f2e2bd; color: #3a2418;
+    font-family: "VT323", "Courier New", monospace; font-size: 22px; line-height: 1.5;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #131a3a; color: #e7edff; }
+    .panel { background: #232c55 !important; box-shadow: 0 0 0 4px #48569b, 0 0 0 8px #0b0f22, 8px 8px 0 0 rgba(0,0,0,.3) !important; }
+    .btn { background: #ffd977 !important; color: #1a1030 !important; box-shadow: 0 0 0 4px #05070f, 4px 4px 0 0 #05070f !important; }
+    .dim { color: #8b97cc !important; }
+  }
+  .panel {
+    max-width: 560px; margin: 24px; padding: 40px 36px; text-align: center;
+    background: #f6e7c1;
+    box-shadow: 0 0 0 4px #5c3a22, 0 0 0 8px #3a2418, 8px 8px 0 0 rgba(58,36,24,.25);
+  }
+  h1 { font-family: "Press Start 2P", monospace; font-size: 28px; margin: 0 0 18px; letter-spacing: .02em; }
+  .label { font-family: "Press Start 2P", monospace; font-size: 9px; letter-spacing: .18em; margin: 0 0 22px; }
+  .big { font-family: "Press Start 2P", monospace; font-size: 22px; margin: 0 0 18px; }
+  p { margin: 0 0 12px; }
+  .dim { color: #8a6a4c; }
+  .btn {
+    display: inline-block; margin-top: 22px; padding: 16px 22px; text-decoration: none;
+    font-family: "Press Start 2P", monospace; font-size: 12px;
+    background: #f5c53d; color: #3a2418;
+    box-shadow: 0 0 0 4px #3a2418, 4px 4px 0 0 #3a2418;
+  }
+  .btn:active { transform: translate(4px, 4px); box-shadow: 0 0 0 4px #3a2418; }
+</style>
+</head>
+<body>
+  <main class="panel">
+    <p class="label">UNASSIGNED SLOT</p>
+    <h1>404</h1>
+    <p class="big">— — —</p>
+    <p>This page isn't mapped to anything.</p>
+    <p class="dim">Open the config app and make it whatever you need — or head back to the start.</p>
+    <a class="btn" href="/">▮ PRESS START</a>
+  </main>
+</body>
+</html>
