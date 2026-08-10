@@ -4,7 +4,9 @@ The release workflow publishes both parts of the product from one GitHub
 Release:
 
 - notarized macOS DMGs for Apple Silicon and Intel;
-- the production STM32F072 firmware as `.bin` and debug `.elf`;
+- the production STM32F072 firmware as `.bin`, debug `.elf`, and factory
+  programming `.hex` (same bytes as the `.bin` with the 0x08000000 load
+  address embedded, for SWD/gang programmers at manufacturing);
 - `release-manifest.json`, consumed by installed apps;
 - `SHA256SUMS` and GitHub artifact attestations.
 

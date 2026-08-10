@@ -109,7 +109,7 @@ jobs:
           targets: thumbv6m-none-eabi
           components: llvm-tools-preview
 
-      - name: Build raw firmware and debug ELF
+      - name: Build raw firmware, debug ELF, and factory HEX
         env:
           FIRMWARE_VERSION: ${{ needs.validate.outputs.firmware_version }}
         run: |
@@ -119,6 +119,7 @@ jobs:
 
           test -f "dist/openmicro-fw-$FIRMWARE_VERSION.bin"
           test -f "dist/openmicro-fw-$FIRMWARE_VERSION.elf"
+          test -f "dist/openmicro-fw-$FIRMWARE_VERSION.hex"
 
       - name: Validate firmware memory bounds and vector table
         env:
@@ -163,6 +164,7 @@ jobs:
           path: |
             dist/openmicro-fw-${{ needs.validate.outputs.firmware_version }}.bin
             dist/openmicro-fw-${{ needs.validate.outputs.firmware_version }}.elf
+            dist/openmicro-fw-${{ needs.validate.outputs.firmware_version }}.hex
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -534,8 +536,9 @@ jobs:
           INTEL_DMG="OpenMicro-$APP_VERSION-macos-x86_64.dmg"
           FIRMWARE_BIN="openmicro-fw-$FIRMWARE_VERSION.bin"
           FIRMWARE_ELF="openmicro-fw-$FIRMWARE_VERSION.elf"
+          FIRMWARE_HEX="openmicro-fw-$FIRMWARE_VERSION.hex"
 
-          for asset in "$ARM_DMG" "$INTEL_DMG" "$FIRMWARE_BIN" "$FIRMWARE_ELF"; do
+          for asset in "$ARM_DMG" "$INTEL_DMG" "$FIRMWARE_BIN" "$FIRMWARE_ELF" "$FIRMWARE_HEX"; do
             if [[ ! -f "dist/$asset" ]]; then
               echo "missing release asset: $asset" >&2
               exit 1
@@ -612,6 +615,7 @@ jobs:
               "$INTEL_DMG" \
               "$FIRMWARE_BIN" \
               "$FIRMWARE_ELF" \
+              "$FIRMWARE_HEX" \
               release-manifest.json \
               > SHA256SUMS
             sha256sum --check SHA256SUMS

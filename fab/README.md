@@ -62,3 +62,26 @@ smt_pos.py --all pcb/openmicro.kicad_pcb fab/openmicro-pos-all.csv
 The BOM comes from the CoHDL source (`src/`); the CPL and gerbers from the
 routed board. `smt_pos.py` currently lives in the CoHDL repository
 (`tools/smt_pos.py`) pending the compiler's open-source release.
+
+## Firmware programming
+
+Program `openmicro-fw-<version>.hex` from the [GitHub release
+assets](../RELEASING.md) over SWD at J2. The hex is Intel HEX with the
+0x08000000 load address embedded — byte-identical to the released `.bin`, so
+any STM32-capable programmer (STM32CubeProgrammer, J-Flash, gang programmers)
+places it correctly with no address entry. Verify the file against the
+release's `SHA256SUMS` before loading it into the fixture.
+
+Full-chip erase + program + verify is the correct cycle on a fresh board. The
+last 2 KiB flash page (0x0801F800) holds user settings and must simply be
+**left erased** — the firmware detects the blank page and boots with factory
+defaults. Do not program anything there.
+
+J2 is a 2×3 2.54 mm socket (P1/P2 GND, P3 SWCLK, P5 SWDIO; P4/P6 are the
+serial console). It carries **no 3.3 V pin**: power the board through USB-C
+while programming, and configure the programmer accordingly if it expects a
+target-voltage sense line.
+
+Post-programming check: the board enumerates over USB as `1209:0001`
+(OpenMicro). `scripts/bin2hex.py` regenerates the hex from a released `.bin`
+if needed.

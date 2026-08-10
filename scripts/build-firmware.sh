@@ -67,6 +67,12 @@ if (( RESET_VECTOR % 2 != 1 || RESET_ADDRESS < 0x08000000 || RESET_ADDRESS >= 0x
     exit 1
 fi
 
+# Intel HEX for factory programming: same bytes as the .bin, load address
+# embedded so SWD/gang programmers place it at 0x08000000 without operator
+# input. bin2hex.py verifies its own round-trip before it succeeds.
+HEX="$OUTPUT_DIR/openmicro-fw-$FW_VERSION$VARIANT.hex"
+python3 "$SCRIPT_DIR/bin2hex.py" "$BIN" "$HEX"
+
 echo "Firmware $FW_VERSION: $BIN ($BIN_SIZE bytes)"
 printf 'Vectors: SP=0x%08x reset=0x%08x\n' "$INITIAL_SP" "$RESET_VECTOR"
-shasum -a 256 "$BIN" "$DEBUG_ELF"
+shasum -a 256 "$BIN" "$DEBUG_ELF" "$HEX"
