@@ -24,10 +24,39 @@ Add these Actions secrets:
 | Secret | Value |
 |---|---|
 | `MACOS_DEVELOPER_ID_P12_BASE64` | Base64-encoded Developer ID Application certificate and private key exported as PKCS#12 |
-| `MACOS_DEVELOPER_ID_P12_PASSWORD` | Password used for that `.p12` |
+| `MACOS_DEVELOPER_ID_P12_PASSWORD` | Password used for that `.p12` — must be non-empty, see below |
 | `APPLE_API_KEY_ID` | App Store Connect API key ID |
 | `APPLE_API_ISSUER_ID` | App Store Connect API issuer ID |
 | `APPLE_API_PRIVATE_KEY_P8_BASE64` | Base64-encoded `AuthKey_<KEY_ID>.p8` |
+
+Keychain Access exports a `.p12` with whatever password you type, including an
+empty one — but the workflow treats an empty secret as "not configured" and
+fails the signing step. If your export has no password, re-wrap it before
+encoding:
+
+```sh
+openssl pkcs12 -in Certificates.p12 -passin pass: -nodes -out pair.pem
+openssl pkcs12 -export -in pair.pem -passout pass:"$NEW_PASSWORD" -out signing.p12
+rm -P pair.pem
+```
+
+Then store `base64 < signing.p12` and `$NEW_PASSWORD` together. Verify the pair
+before relying on it — this must print a Developer ID Application identity:
+
+```sh
+security create-keychain -p probe probe.keychain-db
+security unlock-keychain -p probe probe.keychain-db
+security import signing.p12 -k probe.keychain-db -f pkcs12 -P "$NEW_PASSWORD" -A
+security find-identity -v -p codesigning probe.keychain-db
+security delete-keychain probe.keychain-db
+```
+
+The notary credentials can be checked without submitting anything:
+
+```sh
+xcrun notarytool history --key AuthKey_<KEY_ID>.p8 \
+  --key-id <APPLE_API_KEY_ID> --issuer <APPLE_API_ISSUER_ID>
+```
 
 Create a GitHub environment named `release`, store or expose the five secrets
 there, and add any desired reviewer/deployment-branch protections. The workflow
