@@ -56,6 +56,7 @@ enum Sheet {
     Applications,
     Icons,
     KeyPicker,
+    ShortcutPicker,
 }
 
 /// Which field a key picked from the keyboard sheet lands in.
@@ -620,6 +621,20 @@ fn lucide_icon_visual(name: &str, size: f32, color: Hsla) -> AnyElement {
         .into_any_element()
 }
 
+fn shortcut_app_icon(app: &behaviors::ShortcutApplication, size: f32, color: Hsla) -> AnyElement {
+    configured_icon_visual(app.icon, size, color)
+        .unwrap_or_else(|| lucide_icon_visual("app-window-mac", size, color))
+}
+
+/// Catalog order is semantic (legacy apps first); the picker shows a
+/// case-insensitively alphabetized list instead.
+fn sorted_shortcut_applications() -> Vec<&'static behaviors::ShortcutApplication> {
+    let mut apps: Vec<&'static behaviors::ShortcutApplication> =
+        behaviors::APPLICATION_SHORTCUTS.iter().collect();
+    apps.sort_by_key(|app| app.label.to_lowercase());
+    apps
+}
+
 fn configured_icon_visual(value: &str, size: f32, color: Hsla) -> Option<AnyElement> {
     if let Some(slug) = crate::simple_icons::slug_from_storage(value) {
         return crate::simple_icons::find(slug).map(|icon| {
@@ -693,6 +708,10 @@ pub struct OpenMicro {
     host: HostState,
     sheet: Sheet,
     key_picker_target: KeyTarget,
+    /// Application highlighted in the shortcut picker's left rail.
+    shortcut_picker_app: String,
+    shortcut_rail_scroll: ScrollHandle,
+    shortcut_list_scroll: ScrollHandle,
     recording: RecordTarget,
     advanced: bool,
     macro_draft: Vec<MacroStepEntry>,
@@ -742,6 +761,9 @@ impl OpenMicro {
             host,
             sheet: Sheet::None,
             key_picker_target: KeyTarget::SimpleKey,
+            shortcut_picker_app: String::new(),
+            shortcut_rail_scroll: ScrollHandle::new(),
+            shortcut_list_scroll: ScrollHandle::new(),
             recording: RecordTarget::None,
             advanced: false,
             macro_draft: Vec::new(),
@@ -844,6 +866,7 @@ impl OpenMicro {
                 this.icon_query = input.read(cx).value().to_string();
                 this.icon_page = 0;
                 this.icon_scroll.set_offset(point(px(0.), px(0.)));
+                this.shortcut_list_scroll.set_offset(point(px(0.), px(0.)));
                 cx.notify();
             },
         ));
@@ -1165,54 +1188,47 @@ impl OpenMicro {
         self.commit(true, cx);
     }
 
-    fn cycle_shortcut_application(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let Some(slot) = self.host.selected_slot else {
-            return;
-        };
-        let current_id = match &self.host.active_profile().inputs[slot].behavior {
-            Some(ControlBehavior::ApplicationShortcut { application, .. }) => application.as_str(),
-            _ => behaviors::APPLICATION_SHORTCUTS[0].id,
-        };
-        let current = behaviors::APPLICATION_SHORTCUTS
+    fn open_shortcut_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let current = self.host.selected_slot.and_then(|slot| {
+            match &self.host.active_profile().inputs[slot].behavior {
+                Some(ControlBehavior::ApplicationShortcut { application, .. })
+                    if behaviors::shortcut_application(application).is_some() =>
+                {
+                    Some(application.clone())
+                }
+                _ => None,
+            }
+        });
+        self.shortcut_picker_app =
+            current.unwrap_or_else(|| behaviors::APPLICATION_SHORTCUTS[0].id.to_string());
+        if let Some(index) = sorted_shortcut_applications()
             .iter()
-            .position(|item| item.id == current_id)
-            .unwrap_or(0);
-        let app = &behaviors::APPLICATION_SHORTCUTS
-            [wrapped_index(current, behaviors::APPLICATION_SHORTCUTS.len(), delta)];
-        let _ = behaviors::apply_application_shortcut(
-            &mut self.host.active_profile_mut().inputs[slot],
-            app.id,
-            app.shortcuts[0].id,
-        );
-        self.commit(true, cx);
+            .position(|app| app.id == self.shortcut_picker_app)
+        {
+            self.shortcut_rail_scroll.scroll_to_item(index);
+        }
+        self.shortcut_list_scroll.set_offset(point(px(0.), px(0.)));
+        self.icon_query.clear();
+        self.sheet = Sheet::ShortcutPicker;
+        self.sync_inputs(window, cx);
+        self.search_input.update(cx, |input, cx| {
+            input.set_placeholder(tr("shortcut_search_placeholder"), window, cx)
+        });
+        cx.notify();
     }
 
-    fn cycle_shortcut(&mut self, delta: isize, cx: &mut Context<Self>) {
+    fn apply_shortcut_pick(&mut self, application: &str, shortcut: &str, cx: &mut Context<Self>) {
         let Some(slot) = self.host.selected_slot else {
             return;
         };
-        let (application, shortcut) = match &self.host.active_profile().inputs[slot].behavior {
-            Some(ControlBehavior::ApplicationShortcut {
-                application,
-                shortcut,
-            }) => (application.clone(), shortcut.clone()),
-            _ => return,
-        };
-        let Some(app) = behaviors::shortcut_application(&application) else {
-            return;
-        };
-        let current = app
-            .shortcuts
-            .iter()
-            .position(|item| item.id == shortcut)
-            .unwrap_or(0);
-        let preset = &app.shortcuts[wrapped_index(current, app.shortcuts.len(), delta)];
-        let _ = behaviors::apply_application_shortcut(
+        if behaviors::apply_application_shortcut(
             &mut self.host.active_profile_mut().inputs[slot],
-            app.id,
-            preset.id,
-        );
-        self.commit(true, cx);
+            application,
+            shortcut,
+        ) {
+            self.sheet = Sheet::None;
+            self.commit(true, cx);
+        }
     }
 
     fn cycle_macos(&mut self, delta: isize, cx: &mut Context<Self>) {
@@ -2456,33 +2472,41 @@ impl OpenMicro {
                 application,
                 shortcut,
             }) => {
-                let app = behaviors::shortcut_application(application)
-                    .unwrap_or(&behaviors::APPLICATION_SHORTCUTS[0]);
-                let preset =
-                    behaviors::shortcut_preset(application, shortcut).unwrap_or(&app.shortcuts[0]);
-                editor = editor
-                    .child(inspector_field(
-                        tr("application"),
-                        "Curated shortcut catalog",
-                        controls::cycle_control(
-                            app.label,
-                            ("shortcut-app", 0usize).into(),
-                            ("shortcut-app", 1usize).into(),
-                            cx.listener(|this, _, _, cx| this.cycle_shortcut_application(-1, cx)),
-                            cx.listener(|this, _, _, cx| this.cycle_shortcut_application(1, cx)),
-                        ),
-                    ))
-                    .child(inspector_field(
+                // A stale/foreign id renders as unknown with the slot's real
+                // chord rather than masquerading as the catalog's first entry.
+                let field = match behaviors::shortcut_preset(application, shortcut) {
+                    Some(preset) => {
+                        let app = behaviors::shortcut_application(application)
+                            .unwrap_or(&behaviors::APPLICATION_SHORTCUTS[0]);
+                        inspector_field(
+                            tr("shortcut"),
+                            behaviors::shortcut_chord_label(preset),
+                            selection_card(
+                                shortcut_app_icon(app, 17., pixel::accent_color()),
+                                preset.label(),
+                                Some(app.label.into()),
+                            )
+                            .id("open-shortcut-picker")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_shortcut_picker(window, cx)
+                            })),
+                        )
+                    }
+                    None => inspector_field(
                         tr("shortcut"),
-                        behaviors::shortcut_chord_label(preset),
-                        controls::cycle_control(
-                            preset.label,
-                            ("shortcut-preset", 0usize).into(),
-                            ("shortcut-preset", 1usize).into(),
-                            cx.listener(|this, _, _, cx| this.cycle_shortcut(-1, cx)),
-                            cx.listener(|this, _, _, cx| this.cycle_shortcut(1, cx)),
-                        ),
-                    ));
+                        keycodes::emitted_key_label(input.emitted.mods, input.emitted.code),
+                        selection_card(
+                            lucide_icon_visual("circle-help", 17., pixel::dim_text_color()),
+                            tr("unknown_shortcut"),
+                            Some(SharedString::from(application.clone())),
+                        )
+                        .id("open-shortcut-picker")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_shortcut_picker(window, cx)
+                        })),
+                    ),
+                };
+                editor = editor.child(field);
             }
             Some(ControlBehavior::MacOs { command }) => {
                 let preset = behaviors::macos_preset(*command);
@@ -3445,6 +3469,244 @@ impl OpenMicro {
             )
     }
 
+    fn shortcut_pick_row(
+        &self,
+        id: (&'static str, usize),
+        app_id: &'static str,
+        preset: &'static behaviors::ShortcutPreset,
+        subtitle: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let preset_id = preset.id;
+        let mut title = div()
+            .flex_1()
+            .min_w(px(0.))
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .child(
+                div()
+                    .truncate()
+                    .text_size(px(13.))
+                    .text_color(pixel::text_color())
+                    .child(SharedString::from(preset.label())),
+            );
+        if let Some(subtitle) = subtitle {
+            title = title.child(
+                div()
+                    .truncate()
+                    .text_size(px(10.))
+                    .text_color(pixel::dim_text_color())
+                    .child(subtitle),
+            );
+        }
+        div()
+            .id(id)
+            .w_full()
+            .min_h(px(42.))
+            .px(px(12.))
+            .py(px(6.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .bg(pixel::raised_color())
+            .rounded(px(2.))
+            .cursor_pointer()
+            .hover(|style| style.bg(pixel::canvas_color()))
+            .child(title)
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .font_family("Monaco")
+                    .text_size(px(10.))
+                    .text_color(pixel::accent_highlight_color())
+                    .child(behaviors::shortcut_chord_label(preset)),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.apply_shortcut_pick(app_id, preset_id, cx)
+            }))
+    }
+
+    fn render_shortcut_picker_sheet(&self, cx: &mut Context<Self>) -> Div {
+        let query = self.icon_query.trim().to_lowercase();
+
+        let body = if query.is_empty() {
+            let selected = behaviors::shortcut_application(&self.shortcut_picker_app)
+                .unwrap_or(&behaviors::APPLICATION_SHORTCUTS[0]);
+            // Rows are direct children of the tracked element so
+            // scroll_to_item can index them when the sheet opens.
+            let mut rail = div()
+                .id("shortcut-rail-scroll")
+                .size_full()
+                .track_scroll(&self.shortcut_rail_scroll)
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap(px(4.));
+            for (index, app) in sorted_shortcut_applications().into_iter().enumerate() {
+                let active = app.id == selected.id;
+                let app_id = app.id;
+                rail = rail.child(
+                    div()
+                        .id(("shortcut-picker-app", index))
+                        .w_full()
+                        .min_h(px(34.))
+                        .px(px(10.))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .rounded(px(2.))
+                        .bg(if active {
+                            pixel::key_color()
+                        } else {
+                            pixel::raised_color()
+                        })
+                        .cursor_pointer()
+                        .hover(|style| style.bg(pixel::canvas_color()))
+                        .child(shortcut_app_icon(
+                            app,
+                            15.,
+                            if active {
+                                pixel::accent_color()
+                            } else {
+                                pixel::dim_text_color()
+                            },
+                        ))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .truncate()
+                                .text_size(px(12.))
+                                .text_color(pixel::text_color())
+                                .child(SharedString::from(app.label)),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.shortcut_picker_app = app_id.to_string();
+                            this.shortcut_list_scroll.set_offset(point(px(0.), px(0.)));
+                            cx.notify();
+                        })),
+                );
+            }
+            let mut items = div()
+                .id("shortcut-list-scroll")
+                .size_full()
+                .track_scroll(&self.shortcut_list_scroll)
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap(px(5.));
+            for (index, preset) in selected.shortcuts.iter().enumerate() {
+                items = items.child(self.shortcut_pick_row(
+                    ("shortcut-pick", index),
+                    selected.id,
+                    preset,
+                    None,
+                    cx,
+                ));
+            }
+            div()
+                .w_full()
+                .h_full()
+                .flex()
+                .gap(px(10.))
+                .child(
+                    div()
+                        .w(px(220.))
+                        .flex_shrink_0()
+                        .h_full()
+                        .relative()
+                        .child(rail)
+                        .vertical_scrollbar(&self.shortcut_rail_scroll),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .h_full()
+                        .relative()
+                        .child(items)
+                        .vertical_scrollbar(&self.shortcut_list_scroll),
+                )
+        } else {
+            let mut items = div()
+                .id("shortcut-search-scroll")
+                .size_full()
+                .track_scroll(&self.shortcut_list_scroll)
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap(px(5.));
+            let mut index = 0usize;
+            for app in sorted_shortcut_applications() {
+                let app_matches = app.label.to_lowercase().contains(&query);
+                for preset in app.shortcuts {
+                    // Users search in whichever language they think in, so
+                    // match every localization of the label.
+                    if app_matches
+                        || preset
+                            .labels
+                            .iter()
+                            .any(|label| label.to_lowercase().contains(&query))
+                    {
+                        items = items.child(self.shortcut_pick_row(
+                            ("shortcut-search", index),
+                            app.id,
+                            preset,
+                            Some(SharedString::from(app.label)),
+                            cx,
+                        ));
+                        index += 1;
+                    }
+                }
+            }
+            if index == 0 {
+                items = items.child(controls::empty_hint(
+                    "NO SHORTCUTS",
+                    "Try another application or shortcut name.",
+                ));
+            }
+            div()
+                .w_full()
+                .h_full()
+                .relative()
+                .child(items)
+                .vertical_scrollbar(&self.shortcut_list_scroll)
+        };
+
+        controls::modal_frame()
+            .w(px(680.))
+            .h(relative(0.85))
+            .child(controls::modal_header(
+                tr("pick_a_shortcut"),
+                Some(tr("shortcut_picker_meta").into()),
+            ))
+            .child(
+                div()
+                    .p(px(14.))
+                    .pb(px(10.))
+                    .child(Input::new(&self.search_input).w_full().cleanable(true)),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .px(px(14.))
+                    .child(body),
+            )
+            .child(
+                div().w_full().p(px(14.)).flex().justify_end().child(
+                    tiny_button(tr("cancel"))
+                        .id("shortcut-picker-cancel")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.sheet = Sheet::None;
+                            cx.notify();
+                        })),
+                ),
+            )
+    }
+
     fn render_icons_sheet(&self, cx: &mut Context<Self>) -> Div {
         let query = self.icon_query.trim().to_lowercase();
         let filtered: Vec<PickerIcon> = match self.icon_library {
@@ -4122,6 +4384,7 @@ impl OpenMicro {
             Sheet::Applications => self.render_applications_sheet(cx),
             Sheet::Icons => self.render_icons_sheet(cx),
             Sheet::KeyPicker => self.render_key_picker_sheet(cx),
+            Sheet::ShortcutPicker => self.render_shortcut_picker_sheet(cx),
             Sheet::None => div(),
         };
         div()
