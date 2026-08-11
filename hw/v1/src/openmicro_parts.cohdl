@@ -1,6 +1,6 @@
 // OpenMicro — board-specific devices and part bindings (STM32F072 macropad).
-// Pinouts datasheet-verified (ST DM00090510 / Alps / SK6812 / USBLC6 —
-// see docs/compliance-report.md). Reuses std passives + traits.
+// Pinouts datasheet-verified (Alps — see docs/compliance-report.md). Reuses std
+// traits and library components.
 
 // ---- designator-prefix traits not in std ----
 pub trait Switch {
@@ -9,158 +9,8 @@ pub trait Switch {
 pub trait Encoder {
     designator_prefix: "SW"
 }
-pub trait Led_Addressable {
-    designator_prefix: "LED"
-}
 pub trait TestPad {
     designator_prefix: "TP"
-}
-
-pub trait Crystal {
-    designator_prefix: "Y"
-}
-
-// 8MHz HSE crystal, 3225 4-pad. The F072 can run USB crystal-less (HSI48+CRS,
-// incl. the DFU bootloader) — the crystal is fitted belt-and-braces per direct
-// review: HSE/PLL clocking with HSI48+CRS still available as fallback.
-pub device Crystal8MHz {
-    pins {
-        required XIN: 1 [passive]
-        required XOUT: 3 [passive]
-        required GND: 2, 4 [passive]
-    }
-}
-impl Crystal for Crystal8MHz {}
-// 10pF-load crystal; AN2867: C_load = 2*(CL - Cstray) = 2*(10 - 2.5) = 15pF.
-pub part XTAL_8M: Crystal8MHz {
-    primary { mfr: "Abracon", mpn: "ABM8-8.000MHZ-10-1-U-T", footprint: FP_Crystal_3225 }
-}
-
-// ---- STM32F072CBT6: the MCU (LQFP-48). All 48 pads declared; PA8-PA15
-// (incl. USB PA11/PA12 and SWD PA13/PA14) are VDDIO2-powered (pin 36 tied
-// to VDD). HSE crystal on PF0/PF1; crystal-less HSI48+CRS remains a
-// fallback. ----
-pub device STM32F072CBT6 {
-    pins {
-        required VDD: 24, 48 [power_in]
-        required VSS: 23, 35, 47 [power_in]
-        required VDDA: 9 [power_in]
-        required VSSA: 8 [power_in]
-        required VBAT: 1 [power_in]
-        required VDDIO2: 36 [power_in] // powers PA8-PA15 (USB + SWD)
-        required NRST: 7 [input]
-        // HSE crystal (fixed oscillator pins)
-        required PF0: 5 [bidirectional] // OSC_IN
-        required PF1: 6 [bidirectional] // OSC_OUT
-        required BOOT0: 44 [input]
-        // USB FS + SWD (VDDIO2 domain) — fixed peripheral pins
-        required USB_DM: 32 [bidirectional] // PA11
-        required USB_DP: 33 [bidirectional] // PA12
-        required SWDIO: 34 [bidirectional] // PA13
-        required SWCLK: 37 [input] // PA14
-        // Position-aware GPIO: every movable function sits on the pad whose
-        // face looks at what it drives. RE-DERIVED for the current MCU
-        // placement (left margin, rotate 90, side bottom) — the previous map
-        // was assigned for a top-left MCU three placements ago and had gone
-        // stale. Solved as a minimum-cost assignment of functions onto free
-        // pads, cost = distance from pad to the centroid of the net it serves.
-        //
-        // Total pin-to-target length barely moves (1022.3 -> 1016.8mm),
-        // because all 48 pads live inside a 9.4mm square while the targets are
-        // spread over a 95mm board — which pad you pick cannot change the long
-        // run. The gain that matters is escape DIRECTION: a pad whose bearing
-        // to its own target exceeds 90 degrees has to wrap its trace back
-        // around the package, and that is what congests a 2-layer fanout.
-        // Wrapping nets went from 8 of 19 on the stale map to 2 of 19.
-        //
-        // Targets are read from the NETLIST, never inferred from a designator.
-        // A first attempt assumed array element d[i] carries designator D(i+1);
-        // RFC-005 tombstones make that false — COL0 actually lands on D6/D10 —
-        // and the wrong targets produced a map that left COL0 wrapping at 107
-        // degrees. Measuring straight off the built board is what caught it.
-        //
-        // The surviving two are JOY_X/JOY_Y and they are not fixable: ADC_IN8
-        // and ADC_IN9 are bonded to PB0/PB1 on this package and nowhere else,
-        // so the analog pair cannot leave that face.
-        //
-        // PC13/PC14/PC15 sit behind the VBAT power switch — a few mA of drive
-        // and a low speed cap — so they carry only pins that are READ. They
-        // hold two matrix columns here (inputs with pull-down in COL2ROW); the
-        // encoder they used to hold moved to PB12/PB13/PB15.
-        required ROW0: 30 [bidirectional] // PA9
-        required ROW1: 31 [bidirectional] // PA10
-        required ROW2: 39 [bidirectional] // PB3
-        required ROW3: 45 [bidirectional] // PB8
-        required COL0: 40 [bidirectional] // PB4
-        required COL1: 41 [bidirectional] // PB5
-        required COL2: 3 [bidirectional] // PC14 (input-only role)
-        required COL3: 2 [bidirectional] // PC13 (input-only role)
-        required ENC_A: 25 [bidirectional] // PB12
-        required ENC_B: 26 [bidirectional] // PB13
-        required ENC_SW: 28 [bidirectional] // PB15
-        required JOY_X: 19 [input] // PB1 / ADC_IN9
-        required JOY_Y: 10 [input] // PA0 / ADC_IN0
-        required JOY_SW: 38 [bidirectional] // PA15
-        required TOUCH: 46 [bidirectional] // PB9
-        required LED_DATA_KEY: 29 [output] // PA8 — per-key RGB chain
-        required LED_DATA_UG: 27 [output] // PB14 — perimeter underglow chain
-        // Serial console on the debug connector. USART1 is now reachable: the
-        // old map had PA9/PA10 AND PB6/PB7 all taken by the matrix, which is
-        // why the console was pushed onto USART2. Moving ROW2 to PA10 and COL1
-        // to PB5 frees PB6/PB7, so USART1 over AF0 is available and lands
-        // 4.9mm and 7.0mm closer to the socket than USART2 did.
-        required UART_TX: 42 [output] // PB6 / USART1_TX (AF0)
-        required UART_RX: 43 [input] // PB7 / USART1_RX (AF0)
-        // unused GPIO (declared to cover all 48 pads; left NC)
-        optional PC15: 4 [bidirectional]
-        optional PA1: 11 [bidirectional]
-        optional PA2: 12 [bidirectional]
-        optional PA3: 13 [bidirectional]
-        optional PA4: 14 [bidirectional]
-        optional PA5: 15 [bidirectional]
-        optional PA6: 16 [bidirectional]
-        optional PA7: 17 [bidirectional]
-        optional PB0: 18 [bidirectional]
-        optional PB2: 20 [bidirectional]
-        optional PB10: 21 [bidirectional]
-        optional PB11: 22 [bidirectional]
-    }
-}
-impl IC for STM32F072CBT6 {}
-pub part MCU_STM32F072: STM32F072CBT6 {
-    primary { mfr: "STMicroelectronics", mpn: "STM32F072CBT6", footprint: QFP50P900X900X160_48N }
-}
-
-// ---- USBLC6-2SC6: USB ESD protection (SOT-23-6). I/O1 = pins 1,6;
-// I/O2 = pins 3,4; each data line passes through a pin pair. ----
-pub device USBLC6 {
-    pins {
-        required IO1_A: 1 [bidirectional]
-        required GND: 2 [power_in]
-        required IO2_A: 3 [bidirectional]
-        required IO2_B: 4 [bidirectional]
-        required VBUS: 5 [power_in]
-        required IO1_B: 6 [bidirectional]
-    }
-}
-impl IC for USBLC6 {}
-pub part ESD_USBLC6: USBLC6 {
-    primary { mfr: "STMicroelectronics", mpn: "USBLC6-2SC6", footprint: FP_SOT_23_6 }
-}
-
-// ---- SK6812MINI-E: addressable RGB (5V). 1=VDD 2=DOUT 3=GND 4=DIN;
-// DOUT -> next DIN. ----
-pub device SK6812 {
-    pins {
-        required VDD: 1 [power_in]
-        required DOUT: 2 [output]
-        required GND: 3 [power_in]
-        required DIN: 4 [input]
-    }
-}
-impl Led_Addressable for SK6812 {}
-pub part RGB_SK6812: SK6812 {
-    primary { mfr: "Opsco", mpn: "SK6812MINI-E", footprint: FP_LED_SK6812MINI_E }
 }
 
 // ---- Kailh Choc V2 low-profile keyswitch (MX cross stem): 2 non-polar
@@ -182,24 +32,6 @@ pub device KeySwitch {
 impl Switch for KeySwitch {}
 pub part SW_KEY: KeySwitch {
     primary { mfr: "Work Louder", mpn: "WL-LP-SW-55G", footprint: FP_SW_Choc_V2 }
-}
-
-// ---- 1N4148W matrix diode, SOD-123. Pad 1 = cathode. ----
-pub device Diode_1N4148 {
-    pins {
-        required Cathode: 1 [passive]
-        required Anode: 2 [passive]
-    }
-}
-impl Polarized for Diode_1N4148 {
-    pins {
-        Anode: Anode
-        Cathode: Cathode
-    }
-}
-impl Diode for Diode_1N4148 {}
-pub part D_1N4148W: Diode_1N4148 {
-    primary { mfr: "Diodes Inc", mpn: "1N4148W-7-F", footprint: FP_D_SOD_123 }
 }
 
 // ---- Alps EC11 rotary encoder + push. A/B quadrature, C = common/GND;
@@ -226,13 +58,14 @@ pub part ENC_EC11: RotaryEC11 {
 // Y by VR2; which physical axis each senses is a firmware convention, not a
 // datasheet fact, so the naming here is ours.
 //
-// The switch's four terminals leave the switch body in a 2x2 grid (a/c the
-// top row, b/d the bottom) and its two poles pair BY ROW: a+c are one pole,
-// b+d the other — one pin claiming two pads, the same shape the key switches
-// use. Hardware-verified on the 2026-08 fab: that revision paired them by
-// side (a+b / c+d), which routes each internal pole strap across the two
-// nets and shorts JOY_SW to GND permanently — the push switch could never
-// register. Do not "simplify" this pairing back to columns.
+// The switch's four terminals pair BY ROW, not by side. The land is the
+// standard 6.5 x 4.5 tact-switch pattern, and a tact switch's two stamped
+// contact frames each exit as the two same-row legs 6.5mm apart: a+c are one
+// pole, b+d the other, the 4.5mm row spacing separating the poles. Pairing by
+// side (a+b / c+d) puts BOTH poles on each net, so JOY_SW is held at GND
+// through the switch body and the push never produces an edge — the same
+// column-grouping trap the footprint audit caught on the EVQ-P7A reset
+// switch this board used to carry.
 //
 // MNT = the metal frame's four soldered corner lugs (the datasheet's "Solder
 // all metal inserted fixing including terminals & metal lugs"), one pin
@@ -254,30 +87,6 @@ pub device ThumbPointer {
 impl Connector for ThumbPointer {}
 pub part JOY_RKJXV: ThumbPointer {
     primary { mfr: "Alps Alpine", mpn: "RKJXV122400R", footprint: FP_Joystick_RKJXV }
-}
-
-// ---- 2x3 2.54mm SMT female socket — debug + serial console. Six contacts,
-// no 3V3 and no reset: the target is powered from USB whenever it is being
-// debugged, and BOOT0/NRST already have their own on-board provisions, so the
-// socket carries only what a debugger and a console actually need.
-//
-//     GND | SWCLK | SWDIO
-//     GND | TXD   | RXD
-//
-// Two grounds, one per row, so each signal row has a return beside it — the
-// pair that matters is SWDIO/SWCLK, and its ground sits in the same column. ----
-pub device Debug_2x3 {
-    pins {
-        required GND: 1, 2 [passive]
-        required SWCLK: 3 [passive]
-        required TXD: 4 [passive]
-        required SWDIO: 5 [passive]
-        required RXD: 6 [passive]
-    }
-}
-impl Connector for Debug_2x3 {}
-pub part J_SWD: Debug_2x3 {
-    primary { mfr: "Generic", mpn: "SOCKET-2x3-2.54-SMD", footprint: FP_Socket_2x3_254_SMD }
 }
 
 // ---- capacitive-touch sense pad (bare copper, sensed by the STM32). ----

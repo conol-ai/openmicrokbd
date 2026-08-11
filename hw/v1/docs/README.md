@@ -28,11 +28,12 @@ genuine manufacturer document.
 | EC11E15244A5 | `ec11e15244a5.pdf` | rotary encoder | Alps EC11E series catalogue | `alpsalpine.com/cms.media/` |
 | 20021121-00010T4LF | `20021121-00010t4lf.pdf` | *superseded* — 1.27mm 10-pin debug connector | Amphenol ICC Minitek127, dwg 20021121 rev R | Amphenol |
 
-The Minitek127 sheet is kept for reference only: the debug port is now a
-generic 2×3 2.54mm SMD female socket (`FP_Socket_2x3_254_SMD`), whose land
-pattern is the standard 2.54mm vertical SMD pin-socket geometry rather than a
-single manufacturer's drawing — 2.54mm columns, rows splayed to ±2.52mm, 1×3mm
-lands. No part in the current BOM cites the Amphenol document.
+The Minitek127 sheet is kept for reference only: the debug port is now
+`connectors::headers::smd_254::SOCKET_2X3_254_SMD` (Samtec SSW-103-22-SM-D-VS),
+whose land pattern follows Samtec's own SSW-DVS Rev A recommended layout —
+1.27×3.43mm lands, rows at ±2.605mm, 2.54mm columns (the Samtec drawings live
+in the CoHDL repository's `lib/connectors/docs/`). No part in the current BOM
+cites the Amphenol document.
 
 The Panasonic EVQ-P7A sheet is likewise reference-only: the reset switch was
 removed from the design, and nothing in the BOM cites it. Both sheets are kept

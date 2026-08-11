@@ -2,22 +2,6 @@
 // the KiCad official footprint named in each comment (datasheet-derived land
 // patterns). Edits here propagate to every footprint that references the pad.
 
-// LQFP-48 0.5mm lead, left/right sides (KiCad Package_QFP:LQFP-48_7x7mm_P0.5mm).
-pub pad P_LQFP48_Lead_H {
-    shape: rect
-    size: (1.475mm, 0.3mm)
-    layer: top_copper
-    plating: smd
-}
-
-// LQFP-48 0.5mm lead, top/bottom sides.
-pub pad P_LQFP48_Lead_V {
-    shape: rect
-    size: (0.3mm, 1.475mm)
-    layer: top_copper
-    plating: smd
-}
-
 // Kailh Choc V2 (PG1353) low-profile switch electrical contact — MX-compatible
 // cross stem (takes MX keycaps at 19.05mm). 1.2mm plated hole, 2.2mm pad
 // (KiCad-official Switch_Keyboard_Kailh SW_Kailh_Choc_V2; pins unchanged from V1).
@@ -44,31 +28,6 @@ pub pad P_Choc_Leg {
     drill: (1.5mm, 2mm)
 }
 
-// 1N4148W small-signal diode terminal, SOD-123 (KiCad Diode_SMD:D_SOD-123).
-pub pad P_SOD123_Term {
-    shape: rect
-    size: (0.9mm, 1.2mm)
-    layer: top_copper
-    plating: smd
-}
-
-// SOT-23-6 lead (KiCad Package_TO_SOT_SMD:SOT-23-6) — USBLC6-2SC6 ESD array.
-pub pad P_SOT23_6_Lead {
-    shape: rect
-    size: (1.325mm, 0.6mm)
-    layer: top_copper
-    plating: smd
-}
-
-// SK6812MINI-E reverse-mount RGB LED pad (KiCad
-// LED_SMD:LED_SK6812MINI-E_3.2x2.8mm_P1.5mm_ReverseMount).
-pub pad P_SK6812_Pad {
-    shape: rect
-    size: (1.35mm, 0.82mm)
-    layer: top_copper
-    plating: smd
-}
-
 // Alps EC11E rotary-encoder signal terminal (KiCad
 // Rotary_Encoder:RotaryEncoder_Alps_EC11E-Switch_Vertical) — plated 1mm hole.
 pub pad P_EC11_Pin {
@@ -89,19 +48,6 @@ pub pad P_EC11_MP {
     layer: through_all
     plating: plated_through_hole
     drill: 2.8mm
-}
-
-// 2.54mm SMT socket-strip land (2x3 debug socket). Geometry from KiCad's
-// Connector_PinSocket_2.54mm:PinSocket_2x03_P2.54mm_Vertical_SMD: a 3mm x 1mm
-// land, long axis pointing OUTWARD from the body because an SMT socket's
-// contacts splay out sideways to be reflowed. Transposed relative to KiCad's
-// own frame (see FP_Socket_2x3_254_SMD) so the part's three columns run along
-// x, matching the pinout as it is drawn on paper.
-pub pad P_Socket254_Pad {
-    shape: rect
-    size: (1mm, 3mm)
-    layer: top_copper
-    plating: smd
 }
 
 // Alps RKJXV122400R potentiometer terminal — the drawing's `6-ø1 +0.1/0 hole`
@@ -155,12 +101,4 @@ pub pad P_MountHole_M2 {
     layer: through_all
     plating: plated_through_hole
     drill: 2.2mm
-}
-
-// 3225 4-pad crystal terminal (ABM8-class).
-pub pad P_XTAL_3225 {
-    shape: rect
-    size: (1.4mm, 1.2mm)
-    layer: top_copper
-    plating: smd
 }
