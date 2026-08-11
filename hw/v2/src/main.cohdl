@@ -1,0 +1,632 @@
+// OpenMicro2 — second-generation wireless macropad. NOT a Codex Micro clone:
+// this is an original SF32LB52 (BLE 5.3) design with a 2.16" 480x480 AMOLED
+// touch display, a rotary encoder, an analog joystick, a 3x5 key field
+// with per-key RGB, an analog MEMS microphone, USB-C charging, and a 1-cell
+// Li-ion battery. 41 of the SF32's 45 PA GPIOs are committed — the pin map
+// below is a solved packing, not a convention (PA01/PA09/PA30/PA37 are
+// free expansion headroom; PA30 keeps a GPADC channel); see README.md.
+//
+// Pinmux facts (SiFli DS5202 + hardware guide + pinned SiliconSchema pinmux):
+//   LCDC1 QSPI is fixed on PA00/PA02..PA08; MPI2 flash on PA12..PA17; the
+//   32.768kHz crystal (required for BLE sleep) owns PA22/PA23, which also
+//   removes the alternate PDM1 position — and the primary PDM1/I2S1 positions
+//   sit on the display's PA05..PA08 — so the microphone uses the SF32's
+//   DEDICATED analog path (ADCP + MIC_BIAS) through a 2-pin module connector
+//   and costs zero GPIOs. GPADC channels exist only on PA28..PA34; the
+//   joystick wipers take CH3/CH4 (PA31/PA32). Debug UART/SWD is PA18/PA19,
+//   USB is PA35/PA36, I2C1 (touch + charger) is PA41/PA42.
+//
+// Every FLEXIBLE signal is additionally assigned by PACKAGE GEOMETRY (the
+// QFN68 mounts on the back, top edge of the chip toward the top of the
+// board, so its left/right flanks mirror): BRF_ANT and the USB pins sit on
+// the chip's top row facing the antenna and receptacle; the display QSPI
+// bank is the west flank facing the FPC receptacle; flash and debug own
+// the south row; the matrix takes the south row's spare pins plus the east
+// flank; the joystick's GPADC channels are east-flank pins facing the
+// stick; TP_INT/TP_RST take top-row free pins beside I2C1 — the
+// receptacle carries its touch tail (pins 2..5) NORTH of its QSPI block,
+// so west-flank pins would drag both lines across the whole display fan,
+// while the top row joins the westbound corridor the I2C pair already
+// rides; the encoder takes the top row's
+// EAST-end pins (PA33/PA34, nearest its knob beside the joystick); and
+// the LED gate and charger interrupt take the top row's west pins facing
+// the charger cluster. Only the 800kHz WS2812 data line (PA40, top
+// center) ignores distance — it can afford to.
+
+design OpenMicro2 {
+    // ---- major devices ----
+    inst mcu: contrib_sf32::MCU_SF32LB52EUB6
+    inst usbc: usb::connectors::type_c::USB_C_HRO_TYPE_C_31_M_12
+    inst esd: esd::ESD_USBLC6
+    // SGM41562B: USB-C VBUS in, power-path SYS out, 1-cell Li-ion charge.
+    // Runs on standalone defaults; I2C joins the touch bus for telemetry.
+    inst charger: contrib_charger::CHARGER_SGM41562B
+    inst batt: connectors::fpc::fpc::CONN_BAT_2P
+    inst ldo: ldo::LDO_AP2112K_3V3
+    // SGM2554 gates the LED rail: 15 SK6812 quiescent currents would drain
+    // the cell in BLE sleep, so firmware cuts the whole rail instead.
+    inst led_sw: load_switch::LOADSW_SGM2554
+    inst flash: flash::FLASH_W25Q128JVSIQ
+    // The AMOLED module (Huaxia RGB H0216F002AM: CO5300 DDIC + CST9220
+    // touch) is a plug-in assembly — the soldered part is its board-side
+    // FPC receptacle, whose pins mirror the module interface table.
+    inst disp: DISPLAY_FPC_OK_F302
+    #[placement_hint("top-edge slot between underglow LEDs (user-directed, off the Johanson corner): 6.5x4mm ground clearance zone, 50-ohm feed, reserve the tee matching slots and tune with the display fitted")]
+    inst ant: antenna::ANT_2450AT18B100E
+    // Analog MEMS mic module on a 2-pin connector: OUT DC-blocked into the
+    // SF32 audio ADC, VDD served from MIC_BIAS (the connector doc's own
+    // wiring: board-side 1uF block, 100R + 100nF on VDD).
+    inst micj: connectors::fpc::fpc::CONN_MIC_2P
+    inst swd: connectors::headers::smd_254::SOCKET_2X3_254_SMD
+    inst enc1: ENC_EC11
+    inst joy: JOY_RKJXV
+
+    // ---- 15 key switches (3 rows x 5 cols) + matrix diodes; d[15]/d[16]
+    // are the encoder and joystick push switches scanned as matrix row 3 ----
+    inst sw: [SW_KEY; 15]
+    inst d: [diode::D_1N4148W; 17]
+    // ---- 15 per-key RGB LEDs (SK6812MINI-E reverse-mount, one under each
+    // key at the switch's south LED window) plus a 10-LED perimeter
+    // ambient ring (3 top, 3 bottom, 2 per side) on the TOP layer, firing
+    // up (directed by the user — viable again now that the display is
+    // off-board and nothing shadows the front). ONE chain on PA40: the
+    // ring continues from key_leds[14] rather than taking one of the pins
+    // the encoder trim freed — a second chain buys nothing this ring
+    // needs, and both segments sit on the gated VLED rail either way. ----
+    inst key_leds: [led::RGB_SK6812; 15]
+    inst ambient_leds: [led::RGB_SK6812; 10]
+
+    // ---- 4 M2 mounting holes (plated barrels -> GND) ----
+    inst mh: [misc::MOUNTING_HOLE_M2_PTH; 4]
+
+    // ---- SF32 clocks and internal buck ----
+    #[crystal_oscillator(mcu, XTAL48M_XI, XTAL48M_XO)]
+    inst xtal_48m: osc::XTAL_48MHZ
+    #[crystal_oscillator(mcu, PA22, PA23)]
+    inst xtal_32k: osc::XTAL_32K768
+    inst l_buck: passive::IND_4U7_WPN201610U
+
+    // ---- control resistors ----
+    inst r_cc1: passive::R_5K1_F_0402
+    inst r_cc2: passive::R_5K1_F_0402
+    // SGM41562B p3: 10k pull-ups required when the I2C interface is used.
+    inst r_i2c_sda: passive::R_10K_F_0402
+    inst r_i2c_scl: passive::R_10K_F_0402
+    inst r_nint: passive::R_10K_F_0402
+    inst r_led_en_pd: passive::R_100K_F_0402
+    inst r_mic_vdd: passive::R_100R_F_0402
+    // The Johanson tuning note wants a tee (series-shunt-series) matching
+    // network reserved at the antenna. The series slot is FITTED as 0R (the
+    // starting value on a 50-ohm feed); both shunt lands are layout-reserved,
+    // unpopulated — CoHDL has no do-not-populate construct to carry them.
+    inst r_ant: passive::R_0R_J_0402
+
+    // ---- power-path and rail capacitors ----
+    #[bypass(charger.IN, 10uF)]
+    inst c_vbus: passive::C_10u_25V_X5R_0805
+    inst c_chg_vdd: passive::C_100n_10V_X5R_0402
+    #[bypass(charger.SYS, 10uF)]
+    inst c_sys: passive::C_10u_25V_X5R_0805
+    #[bypass(charger.BAT, 10uF)]
+    inst c_bat: passive::C_10u_25V_X5R_0805
+    #[bypass(ldo.VOUT, 1uF)]
+    inst c_ldo_out: passive::C_1u_10V_X5R_0603
+    #[bypass(led_sw.OUT, 10uF)]
+    inst c_led_sw: passive::C_10u_25V_X5R_0805
+
+    // ---- SF32 rail capacitors (mirrors the sf32-miniboard set) ----
+    #[bypass(mcu.PVDD, 10uF)]
+    inst c_pvdd: passive::C_10u_25V_X5R_0805
+    inst c_buck_fb: passive::C_4u7_10V_X5R_0603
+    inst c_vout1: passive::C_4u7_10V_X5R_0603
+    inst c_vout2: passive::C_4u7_10V_X5R_0603
+    inst c_vdd_ret: passive::C_470n_10V_X5R_0402
+    inst c_vdd_rtc: passive::C_1u_10V_X5R_0603
+    #[bypass(mcu.VDDIOA, 1uF)]
+    inst c_vddioa: passive::C_1u_10V_X5R_0603
+    inst c_vdd_sip: passive::C_2u2_10V_X5R_0603
+    #[bypass(mcu.AVDD33, 4.7uF)]
+    inst c_avdd33: passive::C_4u7_10V_X5R_0603
+    #[bypass(mcu.AVDD_BRF, 4.7uF)]
+    inst c_avdd_brf: passive::C_4u7_10V_X5R_0603
+    #[bypass(mcu.AVDD33_AUD, 2.2uF)]
+    inst c_avdd_aud: passive::C_2u2_10V_X5R_0603
+    inst c_aud_vref: passive::C_1u_10V_X5R_0603
+    inst c_mic_bias: passive::C_1u_10V_X5R_0603
+    inst c_gpadc_vref: passive::C_4u7_10V_X5R_0603
+
+    // ---- peripheral decoupling ----
+    #[bypass(flash.VCC, 100nF)]
+    inst c_flash: passive::C_100n_10V_X5R_0402
+    #[bypass(disp.IOVCC, 100nF)]
+    inst c_disp_iovcc: passive::C_100n_10V_X5R_0402
+    #[bypass(disp.VCI, 1uF)]
+    inst c_disp_vci: passive::C_1u_10V_X5R_0603
+    // The SIBO boost pulls pulsed current from VBAT — bulk + HF pair.
+    #[bypass(disp.VBAT, 4.7uF)]
+    inst c_disp_vbat: passive::C_4u7_10V_X5R_0603
+    #[bypass(disp.VBAT, 100nF)]
+    inst c_disp_vbat_hf: passive::C_100n_10V_X5R_0402
+    // mic module VDD filter (100R series above + this 100nF at the pins)
+    #[bypass(micj.P2, 100nF)]
+    inst c_mic_vdd: passive::C_100n_10V_X5R_0402
+    // 1uF DC-block between the mic's analog OUT and the SF32 ADCP input —
+    // a SERIES element, not a bypass.
+    inst c_mic_blk: passive::C_1u_10V_X5R_0402
+
+    // ---- one 100nF per key LED, on the switched LED rail ----
+    #[bypass(key_leds[0].VDD, 100nF)]
+    inst c_kled0: passive::C_100n_16V_X7R_0402
+    #[bypass(key_leds[1].VDD, 100nF)]
+    inst c_kled1: passive::C_100n_16V_X7R_0402
+    #[bypass(key_leds[2].VDD, 100nF)]
+    inst c_kled2: passive::C_100n_16V_X7R_0402
+    #[bypass(key_leds[3].VDD, 100nF)]
+    inst c_kled3: passive::C_100n_16V_X7R_0402
+    #[bypass(key_leds[4].VDD, 100nF)]
+    inst c_kled4: passive::C_100n_16V_X7R_0402
+    #[bypass(key_leds[5].VDD, 100nF)]
+    inst c_kled5: passive::C_100n_16V_X7R_0402
+    #[bypass(key_leds[6].VDD, 100nF)]
+    inst c_kled6: passive::C_100n_16V_X7R_0402
+    #[bypass(key_leds[7].VDD, 100nF)]
+    inst c_kled7: passive::C_100n_16V_X7R_0402
+    #[bypass(key_leds[8].VDD, 100nF)]
+    inst c_kled8: passive::C_100n_16V_X7R_0402
+    #[bypass(key_leds[9].VDD, 100nF)]
+    inst c_kled9: passive::C_100n_16V_X7R_0402
+    #[bypass(key_leds[10].VDD, 100nF)]
+    inst c_kled10: passive::C_100n_16V_X7R_0402
+    #[bypass(key_leds[11].VDD, 100nF)]
+    inst c_kled11: passive::C_100n_16V_X7R_0402
+    #[bypass(key_leds[12].VDD, 100nF)]
+    inst c_kled12: passive::C_100n_16V_X7R_0402
+    #[bypass(key_leds[13].VDD, 100nF)]
+    inst c_kled13: passive::C_100n_16V_X7R_0402
+    #[bypass(key_leds[14].VDD, 100nF)]
+    inst c_kled14: passive::C_100n_16V_X7R_0402
+    // underglow ring: one 100nF per chain-adjacent LED PAIR (shared rail
+    // cap), the openmicro-kbd convention
+    #[bypass(ambient_leds[0].VDD, 100nF)]
+    inst c_uled0: passive::C_100n_16V_X7R_0402
+    #[bypass(ambient_leds[2].VDD, 100nF)]
+    inst c_uled2: passive::C_100n_16V_X7R_0402
+    #[bypass(ambient_leds[4].VDD, 100nF)]
+    inst c_uled4: passive::C_100n_16V_X7R_0402
+    #[bypass(ambient_leds[6].VDD, 100nF)]
+    inst c_uled6: passive::C_100n_16V_X7R_0402
+    #[bypass(ambient_leds[8].VDD, 100nF)]
+    inst c_uled8: passive::C_100n_16V_X7R_0402
+
+    // ---- power: USB-C VBUS -> charger -> power-path SYS rail (3.5-4.5V,
+    // battery domain) -> AP2112K 3.3V. The display's SIBO input is SPECIFIED
+    // 3.7-4.5V with an absolute maximum of 4.6V (module p6/p7) — 5V VBUS is
+    // out of spec, which is exactly what the power-path rail is for. The LED
+    // chain also runs on the battery domain, through the SGM2554 gate. ----
+    #[high_current(500mA)]
+    net VBUS [5V]: usbc.VBUS, esd.VBUS, charger.IN, c_vbus.A
+    #[intent("battery net: true cell voltage, also the SF32's VBAT sense")]
+    net VBAT_RAW [3.7V]: charger.BAT, batt.P1, mcu.VBATS, c_bat.A
+    #[intent("SGM41562B power path: SYS carries the board from USB or battery")]
+    #[high_current(1A)]
+    net VSYS [4.2V]: charger.SYS, ldo.VIN, ldo.EN, led_sw.IN, disp.VBAT, c_sys.A, c_disp_vbat.A,
+                     c_disp_vbat_hf.A
+    net CHG_VDD: charger.VDD, c_chg_vdd.A
+    #[intent("LED rail defaults OFF via the 100k pull-down; firmware enables PA44 after boot")]
+    #[high_current(1A)]
+    net VLED [4.2V]: led_sw.OUT, c_led_sw.A, key_leds[0..=14].VDD, ambient_leds[0..=9].VDD,
+                     c_kled0.A, c_kled1.A, c_kled2.A, c_kled3.A, c_kled4.A, c_kled5.A, c_kled6.A,
+                     c_kled7.A, c_kled8.A, c_kled9.A, c_kled10.A, c_kled11.A, c_kled12.A,
+                     c_kled13.A, c_kled14.A, c_uled0.A, c_uled2.A, c_uled4.A, c_uled6.A, c_uled8.A
+    net LED_EN: mcu.PA44, led_sw.EN, r_led_en_pd.A
+    #[intent("AP2112K enable tied to VSYS — 3.3V is up whenever the power path is")]
+    #[high_current(500mA)]
+    net V3V3 [3.3V]: ldo.VOUT, mcu.PVDD, mcu.VDDIOA, mcu.AVDD33, mcu.AVDD33_AUD, mcu.AVDD_BRF,
+                     flash.VCC, disp.IOVCC, disp.VCI, disp.VCI_EN, joy.X_END_B, joy.Y_END_B, swd.P1,
+                     swd.P6, r_i2c_sda.A, r_i2c_scl.A, r_nint.A, c_ldo_out.A, c_pvdd.A, c_vddioa.A,
+                     c_avdd33.A, c_avdd_brf.A, c_avdd_aud.A, c_flash.A, c_disp_iovcc.A, c_disp_vci.A
+
+    // ---- SF32 internal power outputs and decoupling nodes (E-series part:
+    // VDD_SIP is its own internal-LDO node, not tied to 3V3) ----
+    net BUCK_LX: mcu.BUCK_LX, l_buck.A
+    net BUCK_FB: l_buck.B, mcu.BUCK_FB, c_buck_fb.A
+    net VDD_VOUT1: mcu.VDD_VOUT1, c_vout1.A
+    net VDD_VOUT2: mcu.VDD_VOUT2, c_vout2.A
+    net VDD_RET: mcu.VDD_RET, c_vdd_ret.A
+    net VDD_RTC: mcu.VDD_RTC, c_vdd_rtc.A
+    net VDD_SIP_DECOUPLE: mcu.VDD_SIP, c_vdd_sip.A
+    net AUD_VREF_DECOUPLE: mcu.AUD_VREF, c_aud_vref.A
+    net GPADC_VREF_DECOUPLE: mcu.GPADC_VREF, c_gpadc_vref.A
+
+    // ---- 48MHz main crystal and 32.768kHz BLE-sleep crystal ----
+    // SiFli specifies no fitted matching capacitors for crystals below 12pF
+    // CL; the layout reserves unpopulated matching-cap lands.
+    net XTAL48_XI: mcu.XTAL48M_XI, xtal_48m.XIN
+    net XTAL48_XO: mcu.XTAL48M_XO, xtal_48m.XOUT
+    net XTAL32_XI: mcu.PA22, xtal_32k.XIN
+    net XTAL32_XO: mcu.PA23, xtal_32k.XOUT
+
+    // ---- Bluetooth LE antenna: BRF_ANT -> tee series slot -> chip antenna.
+    // 50-ohm feed per the SiFli hardware guide and the Johanson datasheet;
+    // both tee shunt lands are reserved unpopulated at r_ant/ant. ----
+    #[impedance(50ohm, frequency: 2.4GHz)]
+    net BLE_RF: mcu.BRF_ANT, r_ant.A
+    #[impedance(50ohm, frequency: 2.4GHz)]
+    net BLE_ANT: r_ant.B, ant.FEED
+
+    // ---- external 128Mbit QSPI NOR flash (MPI2 mapping, PA12..PA17) ----
+    net FLASH_CS: mcu.PA12, flash.CS
+    net FLASH_IO1: mcu.PA13, flash.DO
+    net FLASH_IO2: mcu.PA14, flash.WP
+    net FLASH_IO0: mcu.PA15, flash.DI
+    net FLASH_CLK: mcu.PA16, flash.CLK
+    net FLASH_IO3: mcu.PA17, flash.HOLD
+
+    // ---- native USB 2.0 full-speed through the ESD array ----
+    net USBC_DP: usbc.DP, esd.IO1_A
+    net USB_DP: esd.IO1_B, mcu.PA35
+    net USBC_DM: usbc.DN, esd.IO2_A
+    net USB_DM: esd.IO2_B, mcu.PA36
+    // USB-C CC pulldowns (5.1k Rd — advertise a UFP/device sink)
+    net CC1: usbc.CC1, r_cc1.A
+    net CC2: usbc.CC2, r_cc2.A
+
+    // ---- shared I2C1 bus: CST9220 touch (in the display module) + charger
+    // telemetry. Hardware-guide I2C1 position PA41/PA42. ----
+    net I2C_SDA: mcu.PA41, disp.TP_SDA, charger.SDA, r_i2c_sda.B
+    net I2C_SCL: mcu.PA42, disp.TP_SCL, charger.SCL, r_i2c_scl.B
+    // charger nINT is open-drain — 10k pull-up
+    net CHG_NINT: mcu.PA43, charger.NINT, r_nint.B
+    // touch INT/RST on top-row free pins: the connector carries the touch
+    // tail at its NORTH end (pins 2/3), north of its QSPI block, so these
+    // exit beside I2C1 and share its corridor instead of crossing the
+    // eight-line display fan the west-flank pins would have to
+    net TP_INT: mcu.PA38, disp.TP_INT
+    net TP_RST: mcu.PA39, disp.TP_RST
+
+    // ---- AMOLED over LCDC1 QSPI (fixed pinmux position PA00/PA02..PA08).
+    // Module pin names per its interface table: SDI_RDX/DCX/D0/D1 are QSPI
+    // data 0..3, WRX_SCL the clock, CSX select, TE the tear sync. ----
+    net DISP_RESET: mcu.PA00, disp.RESET
+    net DISP_TE: mcu.PA02, disp.TE
+    net DISP_CS: mcu.PA03, disp.CSX
+    net DISP_CLK: mcu.PA04, disp.WRX_SCL
+    net DISP_D0: mcu.PA05, disp.SDI_RDX
+    net DISP_D1: mcu.PA06, disp.DCX
+    net DISP_D2: mcu.PA07, disp.D0
+    net DISP_D3: mcu.PA08, disp.D1
+
+    // ---- analog microphone: module OUT -> 1uF DC-block -> audio ADC;
+    // module VDD from MIC_BIAS through 100R, filtered at the connector ----
+    net MIC_OUT: micj.P1, c_mic_blk.A
+    net MIC_ADC: c_mic_blk.B, mcu.ADCP
+    net MIC_BIAS_SRC: mcu.MIC_BIAS, r_mic_vdd.A, c_mic_bias.A
+    net MIC_VDD: r_mic_vdd.B, micj.P2, c_mic_vdd.A
+
+    // ---- debug socket (miniboard convention): P1/P6 3V3, P2 GND,
+    // P3 TX/SWCLK, P4 RX/SWDIO, P5 calibration ----
+    // The calibration point is a bare GPIO test point, so GEOMETRY picks the
+    // pin. The miniboard's PA01 sits INSIDE the west flank's display bank
+    // (between LCDC RSTB and TE) and would have to cross all seven display
+    // lines to reach the south-west socket. PA10 is the flank's SOUTHMOST
+    // pin, below the whole bank, and escapes beside DEBUG_TX/RX with no
+    // crossing at all. PA10 carries the same alternates PA01 did
+    // (PA_I2C_UART, PA_TIM), so nothing is given up.
+    net DEBUG_TX_SWCLK: mcu.PA19, swd.P3
+    net DEBUG_RX_SWDIO: mcu.PA18, swd.P4
+    net DEBUG_CAL: mcu.PA10, swd.P5
+
+    // ---- key matrix (COL2ROW: ROW -> switch -> diode -> COL). Rows 0..2
+    // are the 3x5 key field; row 3 scans the three encoder pushes and the
+    // joystick centre-push, so no control costs a dedicated GPIO. ----
+    net KEY1: sw[0].B, d[0].Anode
+    net KEY2: sw[1].B, d[1].Anode
+    net KEY3: sw[2].B, d[2].Anode
+    net KEY4: sw[3].B, d[3].Anode
+    net KEY5: sw[4].B, d[4].Anode
+    net KEY6: sw[5].B, d[5].Anode
+    net KEY7: sw[6].B, d[6].Anode
+    net KEY8: sw[7].B, d[7].Anode
+    net KEY9: sw[8].B, d[8].Anode
+    net KEY10: sw[9].B, d[9].Anode
+    net KEY11: sw[10].B, d[10].Anode
+    net KEY12: sw[11].B, d[11].Anode
+    net KEY13: sw[12].B, d[12].Anode
+    net KEY14: sw[13].B, d[13].Anode
+    net KEY15: sw[14].B, d[14].Anode
+    net ENC1_KEY: enc1.SW2, d[15].Anode
+    net JOY_KEY: joy.SW_B, d[16].Anode
+    net ROW0: mcu.PA11, sw[0..=4].A
+    net ROW1: mcu.PA20, sw[5..=9].A
+    net ROW2: mcu.PA21, sw[10..=14].A
+    net ROW3: mcu.PA24, enc1.SW1, joy.SW_A
+    net COL0: mcu.PA25, d[0, 5, 10, 15].Cathode
+    net COL1: mcu.PA26, d[1, 6, 11, 16].Cathode
+    net COL2: mcu.PA27, d[2, 7, 12].Cathode
+    net COL3: mcu.PA28, d[3, 8, 13].Cathode
+    net COL4: mcu.PA29, d[4, 9, 14].Cathode
+
+    // ---- rotary encoders (quadrature A/B; pushes are in the matrix) ----
+    net ENC1_A: mcu.PA33, enc1.A
+    net ENC1_B: mcu.PA34, enc1.B
+
+    // ---- analog joystick wipers on GPADC CH3/CH4 ----
+    net JOY_X: mcu.PA31, joy.X_WIPER
+    net JOY_Y: mcu.PA32, joy.Y_WIPER
+
+    // ---- per-key RGB chain (single chain, key_leds[0]..[14] on PA40) ----
+    net LED_D0: mcu.PA40, key_leds[0].DIN
+    net LED_D1: key_leds[0].DOUT, key_leds[1].DIN
+    net LED_D2: key_leds[1].DOUT, key_leds[2].DIN
+    net LED_D3: key_leds[2].DOUT, key_leds[3].DIN
+    net LED_D4: key_leds[3].DOUT, key_leds[4].DIN
+    net LED_D5: key_leds[4].DOUT, key_leds[5].DIN
+    net LED_D6: key_leds[5].DOUT, key_leds[6].DIN
+    net LED_D7: key_leds[6].DOUT, key_leds[7].DIN
+    net LED_D8: key_leds[7].DOUT, key_leds[8].DIN
+    net LED_D9: key_leds[8].DOUT, key_leds[9].DIN
+    net LED_D10: key_leds[9].DOUT, key_leds[10].DIN
+    net LED_D11: key_leds[10].DOUT, key_leds[11].DIN
+    net LED_D12: key_leds[11].DOUT, key_leds[12].DIN
+    net LED_D13: key_leds[12].DOUT, key_leds[13].DIN
+    net LED_D14: key_leds[13].DOUT, key_leds[14].DIN
+
+    // ---- underglow continuation: counterclockwise from the bottom-right
+    // (nearest the last key LED), bottom -> left -> top -> right ----
+    net UG_D0: key_leds[14].DOUT, ambient_leds[0].DIN
+    net UG_D1: ambient_leds[0].DOUT, ambient_leds[1].DIN
+    net UG_D2: ambient_leds[1].DOUT, ambient_leds[2].DIN
+    net UG_D3: ambient_leds[2].DOUT, ambient_leds[3].DIN
+    net UG_D4: ambient_leds[3].DOUT, ambient_leds[4].DIN
+    net UG_D5: ambient_leds[4].DOUT, ambient_leds[5].DIN
+    net UG_D6: ambient_leds[5].DOUT, ambient_leds[6].DIN
+    net UG_D7: ambient_leds[6].DOUT, ambient_leds[7].DIN
+    net UG_D8: ambient_leds[7].DOUT, ambient_leds[8].DIN
+    net UG_D9: ambient_leds[8].DOUT, ambient_leds[9].DIN
+
+    #[ground(primary)]
+    net GND [gnd]: usbc.GND, usbc.SHIELD, esd.GND, charger.GND, batt.P2, ldo.GND, led_sw.GND,
+                   mcu.EPAD, flash.GND, disp.GND, xtal_48m.GND, swd.P2, enc1.C, enc1.MNT,
+                   joy.X_END_A, joy.Y_END_A, joy.MNT, mh[0..=3].PAD, key_leds[0..=14].GND,
+                   ambient_leds[0..=9].GND, r_cc1.B, r_cc2.B, r_led_en_pd.B, c_vbus.B, c_chg_vdd.B,
+                   c_sys.B, c_bat.B, c_ldo_out.B, c_led_sw.B, c_pvdd.B, c_buck_fb.B, c_vout1.B,
+                   c_vout2.B, c_vdd_ret.B, c_vdd_rtc.B, c_vddioa.B, c_vdd_sip.B, c_avdd33.B,
+                   c_avdd_brf.B, c_avdd_aud.B, c_aud_vref.B, c_mic_bias.B, c_gpadc_vref.B,
+                   c_flash.B, c_disp_iovcc.B, c_disp_vci.B, c_disp_vbat.B, c_disp_vbat_hf.B,
+                   c_mic_vdd.B, c_kled0.B, c_kled1.B, c_kled2.B, c_kled3.B, c_kled4.B, c_kled5.B,
+                   c_kled6.B, c_kled7.B, c_kled8.B, c_kled9.B, c_kled10.B, c_kled11.B, c_kled12.B,
+                   c_kled13.B, c_kled14.B, c_uled0.B, c_uled2.B, c_uled4.B, c_uled6.B, c_uled8.B
+
+    // ---- deliberately unconnected ----
+    // chain end floats; SBU unused; charger NTC disabled (standalone
+    // defaults); antenna pad 2 is a solder-anchor only; DAC unused (no
+    // speaker); display: TP_VCC is the module's own OUTPUT, MTP_PWR must be
+    // open in normal operation, MIPI pins unused in QSPI mode; SGM2554 pin 4
+    // is a true no-connect.
+    nc: usbc.SBU1, usbc.SBU2, mcu.NC, mcu.DACN, mcu.DACP, ambient_leds[9].DOUT, charger.NTC, ant.NC,
+        led_sw.NC
+    nc: disp.TP_VCC, disp.MTP_PWR, disp.D1P, disp.D1N, disp.CLKP, disp.CLKN, disp.D0P, disp.D0N
+
+    // ---- layout ----
+    // Geometry: 115 x 92mm outline (±57.5, ±46), 6mm corner radius, origin
+    // at board centre, +y toward the user (down). The AMOLED module is NOT
+    // on the board (directed by the user): it lives on a 3D-printed mount
+    // to the board's LEFT, plugged into the FPC receptacle on the left
+    // edge — which is what let the board shed 13mm of height, since the
+    // top band now only has to hold the rotary encoder and the joystick
+    // (left to right: display off-board, encoder, joystick). Below them
+    // the 3x5 key field sits on the 19.05mm grid (columns ±38.1, ±19.05,
+    // 0; rows -7.25 / 11.8 / 30.85).
+    //
+    // The MCU sits WEST at (-25, -27) (directed by the user), top row of
+    // the QFN facing the top edge: from there the board's WIDEST bundle —
+    // eight LCDC lines plus four touch lines to the left-edge display
+    // receptacle — runs ~23mm off the chip's west flank instead of the
+    // ~55mm the old east-side spot cost, and the USB pair exits the top
+    // row ~10mm from the ESD array with a straight shot to the receptacle.
+    // The price is the RF run: the user-fixed antenna slot (LEDs 2..3,
+    // x=+14) is now ~38mm east of BRF_ANT. That is a routine feed length
+    // for a 50-ohm BLE microstrip and the zone has open air above it, but
+    // it must be routed as one: south out of BRF_ANT (west of the USB
+    // pair's exit, so they never cross), east along y~-39 on the back —
+    // passing NORTH of the LED2 window cut-out — then a via to the front
+    // at the tee slot. Flash/debug/matrix escape south and east.
+    //
+    // Unlike openmicro-kbd, whose back-side placement was re-derived from
+    // routing runs, these back-side positions are pre-route seeds, and
+    // Quilter is free to improve on any of it. Bypass capacitors and
+    // pull resistors carry no coordinates at all — the #[bypass] attributes
+    // are what the auto-placer consumes (RFC-027), and a hand guess would
+    // only override it.
+    layout {
+        net_class USB { USBC_DP, USBC_DM, USB_DP, USB_DM }
+        diff_pair(USBC_DP,
+                  USBC_DM) [differential_impedance: 90ohm, single_ended_impedance: 45ohm, frequency: 480MHz]
+        diff_pair(USB_DP,
+                  USB_DM) [differential_impedance: 90ohm, single_ended_impedance: 45ohm, frequency: 480MHz]
+        length_match(USB_DP, USB_DM) [tolerance: 0.15mm]
+        net_class Clock { XTAL48_XI, XTAL48_XO, XTAL32_XI, XTAL32_XO, FLASH_CLK }
+        net_class DisplayQSPI { DISP_CS, DISP_CLK, DISP_D0, DISP_D1, DISP_D2, DISP_D3 }
+        board_outline: "mechanical/openmicro2-outline.dxf"
+
+        // -- top band (user-facing, front side) --
+        // Display FPC receptacle on the LEFT EDGE, opening (the long-pad
+        // actuator row) facing WEST, off-board: the module's 31-finger
+        // tail enters from the 3D-printed mount beside the board. The
+        // mount must hold the panel within the tail's reach of this edge;
+        // that dimension is the mount designer's to verify against the
+        // module drawing (the spec sheet does not dimension the free tail
+        // length).
+        place disp at (-51mm, -28mm) rotate 270
+        // EC11 origin is pad 1; the knob sits at origin + (7, 2.5), so the
+        // encoder is placed knob-position - (7, 2.5). Knob at (18, -28),
+        // JUST LEFT of the joystick (directed by the user): 2.6mm between
+        // its courtyard and the stick's body, sharing the y = -28 centre
+        // line. Its THT pins land east of the MCU, which also shortens the
+        // PA33/PA34 quadrature runs to ~12mm.
+        place enc1 at (11mm, -30.5mm)
+        // FP_Joystick_RKJXV's origin is the lever axis. `rotate 180` turns
+        // the narrower body side toward the key field below and swings the
+        // VR terminal columns inboard (same reasoning as openmicro-kbd).
+        // Axis y=-28 aligns with the encoder; the body top clears the
+        // top-edge ring windows by 0.9mm.
+        place joy at (40mm, -28mm) rotate 180
+        // Chip antenna on the top edge BETWEEN ambient_leds[6] and [7]
+        // (directed by the user; the USB port takes the [5]..[6] slot).
+        // Off-corner placement still deviates from the Johanson corner
+        // recommendation, but with the display module off the board the
+        // 6.5 x 4mm ground-clearance zone (x 10.75..17.25, y -46..-42,
+        // copper-free on all layers) finally has open air above it — the
+        // strongest RF position this board has had. Matching still gets
+        // characterized on the finished board per the Johanson tuning
+        // note; the tee's series slot (r_ant) sits just west of the zone
+        // boundary, on the MCU side, feed pad west toward it.
+        place ant at (14mm, -44mm)
+        place r_ant at (9.5mm, -41.5mm)
+
+        // -- USB on the top edge between ambient_leds[5] and [6] (directed
+        // by the user), back side --
+        // HRO receptacle: PCB EDGE is 1.86mm from the footprint origin on
+        // the mouth side; top edge at y=-46 -> origin -44.14. The footprint's
+        // mouth points +y, and RFC-026's back-side flip is a pure left/right
+        // mirror — it never turns the mouth — so a top-edge mouth needs
+        // rotate 180 regardless of side. (The old no-rotate "lesson" here was
+        // an artifact of a kicad_board.py flip-axis bug, since fixed.)
+        // x=-14 centres the port in its LED slot; the ESD array sits directly
+        // inboard, its line-side pins facing north to the receptacle.
+        place usbc at (-14mm, -44.14mm) rotate 180 side bottom
+        place esd at (-14mm, -34.5mm) rotate 90 side bottom
+        // charger west of the MCU cluster, between the USB entry and the
+        // left-edge battery connector; its BAT trace runs down the left
+        // edge.
+        place charger at (-33mm, -38.5mm) side bottom
+        // both SOT parts rotate 180 so their input/enable columns face WEST
+        // toward the charger's SYS ball and their outputs face the loads east
+        place ldo at (-29mm, -35mm) rotate 180 side bottom
+        place led_sw at (-28mm, -38.5mm) rotate 180 side bottom
+
+        // -- MCU cluster on the back, WEST (the user's arrow), between
+        // the USB entry and the display bundle. The 48M crystal sits due
+        // north of the chip (its XI/XO pads are the two pins right beside
+        // BRF_ANT), clear of the USB legs and the RF escape; the 32k
+        // crystal faces its PA22/PA23 pins on the east flank; the buck
+        // inductor faces BUCK_LX at the south row's east end; the flash
+        // faces its MPI2 bank on the south row, south of the QSPI bundle's
+        // westbound channel. --
+        place mcu at (-25mm, -27mm) side bottom
+        place xtal_48m at (-25mm, -33.5mm) side bottom
+        place xtal_32k at (-17.5mm, -26.5mm) side bottom
+        // inductor A-pad (the BUCK_LX net) west toward the chip's LX pin
+        place l_buck at (-18mm, -22mm) rotate 180 side bottom
+        // rotate 180 nests both escape bundles: CS/IO1/IO2 leave the MCU
+        // bank's west lanes and land on the flash's west column, IO0/CLK/IO3
+        // leave the east lanes and land on the east column — zero crossings
+        place flash at (-27mm, -17mm) rotate 180 side bottom
+
+        // -- 3x5 key field on the 19.05 grid --
+        place sw[0] at (-38.1mm, -7.25mm)
+        place sw[1] at (-19.05mm, -7.25mm)
+        place sw[2] at (0mm, -7.25mm)
+        place sw[3] at (19.05mm, -7.25mm)
+        place sw[4] at (38.1mm, -7.25mm)
+        place sw[5] at (-38.1mm, 11.8mm)
+        place sw[6] at (-19.05mm, 11.8mm)
+        place sw[7] at (0mm, 11.8mm)
+        place sw[8] at (19.05mm, 11.8mm)
+        place sw[9] at (38.1mm, 11.8mm)
+        place sw[10] at (-38.1mm, 30.85mm)
+        place sw[11] at (-19.05mm, 30.85mm)
+        place sw[12] at (0mm, 30.85mm)
+        place sw[13] at (19.05mm, 30.85mm)
+        place sw[14] at (38.1mm, 30.85mm)
+
+        // -- per-key RGB: reverse-mount in the south LED window (+4.93 in
+        // y from the stem), back side. The land draws DIN east, DOUT west;
+        // the back-side left/right mirror alone swaps them, so NO rotate —
+        // DOUT already faces the next LED's DIN along each west-to-east row --
+        place key_leds[0] at (-38.1mm, -2.32mm) side bottom
+        place key_leds[1] at (-19.05mm, -2.32mm) side bottom
+        place key_leds[2] at (0mm, -2.32mm) side bottom
+        place key_leds[3] at (19.05mm, -2.32mm) side bottom
+        place key_leds[4] at (38.1mm, -2.32mm) side bottom
+        place key_leds[5] at (-38.1mm, 16.73mm) side bottom
+        place key_leds[6] at (-19.05mm, 16.73mm) side bottom
+        place key_leds[7] at (0mm, 16.73mm) side bottom
+        place key_leds[8] at (19.05mm, 16.73mm) side bottom
+        place key_leds[9] at (38.1mm, 16.73mm) side bottom
+        place key_leds[10] at (-38.1mm, 35.78mm) side bottom
+        place key_leds[11] at (-19.05mm, 35.78mm) side bottom
+        place key_leds[12] at (0mm, 35.78mm) side bottom
+        place key_leds[13] at (19.05mm, 35.78mm) side bottom
+        place key_leds[14] at (38.1mm, 35.78mm) side bottom
+
+        // -- matrix diodes: back side, one south-east of each key,
+        // vertical with the ANODE at the north end nearest its switch's B
+        // contact (rotate 270 under the left/right back-side mirror), all
+        // rows at the +8.75 offset (the bottom band's old debug-socket
+        // squeeze is gone — the socket lives on the left edge now, and the
+        // diode columns thread between the bottom ring windows) --
+        place d[0] at (-33.1mm, 1.5mm) rotate 270 side bottom
+        place d[1] at (-14.05mm, 1.5mm) rotate 270 side bottom
+        place d[2] at (5mm, 1.5mm) rotate 270 side bottom
+        place d[3] at (24.05mm, 1.5mm) rotate 270 side bottom
+        place d[4] at (43.1mm, 1.5mm) rotate 270 side bottom
+        place d[5] at (-33.1mm, 20.55mm) rotate 270 side bottom
+        place d[6] at (-14.05mm, 20.55mm) rotate 270 side bottom
+        place d[7] at (5mm, 20.55mm) rotate 270 side bottom
+        place d[8] at (24.05mm, 20.55mm) rotate 270 side bottom
+        place d[9] at (43.1mm, 20.55mm) rotate 270 side bottom
+        place d[10] at (-33.1mm, 39.6mm) rotate 270 side bottom
+        place d[11] at (-14.05mm, 39.6mm) rotate 270 side bottom
+        place d[12] at (5mm, 39.6mm) rotate 270 side bottom
+        place d[13] at (24.05mm, 39.6mm) rotate 270 side bottom
+        place d[14] at (43.1mm, 39.6mm) rotate 270 side bottom
+        // encoder / joystick push diodes, back side, below each host,
+        // anode likewise at the north end toward the host's switch pins
+        place d[15] at (25mm, -16mm) rotate 270 side bottom
+        place d[16] at (40mm, -12mm) rotate 270 side bottom
+
+        // -- perimeter ambient ring: 10 up-firing LEDs on the TOP layer
+        // (directed by the user; the front is unobstructed now that the
+        // display lives on its own mount), EVENLY spaced: quarters of the
+        // 115mm edges (x = ±28.75, 0) for the top/bottom triples, thirds
+        // of the 92mm edges (y = ±15.33) for the side pairs, all 4mm
+        // inset, chained counterclockwise from the bottom-right. The even
+        // positions clear every occupant on BOTH faces (each SK6812
+        // window is still a through-board hole): the USB shield legs
+        // (x -18.7/-9.3) and the antenna zone (x 10.75..17.25) land
+        // between the top windows, and the joystick's body passes the
+        // right-edge LED with 0.2mm of courtyard air. Rotation per edge
+        // keeps DOUT facing the next LED's DIN (the SK6812 land puts DOUT
+        // west, DIN east as drawn): chain -x -> 0, -y -> 270, +x -> 180,
+        // +y -> 90.
+        place ambient_leds[0] at (28.75mm, 42mm)
+        place ambient_leds[1] at (0mm, 42mm)
+        place ambient_leds[2] at (-28.75mm, 42mm)
+        place ambient_leds[3] at (-53.5mm, 15.33mm) rotate 270
+        place ambient_leds[4] at (-53.5mm, -15.33mm) rotate 270
+        place ambient_leds[5] at (-28.75mm, -42mm) rotate 180
+        place ambient_leds[6] at (0mm, -42mm) rotate 180
+        place ambient_leds[7] at (28.75mm, -42mm) rotate 180
+        place ambient_leds[8] at (53.5mm, -15.33mm) rotate 90
+        place ambient_leds[9] at (53.5mm, 15.33mm) rotate 90
+
+        // -- service connectors, back side. The 105mm board's bottom band
+        // is only ~4mm deep behind the row-2 key hardware — the widest gap
+        // between diode courtyards, fixing legs, LED pads, and ring windows
+        // is 7.05mm, and the debug socket's pad field alone is 8.6mm — so
+        // ALL THREE service connectors moved to the side margins the 115mm
+        // widening opened up (10.65mm beyond the caps): battery and debug
+        // on the left edge, microphone on the right. --
+        place swd at (-51.5mm, 0mm) rotate 270 side bottom
+        place batt at (-52.5mm, 27mm) rotate 90 side bottom
+        place micj at (52.5mm, 27mm) rotate 270 side bottom
+
+        // -- M2 mounting holes, one per corner (the antenna's move off the
+        // top-right corner gave mh[1] its symmetric spot back) --
+        place mh[0] at (-52.5mm, -42mm)
+        place mh[1] at (52.5mm, -42mm)
+        place mh[2] at (52.5mm, 42mm)
+        place mh[3] at (-52.5mm, 42mm)
+    }
+}

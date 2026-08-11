@@ -1,0 +1,11 @@
+(footprint "connectors::fpc::fpc::FP_BAT_2P_2P5"
+  (version 20240108)
+  (generator "cohdl")
+  (layer "F.Cu")
+  (attr smd)
+  (fp_text reference "REF**" (at 0 -2.2) (layer "F.SilkS"))
+  (fp_rect (start -1.95 -1.5) (end 1.95 1.5) (layer "F.CrtYd") (stroke (width 0.05) (type solid)) (fill none))
+  (fp_circle (center -2.35 0) (end -2.15 0) (layer "F.SilkS") (stroke (width 0.1) (type solid)) (fill solid))
+  (pad "1" smd rect (at -1.25 0) (size 1.2 1.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "2" smd rect (at 1.25 0) (size 1.2 1.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+)

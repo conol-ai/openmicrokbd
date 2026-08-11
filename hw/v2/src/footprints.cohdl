@@ -1,0 +1,166 @@
+// OpenMicro2 footprints — real land patterns for every bound part. Geometry
+// from the KiCad official footprint / datasheet noted in each comment. Pad
+// numbers match each device's declared pins (RFC-002/E807). Datasheet-
+// verified packages (see docs/compliance-report.md and docs/README.md).
+
+// Kailh Choc V2 low-profile keyswitch land (Work Louder WL-LP-SW-55G;
+// MX-compatible cross stem), stem-centered, in the part's CANONICAL in-keyboard
+// orientation (keycap north up): contacts NORTH + NORTHEAST, locating leg
+// SOUTHWEST, light window due SOUTH. This frame is confirmed three ways:
+// the community kiswitch SW_Kailh_Choc_V2 (pads (0,-5.9)/(5,-3.8), leg
+// (-5,5.15) — thousands of shipped keyboards), a bottom-view product photo of
+// the real part (pin south-center, pin southeast, leg northwest in bottom
+// view), and the PG1353 datasheet's own dimensions.
+//
+// The datasheet's "Recommended PCB Layout (Pattern Side)" DRAWING is page-
+// rotated 90 degrees from this orientation; mapping its page frame here is
+// (x, y)_page -> (y, -x). All its dimensions are reproduced exactly:
+//   pad 1        (0, -5.9)     <- page (5.90, 0),  O1.20 drill
+//   pad 2        (5, -3.8)     <- page (3.80, 5.00)
+//   mount_hole 1 O5.00 at (0,0)   the recommended centre-pole hole
+//   pad 3       the 2.00 x 1.50 OBROUND leg hole -> here 1.5 wide x 2.0 tall
+//                at (-5, 5.15) <- page (-5.15, -5.00). PLATED, not a bare hole:
+//                the leg is metal, so soldering it carries keypress force into
+//                the board instead of leaving the two contacts to take it. It
+//                is an electrically dead anchor — the device declares it
+//                `optional`, connected to nothing.
+//   light window (0, +4.93)    <- page (-4.93, 0); no land here — the separate
+//                reverse-mount SK6812MINI-E is placed centred on this point.
+//
+// LESSON (kept so it is not relearned): an earlier revision rotated this whole
+// footprint 90 degrees to literally match the datasheet PAGE, compensating
+// with `rotate 270` on every instance. The page orientation is not the part's
+// canonical orientation — a rotation-invariant "relative geometry" check
+// cannot catch that, and absolute checks against the page frame alone
+// mis-flag a correct footprint. Canonical frame = how the part sits in use.
+pub footprint FP_SW_Choc_V2 {
+    pad 1: P_Choc_Contact at (0mm, -5.9mm)
+    pad 2: P_Choc_Contact at (5mm, -3.8mm)
+    mount_hole 1: non_plated at (0mm, 0mm) diameter 5mm
+    pad 3: P_Choc_Leg at (-5mm, 5.15mm)
+    courtyard { shape: rect, at: (0mm, 0mm), size: (15.5mm, 15.5mm) }
+}
+
+// Alps EC11E rotary encoder w/ push switch, vertical (KiCad
+// Rotary_Encoder:RotaryEncoder_Alps_EC11E-Switch_Vertical_H20mm). Pads:
+// 1=A 2=C(common/GND) 3=B (encoder, 2.5mm pitch), 4/5 = push switch, 6/7 =
+// mounting posts.
+pub footprint FP_Encoder_EC11 {
+    pad 1: P_EC11_Pin at (0mm, 0mm)
+    pad 2: P_EC11_Pin at (0mm, 2.5mm)
+    pad 3: P_EC11_Pin at (0mm, 5mm)
+    pad 4: P_EC11_Pin at (14.5mm, 5mm)
+    pad 5: P_EC11_Pin at (14.5mm, 0mm)
+    pad 6: P_EC11_MP at (7.5mm, -3.1mm)
+    pad 7: P_EC11_MP at (7.5mm, 8.1mm)
+    courtyard { shape: rect, at: (7mm, 2.5mm), size: (16mm, 14mm) }
+    silkscreen_ref { at: (7mm, -5mm) }
+}
+
+// Alps RKJXV122400R ThumbPointer — two potentiometers plus a centre-push
+// switch, through-hole. Geometry from the Alps "Mounting Hole Dimensions"
+// drawing (Drawing No.1, viewed from the mounting side, tolerance ±0.1).
+// The drawing is the authority here: an earlier revision overrode two of its
+// coordinates with values read off the manufacturer's STEP model, and the
+// STEP transcription proved wrong (see docs/compliance-report.md, 2026-07-29).
+// The drawing separates its features by labelling: everything drilled says
+// "hole" with a tolerance; the hatched ø4 / ø3.5 / 4-ø2.6 carry NO "hole"
+// label and are the legend's "Prohibited wiring area" — surface keep-outs
+// where the part's bosses rest ON the board — so they get no drill (CoHDL has
+// no copper-keep-out construct; the router must honour them by hand).
+//
+// Origin = the lever axis (the drawing's ø4 keep-out centre). The drawing is a
+// top view, so its "up" is -y here. Ten terminals in three groups:
+//   VR1  three ø1 holes on a column 8.73 to the right, 2.5 pitch — the
+//        drawing's plain 1/2/3, named A1/A2/A3 here
+//   VR2  three ø1 holes on a row 8.73 above the axis, 2.5 pitch — the
+//        drawing's CIRCLED ①/②/③, named B1/B2/B3 here
+//   SW1  four ø1.2 holes at x = ±3.25 (the "6.5" span), rows 4.5 apart and
+//        symmetric about the switch dome's ø3.5 keep-out at y = +8 (the
+//        drawing's "8"), so rows at 5.75 / 10.25 — the drawing's a/b/c/d,
+//        named SA/SB/SC/SD here
+// (pad numbers are `[A-Z][A-Z0-9]*`, so the drawing's circled numerals and
+// lowercase switch letters get this transliteration.)
+// Plus the metal frame's four ø1.5 legs at (±6.325, ±5) — the drawing's
+// "12.65" and "10" chains, half each — as PLATED, SOLDERED pads L1-L4 (the
+// datasheet: "Solder all metal inserted fixing including terminals & metal
+// lugs"), on the device's electrically dead MNT pin; and two ø1.6 ±0.05
+// locating-boss holes on the axis at (±4.3, 0) (the "8.6" chain), which stay
+// true mount_holes — a plastic peg enters each, nothing to solder.
+pub footprint FP_Joystick_RKJXV {
+    pad B3: P_Joy_VrPin at (-2.5mm, -8.73mm)
+    pad B2: P_Joy_VrPin at (0mm, -8.73mm)
+    pad B1: P_Joy_VrPin at (2.5mm, -8.73mm)
+    pad A3: P_Joy_VrPin at (8.73mm, -2.5mm)
+    pad A2: P_Joy_VrPin at (8.73mm, 0mm)
+    pad A1: P_Joy_VrPin at (8.73mm, 2.5mm)
+    pad SA: P_Joy_SwPin at (-3.25mm, 5.75mm)
+    pad SC: P_Joy_SwPin at (3.25mm, 5.75mm)
+    pad SB: P_Joy_SwPin at (-3.25mm, 10.25mm)
+    pad SD: P_Joy_SwPin at (3.25mm, 10.25mm)
+    pad L1: P_Joy_Leg at (-6.325mm, -5mm)
+    pad L2: P_Joy_Leg at (6.325mm, -5mm)
+    pad L3: P_Joy_Leg at (-6.325mm, 5mm)
+    pad L4: P_Joy_Leg at (6.325mm, 5mm)
+    mount_hole 1: non_plated at (-4.3mm, 0mm) diameter 1.6mm
+    mount_hole 2: non_plated at (4.3mm, 0mm) diameter 1.6mm
+    courtyard { shape: rect, at: (1.25mm, 0.5mm), size: (18.2mm, 22.4mm) }
+    silkscreen_ref { at: (1.25mm, -11.5mm) }
+}
+
+// OCN OK-F302-31115 — 0.3mm-pitch 31-contact FPC connector (1.0mm height,
+// front flip, bottom contacts), the board-side receptacle for the
+// H0216F002AM AMOLED module's 31-finger flex tail. Recommended pattern from
+// the official series drawing (Spec_Draw_OK-F302.pdf, sheet 1): two staggered
+// rows on a 0.60mm in-row pitch interleaving to 0.30mm. For n=31 the
+// dimension table gives span C=9.00 (16 pads) and B=8.40 (15 pads); the
+// drawing's 3.40mm outer extent minus the 0.55/0.75 pad lengths puts the row
+// CENTERS 2.75mm apart (short row at y=-1.425, long row at y=+1.325).
+//
+// Row assignment is forced by the counts: only the 16-pad C row can hold the
+// 16 odd contacts 1,3,...,31. Pin 1 is at -x with the FPC opening toward +y
+// (the long-pad row is the actuator/opening side); the module tail approaches
+// from the display, which sits north of this connector on the board.
+// The drawing dimensions no separate fixing-nail lands for this series
+// (the 1.20/0.90 corner references locate the housing, not extra copper), so
+// the land is exactly the 31 signal pads.
+pub footprint FP_FPC_OK_F302_31115 {
+    pad 1: P_FPC31_Short at (-4.5mm, -1.425mm)
+    pad 3: P_FPC31_Short at (-3.9mm, -1.425mm)
+    pad 5: P_FPC31_Short at (-3.3mm, -1.425mm)
+    pad 7: P_FPC31_Short at (-2.7mm, -1.425mm)
+    pad 9: P_FPC31_Short at (-2.1mm, -1.425mm)
+    pad 11: P_FPC31_Short at (-1.5mm, -1.425mm)
+    pad 13: P_FPC31_Short at (-0.9mm, -1.425mm)
+    pad 15: P_FPC31_Short at (-0.3mm, -1.425mm)
+    pad 17: P_FPC31_Short at (0.3mm, -1.425mm)
+    pad 19: P_FPC31_Short at (0.9mm, -1.425mm)
+    pad 21: P_FPC31_Short at (1.5mm, -1.425mm)
+    pad 23: P_FPC31_Short at (2.1mm, -1.425mm)
+    pad 25: P_FPC31_Short at (2.7mm, -1.425mm)
+    pad 27: P_FPC31_Short at (3.3mm, -1.425mm)
+    pad 29: P_FPC31_Short at (3.9mm, -1.425mm)
+    pad 31: P_FPC31_Short at (4.5mm, -1.425mm)
+    pad 2: P_FPC31_Long at (-4.2mm, 1.325mm)
+    pad 4: P_FPC31_Long at (-3.6mm, 1.325mm)
+    pad 6: P_FPC31_Long at (-3mm, 1.325mm)
+    pad 8: P_FPC31_Long at (-2.4mm, 1.325mm)
+    pad 10: P_FPC31_Long at (-1.8mm, 1.325mm)
+    pad 12: P_FPC31_Long at (-1.2mm, 1.325mm)
+    pad 14: P_FPC31_Long at (-0.6mm, 1.325mm)
+    pad 16: P_FPC31_Long at (0mm, 1.325mm)
+    pad 18: P_FPC31_Long at (0.6mm, 1.325mm)
+    pad 20: P_FPC31_Long at (1.2mm, 1.325mm)
+    pad 22: P_FPC31_Long at (1.8mm, 1.325mm)
+    pad 24: P_FPC31_Long at (2.4mm, 1.325mm)
+    pad 26: P_FPC31_Long at (3mm, 1.325mm)
+    pad 28: P_FPC31_Long at (3.6mm, 1.325mm)
+    pad 30: P_FPC31_Long at (4.2mm, 1.325mm)
+    silkscreen {
+        pin_1_marker near pad 1 shape dot
+    }
+    // Body A=10.80 wide (n=31 table), housing depth 3.38 plus the front-flip
+    // actuator's swing (REF 130°/1.85 side view) on the +y side.
+    courtyard { shape: rect, at: (0mm, 0.4mm), size: (11.4mm, 5.2mm) }
+    silkscreen_ref { at: (0mm, -3.4mm) }
+}

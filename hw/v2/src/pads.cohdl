@@ -1,0 +1,106 @@
+// OpenMicro2 pad library — one padstack per land-pattern role, dimensions from
+// the datasheet / official footprint named in each comment. Edits here
+// propagate to every footprint that references the pad.
+
+// Kailh Choc V2 (PG1353) low-profile switch electrical contact — MX-compatible
+// cross stem (takes MX keycaps at 19.05mm). 1.2mm plated hole, 2.2mm pad
+// (KiCad-official Switch_Keyboard_Kailh SW_Kailh_Choc_V2; pins unchanged from V1).
+pub pad P_Choc_Contact {
+    shape: circle
+    size: (2.2mm)
+    layer: through_all
+    plating: plated_through_hole
+    drill: 1.2mm
+}
+
+// Kailh Choc V2 FIXING LEG — the switch's third leg (phosphor bronze C5191,
+// qty 1 per the CPG1353 parts list), soldered rather than merely cleared so it
+// carries keypress force into the board. The datasheet's leg hole is a
+// 2.0 x 1.5mm oblong, so this is a plated SLOT; the copper adds a 0.3mm ring,
+// deliberately narrower than the 0.5mm the contacts use, because the reverse-
+// mount LED's land sits 0.85mm away and a 0.5mm ring would close that to
+// 0.35mm.
+pub pad P_Choc_Leg {
+    shape: oval
+    size: (2.1mm, 2.6mm)
+    layer: through_all
+    plating: plated_through_hole
+    drill: (1.5mm, 2mm)
+}
+
+// Alps EC11E rotary-encoder signal terminal (KiCad
+// Rotary_Encoder:RotaryEncoder_Alps_EC11E-Switch_Vertical) — plated 1mm hole.
+pub pad P_EC11_Pin {
+    shape: circle
+    size: (2mm)
+    layer: through_all
+    plating: plated_through_hole
+    drill: 1mm
+}
+
+// EC11 mounting post — a plated slot in the real part (2.8x1.5mm oval). CoHDL
+// drills are round, so approximated by the 2.8mm LONG axis: the ~2.8mm-wide
+// flat boss leg must clear the hole, so the round drill takes the long axis,
+// not the 1.5mm short axis (a 1.5mm hole would block insertion). 3.2mm pad.
+pub pad P_EC11_MP {
+    shape: circle
+    size: (3.2mm)
+    layer: through_all
+    plating: plated_through_hole
+    drill: 2.8mm
+}
+
+// Alps RKJXV122400R potentiometer terminal — the drawing's `6-ø1 +0.1/0 hole`
+// (three per potentiometer), in a 1.7mm pad.
+pub pad P_Joy_VrPin {
+    shape: circle
+    size: (1.7mm)
+    layer: through_all
+    plating: plated_through_hole
+    drill: 1mm
+}
+
+// Alps RKJXV122400R centre-push switch terminal — the drawing's
+// `4-ø1.2 +0.1/0 hole`. Wider hole than the potentiometer pins, so its own pad.
+pub pad P_Joy_SwPin {
+    shape: circle
+    size: (1.9mm)
+    layer: through_all
+    plating: plated_through_hole
+    drill: 1.2mm
+}
+
+// Alps RKJXV122400R metal frame leg — the drawing's `4-ø1.5 +0.1/0 hole`.
+// PLATED and soldered, not a bare mounting hole: the datasheet's soldering
+// caution says outright "Solder all metal inserted fixing including terminals
+// & metal lugs into a substrate", and these four lugs are what carry stick
+// load into the board (the same reasoning as the Choc V2 fixing leg above).
+// 0.35mm ring, the family convention of the other RKJXV pads.
+pub pad P_Joy_Leg {
+    shape: circle
+    size: (2.2mm)
+    layer: through_all
+    plating: plated_through_hole
+    drill: 1.5mm
+}
+
+// OCN OK-F302-31115 FPC connector signal land, SHORT row — the official
+// series drawing's recommended pattern (Spec_Draw_OK-F302.pdf, sheet 1,
+// "TOP VIEW"): pads 0.20±0.03 wide, this row 0.55±0.03 long, on a 0.60mm
+// in-row pitch (the two staggered rows interleave to the connector's 0.30mm
+// contact pitch). See docs/README.md for the drawing's provenance.
+pub pad P_FPC31_Short {
+    shape: rect
+    size: (0.2mm, 0.55mm)
+    layer: top_copper
+    plating: smd
+}
+
+// OCN OK-F302-31115 FPC connector signal land, LONG row — same drawing,
+// 0.20±0.03 x 0.75±0.03.
+pub pad P_FPC31_Long {
+    shape: rect
+    size: (0.2mm, 0.75mm)
+    layer: top_copper
+    plating: smd
+}

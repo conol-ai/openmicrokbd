@@ -1,0 +1,150 @@
+// OpenMicro2 — board-specific devices and part bindings (SF32LB52 wireless
+// macropad). Pinouts datasheet-verified (Alps, OCN, Huaxia RGB —
+// see docs/compliance-report.md and docs/README.md). Reuses std traits and
+// library components.
+
+// ---- designator-prefix traits not in std ----
+pub trait Switch {
+    designator_prefix: "SW"
+}
+pub trait Encoder {
+    designator_prefix: "SW"
+}
+
+// ---- Kailh Choc V2 low-profile keyswitch (MX cross stem): 2 non-polar
+// electrical contacts plus the fixing leg. The central box-stem hole stays an
+// RFC-022 mount_hole (a plastic boss passes through it, nothing to solder), but
+// the LEG is metal and its hole is plated, so it is a real pad — and therefore
+// a real pin, since a footprint's pad set must match its device's (E807).
+//
+// `optional`, because the leg carries no signal: it is a mechanical anchor, and
+// declaring it required would oblige all 15 switches to wire a pin that has
+// nothing to connect to. ----
+pub device KeySwitch {
+    pins {
+        required A: 1 [passive]
+        required B: 2 [passive]
+        optional MNT: 3 [passive]
+    }
+}
+impl Switch for KeySwitch {}
+pub part SW_KEY: KeySwitch {
+    primary { mfr: "Work Louder", mpn: "WL-LP-SW-55G", footprint: FP_SW_Choc_V2 }
+}
+
+// ---- Alps EC11 rotary encoder + push. A/B quadrature, C = common/GND;
+// SW1/SW2 = push switch; MNT = mechanical mounting posts. ----
+pub device RotaryEC11 {
+    pins {
+        required A: 1 [output]
+        required C: 2 [passive]
+        required B: 3 [output]
+        required SW1: 4 [passive]
+        required SW2: 5 [passive]
+        required MNT: 6, 7 [passive]
+    }
+}
+impl Encoder for RotaryEC11 {}
+pub part ENC_EC11: RotaryEC11 {
+    primary { mfr: "Alps Alpine", mpn: "EC11E15244A5", footprint: FP_Encoder_EC11 }
+}
+
+// ---- Alps RKJXV122400R ThumbPointer: two 10k B-taper potentiometers plus a
+// centre-push switch, ten terminals in three groups (see FP_Joystick_RKJXV).
+// Terminal 2 of each potentiometer is the wiper — the datasheet measures total
+// resistance "between the resistor terminals 1 and 3". X is carried by VR1 and
+// Y by VR2; which physical axis each senses is a firmware convention, not a
+// datasheet fact, so the naming here is ours.
+//
+// The switch's four terminals pair BY ROW, not by side. The land is the
+// standard 6.5 x 4.5 tact-switch pattern, and a tact switch's two stamped
+// contact frames each exit as the two same-row legs 6.5mm apart: a+c are one
+// pole, b+d the other, the 4.5mm row spacing separating the poles. Pairing by
+// side (a+b / c+d) puts BOTH poles on each net, so the push never produces an
+// edge — the same column-grouping trap the footprint audit caught on the
+// EVQ-P7A reset switch an earlier board carried.
+//
+// MNT = the metal frame's four soldered corner lugs (the datasheet's "Solder
+// all metal inserted fixing including terminals & metal lugs"), one pin
+// claiming four pads, the same shape the EC11's mounting posts use. Tied to
+// GND at the board level for the same chassis-bonding reason. ----
+pub device ThumbPointer {
+    pins {
+        required X_END_A: A1 [passive]
+        required X_WIPER: A2 [output]
+        required X_END_B: A3 [passive]
+        required Y_END_A: B1 [passive]
+        required Y_WIPER: B2 [output]
+        required Y_END_B: B3 [passive]
+        required SW_A: SA, SC [passive]
+        required SW_B: SB, SD [passive]
+        optional MNT: L1, L2, L3, L4 [passive]
+    }
+}
+impl Connector for ThumbPointer {}
+pub part JOY_RKJXV: ThumbPointer {
+    primary { mfr: "Alps Alpine", mpn: "RKJXV122400R", footprint: FP_Joystick_RKJXV }
+}
+
+// ---- Board-side receptacle for the Huaxia RGB H0216F002AM 2.16" 480x480
+// AMOLED touch module (CO5300 DDIC + CST9220 touch, QSPI + I2C). The module
+// itself is a plug-in assembly, not a soldered board part, so what the BOM
+// carries is this connector: the OCN OK-F302-31115 that the module drawing
+// (p5) labels for its 31-finger 0.3mm flex tail. Pin names, order, and roles
+// mirror the module's own interface table (module spec p6, modeled in
+// lib/@contrib/display as the logical-only `H0216F002AM` device) so every
+// net reads as the display signal it carries; the roles are those of the
+// ATTACHED module — the connector's contacts are passive metal, but the
+// module behind them is what drives or loads each line.
+//
+// GND is one pin claiming the seven ground fingers (1/7/12/22/25/28/31),
+// the multi-pad shape RFC-002 gives the EC11 mounting posts. MIPI-DSI pads
+// (23/24/26/27/29/30) exist for the module's alternate interface and are
+// deliberately unconnected on this QSPI board. MTP_PWR is the module's 8V
+// programming rail: "Must be left open ... in normal condition" (p6).
+// TP_VCC is the module's own touch-panel supply OUTPUT (p6) — nothing on
+// the board may drive it.
+pub device DisplayFPC31 {
+    pins {
+        required GND: 1, 7, 12, 22, 25, 28, 31 [power_in]
+        optional TP_INT: 2 [output] // touch interrupt (module p6)
+        optional TP_RST: 3 [input] // touch reset, active-low (module p6)
+        optional TP_SDA: 4 [bidirectional] // touch I2C data (module p6)
+        optional TP_SCL: 5 [input] // touch I2C clock (module p6)
+        optional TP_VCC: 6 [power_out] // touch-panel 3.3V output (module p6)
+        required IOVCC: 8 [power_in] // logic supply 1.8-3.3V (module p6)
+        required VCI: 9 [power_in] // DDIC DCDC supply 2.7-3.6V (module p7)
+        required VBAT: 10 [power_in] // SIBO supply 3.7-4.5V (module p6)
+        optional VCI_EN: 11 [power_in] // DDIC DCDC supply enable (module p6)
+        optional MTP_PWR: 13 [power_in] // MTP 8V, leave open normally (module p6)
+        required RESET: 14 [input] // panel reset, active-low (module p6)
+        optional CSX: 15 [input] // QSPI chip select (module p6)
+        optional SDI_RDX: 16 [bidirectional] // serial data in 0 / out (module p6)
+        optional DCX: 17 [input] // serial data in 1 (module p6)
+        optional WRX_SCL: 18 [input] // QSPI clock (module p6)
+        optional D1: 19 [input] // serial data in 3 (module p6)
+        optional D0: 20 [input] // serial data in 2 (module p6)
+        optional TE: 21 [output] // tearing-effect sync (module p6)
+        optional D1P: 23 [input] // MIPI-DSI, unused in QSPI mode (module p6)
+        optional D1N: 24 [input] // MIPI-DSI, unused in QSPI mode (module p6)
+        optional CLKP: 26 [input] // MIPI-DSI, unused in QSPI mode (module p6)
+        optional CLKN: 27 [input] // MIPI-DSI, unused in QSPI mode (module p6)
+        optional D0P: 29 [input] // MIPI-DSI, unused in QSPI mode (module p6)
+        optional D0N: 30 [input] // MIPI-DSI, unused in QSPI mode (module p6)
+    }
+}
+impl Connector for DisplayFPC31 {}
+pub part DISPLAY_FPC_OK_F302: DisplayFPC31 {
+    primary { mfr: "OCN Technology", mpn: "OK-F302-31115", footprint: FP_FPC_OK_F302_31115 }
+}
+
+// reusable decoupling sub-circuit
+pub fn decouple(vdd: Pin, gnd: Pin) {
+    // RFC-028: ONE attribute here annotates every call site's capacitor —
+    // each expansion resolves `vdd` to that call's real (instance, pin), one
+    // bypass_capacitors.csv row per pad of the bypassed pin.
+    #[bypass(vdd, 100nF)]
+    inst c: passive::C_100n_16V_X7R_0402
+    net _: vdd, c.A
+    net _: gnd, c.B
+}

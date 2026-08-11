@@ -1,0 +1,28 @@
+[package]
+name = "openmicro2"
+version = "0.1.0"
+license = "MIT"
+description = "OpenMicro2 — a wireless SF32LB52 macropad with AMOLED touch display, rotary encoder, joystick, and microphone"
+repository = "https://github.com/conol-ai/cohdl"
+
+[design]
+top = "OpenMicro2"
+
+[dependencies]
+"@contrib/charger" = "0.1.0"
+"@contrib/sf32" = "0.1.0"
+antenna = "0.1.0"
+connectors = "0.1.1"
+diode = "0.1.0"
+esd = "0.1.0"
+flash = "0.1.1"
+ldo = "0.1.1"
+led = "0.1.1"
+load-switch = "0.1.0"
+misc = "0.1.0"
+osc = "0.1.1"
+passive = "0.2.1"
+qfn = "0.1.1"
+soic = "0.1.0"
+std = "0.3.0"
+usb = "0.1.1"

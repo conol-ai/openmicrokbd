@@ -1,0 +1,13 @@
+(footprint "osc::FP_Crystal_SMD_2016_4Pin_E1SB"
+  (version 20240108)
+  (generator "cohdl")
+  (layer "F.Cu")
+  (attr smd)
+  (fp_text reference "REF**" (at 0 -1.6) (layer "F.SilkS"))
+  (fp_rect (start -1.3 -1.1) (end 1.3 1.1) (layer "F.CrtYd") (stroke (width 0.05) (type solid)) (fill none))
+  (fp_circle (center -1.6 0.525) (end -1.4 0.525) (layer "F.SilkS") (stroke (width 0.1) (type solid)) (fill solid))
+  (pad "4" smd rect (at -0.675 -0.525) (size 0.85 0.75) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "3" smd rect (at 0.675 -0.525) (size 0.85 0.75) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "1" smd rect (at -0.675 0.525) (size 0.85 0.75) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "2" smd rect (at 0.675 0.525) (size 0.85 0.75) (layers "F.Cu" "F.Paste" "F.Mask"))
+)
