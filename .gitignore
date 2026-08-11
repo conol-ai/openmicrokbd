@@ -11,3 +11,23 @@ Cargo.lock.orig
 # KiCad per-user state
 *.kicad_prl
 *-backups/
+
+# CoHDL working outputs — regenerated locally by `cohdl build`; the released
+# routed board lives in pcb/ and the frozen fab package in fab/
+/hw/*/out/*.kicad_pcb
+/hw/*/out/*.kicad_pro
+/hw/*/out/*.xml
+
+# Signing material — release credentials live in the GitHub `release`
+# environment, never in the repository
+*.p12
+*.p8
+*.mobileprovision
+/ref/
+
+# wrangler's local account/state cache
+.wrangler/
+
+# Editor local-history folders (VS Code Local History) — these contain their
+# own nested .git repos and abort `git add` outright.
+.history/
