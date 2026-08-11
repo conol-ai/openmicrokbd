@@ -461,12 +461,9 @@ html[data-theme="night"] .hero__stats b { color: var(--sun); }
 }
 @keyframes bob { 0%,100% { transform: translateY(0) rotate(-.4deg); } 50% { transform: translateY(-14px) rotate(.4deg); } }
 .hero__art-frame .swap-img { width: 100%; height: auto; }
-.hero__art-shadow {
-  display: block; margin: 14px auto 0; width: 62%; height: 14px;
-  background: rgba(58,36,24,.16);
-  animation: shadowPulse 5.5s ease-in-out infinite;
-}
-@keyframes shadowPulse { 0%,100% { transform: scaleX(1); opacity: .5; } 50% { transform: scaleX(.86); opacity: .3; } }
+/* The hero art is a cut-out PNG, so .hero__art-frame's drop-shadow traces the
+   keyboard's own silhouette — the old rectangular ground-shadow bar that stood
+   in for a card is gone with it. */
 
 /* stacked day/night image crossfade */
 .swap-img { transition: opacity var(--t-theme) var(--ease); }
