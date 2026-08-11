@@ -48,6 +48,16 @@
   "description": "An open-source macro pad: 13 keys, rotary encoder, analog joystick, capacitive touch pad, per-key + underglow RGB. Open hardware, open firmware, open software."
 }
 </script>
+
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-M69BJY7W5P"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-M69BJY7W5P');
+</script>
 </head>
 <body>
 
@@ -218,9 +228,52 @@
   <div class="wrap">
     <header class="section-head reveal">
       <p class="section-kicker">CHAPTER II</p>
-      <h2 class="section-title">SIX KEYS AND A STICK</h2>
-      <p class="section-lede">Seven ideas, thirteen keys, one knob. Every one of them remappable.</p>
+      <h2 class="section-title">A STICK AND SIX KEYS</h2>
+      <p class="section-lede">Start with the stick nobody expects. Then six more ideas across thirteen keys and one knob — every one of them remappable.</p>
     </header>
+
+    <!-- featured: the stick, with a joystick you can actually push around -->
+    <article class="feat feat--stick reveal">
+      <div class="stick-stage">
+        <div class="stickpad" id="featStick" role="button" tabindex="0"
+             aria-label="Analog joystick demo — drag to deflect it, press or use Enter to cycle modes, arrow keys to nudge">
+          <span class="stickpad__well" aria-hidden="true"></span>
+          <span class="stickpad__nub" id="featStickNub" aria-hidden="true"></span>
+        </div>
+        <p class="stick-stage__hint" aria-hidden="true">◄ DRAG ME ►</p>
+      </div>
+
+      <div class="stick-copy">
+        <div class="feat__icon icon-stick" aria-hidden="true"><i class="base"></i><i class="stem"></i><i class="ball"></i></div>
+        <h3 class="feat__title">The Stick</h3>
+        <p class="feat__body">An analog joystick where you'd least expect one. Glide the mouse pointer, send arrow keys — or grade DaVinci Resolve color wheels by feel. Push it and see.</p>
+        <div class="stick-modes" id="featStickModes">
+          <button class="stick-mode is-on" type="button" data-mode="mouse">MOUSE</button>
+          <button class="stick-mode" type="button" data-mode="grade">GRADE</button>
+          <button class="stick-mode" type="button" data-mode="arrows">ARROWS</button>
+        </div>
+        <p class="stick-readout" id="featStickReadout" role="status">Pointer rests. Deflect to glide it.</p>
+      </div>
+
+      <div class="stick-out" id="featStickOut" data-mode="mouse" aria-hidden="true">
+        <!-- MOUSE: a cursor gliding in a little window -->
+        <div class="stick-out__view stick-out__view--mouse">
+          <span class="stick-cursor" id="featStickCursor"></span>
+        </div>
+        <!-- ARROWS: a d-pad that lights the pressed direction -->
+        <div class="stick-out__view stick-out__view--arrows">
+          <span class="dpad dpad--up"></span>
+          <span class="dpad dpad--down"></span>
+          <span class="dpad dpad--left"></span>
+          <span class="dpad dpad--right"></span>
+          <span class="dpad dpad--mid"></span>
+        </div>
+        <!-- GRADE: a colour wheel that lifts and tints with deflection -->
+        <div class="stick-out__view stick-out__view--grade">
+          <span class="gradewheel" id="featStickWheel"><i></i></span>
+        </div>
+      </div>
+    </article>
 
     <div class="feat-grid" data-stagger>
       <article class="feat reveal" tabindex="0">
@@ -235,13 +288,6 @@
         <h3 class="feat__title">The Knob</h3>
         <p class="feat__body">Turn it to dial reasoning effort — quick answers on the left, deep thinking on the right. Not talking to an agent? It's a volume wheel.</p>
         <p class="feat__meta">FAST ↔ DEEP</p>
-      </article>
-
-      <article class="feat reveal" tabindex="0">
-        <div class="feat__icon icon-stick" aria-hidden="true"><i class="base"></i><i class="stem"></i><i class="ball"></i></div>
-        <h3 class="feat__title">The Stick</h3>
-        <p class="feat__body">An analog joystick where you'd least expect one. Glide the mouse pointer, send arrow keys — or grade DaVinci Resolve color wheels by feel.</p>
-        <p class="feat__meta">MOUSE · ARROWS · GRADE</p>
       </article>
 
       <article class="feat reveal" tabindex="0">
@@ -587,19 +633,43 @@
     <header class="section-head reveal">
       <p class="section-kicker">CHAPTER VI</p>
       <h2 class="section-title">THE REAL THING</h2>
-      <p class="section-lede">Pixel art is fun. Here's the one on our desk.</p>
+      <p class="section-lede">Pixel art is fun. Here's the one on our desk — tap the stack to flip through it.</p>
     </header>
 
     <div class="polaroid-wrap reveal">
-      <figure class="polaroid">
-        <div class="polaroid__win">
-          <img src="/assets/product.jpg" alt="The OpenMicroKbd on a white desk stand: dark PCB face in a white case, engraved keycaps, a knurled knob, a joystick, a yellow smiley key and a round gold touch pad" width="820" height="980" loading="lazy" />
+      <!-- A stack of polaroids; clicking sends the front one to the back.
+           To add a photo, drop another <figure class="shot"> in. To give a
+           shot a dark-background twin for night mode, add a sibling
+           <img class="shot__img shot__img--night"> — without one, the day
+           photo simply stays put in both themes. -->
+      <div class="shots-col">
+        <div class="shots" id="shots">
+          <figure class="shot">
+            <div class="shot__win">
+              <img class="shot__img shot__img--day" src="/assets/product.jpg" alt="The OpenMicroKbd on a desk stand: dark PCB face in a white case, engraved keycaps, a knurled knob, a joystick, a yellow smiley key and a round gold touch pad" width="820" height="980" loading="lazy" />
+            </div>
+            <figcaption class="shot__cap">
+              <span class="shot__cap-title">THE CURRENT BUILD</span>
+              <span class="shot__cap-body">Engraved keycaps, a real knob, and the happy key that survived every revision.</span>
+            </figcaption>
+          </figure>
+
+          <figure class="shot">
+            <div class="shot__win">
+              <img class="shot__img shot__img--day" src="/assets/prototype.jpg" alt="The first hand-built OpenMicroKbd prototype: black PCB, white 3D-printed case, red low-profile switches and a placeholder knob, cabled to a debug adapter" width="980" height="1307" loading="lazy" />
+            </div>
+            <figcaption class="shot__cap">
+              <span class="shot__cap-title">PROTOTYPE #001</span>
+              <span class="shot__cap-body">Hand-soldered on the kitchen table, naked keycaps, a knob borrowed from a drawer. It worked.</span>
+            </figcaption>
+          </figure>
         </div>
-        <figcaption class="polaroid__cap">
-          <span class="polaroid__cap-title">THE CURRENT BUILD</span>
-          <span class="polaroid__cap-body">Hand-soldered and 3D-printed, same as day one — but the keycaps are engraved in-house now, the knob is real, and the happy key survived every revision. It works.</span>
-        </figcaption>
-      </figure>
+
+        <div class="shots-bar">
+          <button class="pxbtn shots__next" id="shotsNext" type="button">NEXT ▸</button>
+          <span class="shots__count" id="shotsCount" role="status">1 / 2</span>
+        </div>
+      </div>
 
       <ul class="build-notes">
         <li><b>PCB</b><span>Black, hand-soldered, written in CoHDL</span></li>

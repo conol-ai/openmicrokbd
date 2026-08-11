@@ -242,6 +242,183 @@
   })();
 
   /* ------------------------------------------------------------
+     7b. THE FEATURED STICK
+     A joystick you can actually push, driving a small CRT that
+     shows what the current mode does with the deflection.
+     ------------------------------------------------------------ */
+  (function featuredStick() {
+    var pad = $('#featStick');
+    if (!pad) return;
+
+    var nub = $('#featStickNub');
+    var out = $('#featStickOut');
+    var readout = $('#featStickReadout');
+    var cursor = $('#featStickCursor');
+    var wheel = $('#featStickWheel');
+    var modeButtons = $$('#featStickModes .stick-mode');
+    var dpads = $$('.dpad', out);
+
+    var TRAVEL = 26;          // how far the nub may leave centre, in px
+    var MODES = ['mouse', 'grade', 'arrows'];
+    var modeIndex = 0;
+
+    // Where the pointer/wheel handle currently sits, so the output drifts with
+    // sustained deflection instead of snapping back the moment you let go.
+    var driftX = 0, driftY = 0;
+
+    var COPY = {
+      mouse:  'Pointer glides while deflected — the push switch is left click.',
+      grade:  'Lift, gamma and gain by feel. The drag holds while you are off centre.',
+      arrows: 'Four directions and a press, mapped like any other keys.'
+    };
+    var RESTING = {
+      mouse:  'Pointer rests. Deflect to glide it.',
+      grade:  'Wheel centred. Deflect to grade.',
+      arrows: 'Nothing held. Deflect to fire a direction.'
+    };
+
+    function setMode(i, announce) {
+      modeIndex = ((i % MODES.length) + MODES.length) % MODES.length;
+      var mode = MODES[modeIndex];
+      if (out) out.setAttribute('data-mode', mode);
+      modeButtons.forEach(function (b) {
+        b.classList.toggle('is-on', b.getAttribute('data-mode') === mode);
+      });
+      driftX = driftY = 0;
+      paint(0, 0);
+      if (readout) readout.textContent = announce ? COPY[mode] : RESTING[mode];
+    }
+
+    function paint(dx, dy) {
+      var mode = MODES[modeIndex];
+      var nx = dx / TRAVEL;                 // -1 … 1
+      var ny = dy / TRAVEL;
+      var magnitude = Math.min(1, Math.sqrt(nx * nx + ny * ny));
+
+      if (nub) {
+        pad.style.setProperty('--sx', dx.toFixed(1) + 'px');
+        pad.style.setProperty('--sy', dy.toFixed(1) + 'px');
+      }
+
+      if (mode === 'mouse' && cursor) {
+        cursor.style.setProperty('--cx', driftX.toFixed(1) + 'px');
+        cursor.style.setProperty('--cy', driftY.toFixed(1) + 'px');
+      } else if (mode === 'grade' && wheel) {
+        wheel.style.setProperty('--gx', (nx * 34).toFixed(1) + 'px');
+        wheel.style.setProperty('--gy', (ny * 34).toFixed(1) + 'px');
+        // pushing up lifts the image, pulling down crushes it
+        wheel.style.setProperty('--lift', (1 - ny * 0.35).toFixed(3));
+      } else if (mode === 'arrows') {
+        var live = magnitude > 0.35;
+        var horizontal = Math.abs(nx) > Math.abs(ny);
+        dpads.forEach(function (d) {
+          var lit = false;
+          if (live) {
+            if (d.classList.contains('dpad--left')) lit = horizontal && nx < 0;
+            else if (d.classList.contains('dpad--right')) lit = horizontal && nx > 0;
+            else if (d.classList.contains('dpad--up')) lit = !horizontal && ny < 0;
+            else if (d.classList.contains('dpad--down')) lit = !horizontal && ny > 0;
+          }
+          d.classList.toggle('is-lit', lit);
+        });
+      }
+    }
+
+    // In mouse mode the pointer keeps travelling while the stick is held over,
+    // which is the whole point of a proportional stick — so drift on a timer.
+    var driftTimer = null;
+    function startDrift(getDeflection) {
+      if (driftTimer || reduceMotion) return;
+      driftTimer = setInterval(function () {
+        if (MODES[modeIndex] !== 'mouse') return;
+        var d = getDeflection();
+        if (!d) return;
+        var limit = 74;
+        driftX = clamp(driftX + (d.x / TRAVEL) * 4.5, -limit, limit);
+        driftY = clamp(driftY + (d.y / TRAVEL) * 4.5, -limit, limit);
+        paint(d.x, d.y);
+      }, 40);
+    }
+    function stopDrift() {
+      if (driftTimer) { clearInterval(driftTimer); driftTimer = null; }
+    }
+
+    var dragging = false, moved = false, startX = 0, startY = 0, curX = 0, curY = 0;
+
+    function deflection() { return { x: curX, y: curY }; }
+
+    pad.addEventListener('pointerdown', function (e) {
+      dragging = true; moved = false;
+      startX = e.clientX; startY = e.clientY;
+      pad.classList.add('is-drag');
+      try { pad.setPointerCapture(e.pointerId); } catch (err) {}
+      startDrift(deflection);
+      e.preventDefault();
+    });
+
+    pad.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      var dx = e.clientX - startX;
+      var dy = e.clientY - startY;
+      if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+      var m = Math.sqrt(dx * dx + dy * dy) || 1;
+      var r = Math.min(m, TRAVEL);
+      curX = dx / m * r; curY = dy / m * r;
+      paint(curX, curY);
+      if (readout) readout.textContent = COPY[MODES[modeIndex]];
+    });
+
+    ['pointerup', 'pointercancel'].forEach(function (ev) {
+      pad.addEventListener(ev, function () {
+        if (!dragging) return;
+        dragging = false;
+        pad.classList.remove('is-drag');
+        stopDrift();
+        curX = curY = 0;
+        paint(0, 0);
+        if (!moved) {
+          setMode(modeIndex + 1, true);   // a tap, not a drag, cycles the mode
+          window.OMK_blip && window.OMK_blip(560 + modeIndex * 90, 0.05);
+        } else if (readout) {
+          readout.textContent = RESTING[MODES[modeIndex]];
+        }
+      });
+    });
+
+    pad.addEventListener('keydown', function (e) {
+      var K = {
+        ArrowLeft:  [-TRAVEL, 0], ArrowRight: [TRAVEL, 0],
+        ArrowUp:    [0, -TRAVEL], ArrowDown:  [0, TRAVEL]
+      };
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        setMode(modeIndex + 1, true);
+        window.OMK_blip && window.OMK_blip(600, 0.05);
+        return;
+      }
+      if (K[e.key]) {
+        e.preventDefault();
+        curX = K[e.key][0]; curY = K[e.key][1];
+        // one nudge of drift so keyboard users see the pointer move too
+        driftX = clamp(driftX + (curX / TRAVEL) * 18, -74, 74);
+        driftY = clamp(driftY + (curY / TRAVEL) * 18, -74, 74);
+        paint(curX, curY);
+        if (readout) readout.textContent = COPY[MODES[modeIndex]];
+        setTimeout(function () { curX = curY = 0; paint(0, 0); }, 260);
+      }
+    });
+
+    modeButtons.forEach(function (b, i) {
+      b.addEventListener('click', function () {
+        setMode(i, true);
+        window.OMK_blip && window.OMK_blip(560 + i * 90, 0.05);
+      });
+    });
+
+    setMode(0, false);
+  })();
+
+  /* ------------------------------------------------------------
      8. THE INTERACTIVE MACRO PAD — real layout:
         knob · key · key · joystick
         key  · key · key · key
@@ -647,6 +824,45 @@
       if (k) k.classList.remove('is-down');
       delete held[bind];
     });
+  })();
+
+  /* ------------------------------------------------------------
+     8b. THE PHOTO STACK
+     Clicking the stack (or NEXT) sends the front polaroid to the
+     back. Only the front shot is exposed to assistive tech.
+     ------------------------------------------------------------ */
+  (function photoStack() {
+    var stack = $('#shots');
+    if (!stack) return;
+
+    var shots = $$('.shot', stack);
+    var nextBtn = $('#shotsNext');
+    var count = $('#shotsCount');
+    var front = 0;
+
+    function paint() {
+      shots.forEach(function (shot, i) {
+        var pos = (i - front + shots.length) % shots.length;
+        shot.setAttribute('data-pos', pos);
+        // the buried shots are decoration; keep them out of the a11y tree
+        shot.setAttribute('aria-hidden', pos === 0 ? 'false' : 'true');
+      });
+      if (count) count.textContent = (front + 1) + ' / ' + shots.length;
+    }
+
+    function advance() {
+      if (shots.length < 2) return;
+      front = (front + 1) % shots.length;
+      paint();
+      window.OMK_blip && window.OMK_blip(520, 0.05);
+    }
+
+    stack.addEventListener('click', advance);
+    if (nextBtn) {
+      nextBtn.addEventListener('click', advance);
+      if (shots.length < 2) nextBtn.disabled = true;
+    }
+    paint();
   })();
 
   /* ------------------------------------------------------------
