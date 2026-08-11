@@ -21,17 +21,27 @@ parts there).
 
 ## Board status (DRC, KiCad 10.0.4)
 
-Zones refilled; **0 unconnected items**. Remaining flags, all reviewed and
-accepted:
+Zones refilled; **0 unconnected items**, and no schematic-parity errors.
+Remaining flags, all reviewed and accepted:
 
-- 63× pad-to-pad clearance 0.2000 mm vs the board's 0.2032 mm (8 mil) rule —
-  3.2 µm under, and every pair is *within* a single package (the STM32's
-  0.5 mm-pitch QFP-48 pads, U3, and the USB-C receptacle's pin grid, J3):
-  fixed package geometry, far above JLC's 0.127 mm capability.
-- 89× copper near Edge.Cuts — the 8 perimeter underglow LEDs are reverse-mount
-  parts whose footprints carry their own board cutout, so their pads border an
-  edge by construction; the rest is the edge-mount USB-C (J3).
-- Silkscreen warnings (over copper / near edge / overlaps) — cosmetic.
+- 236× clearance + 199× track width. The board file keeps a conservative
+  0.2032 mm (8 mil) minimum clearance/width rule, while the autorouter works
+  to a 0.15 mm constraint class: every flagged track is 0.153 mm wide and the
+  smallest actual clearance is 0.154 mm. Included in that count are 63
+  pad-to-pad pairs *within* a single package — the STM32's 0.5 mm-pitch
+  QFP-48 (U3) and the USB-C receptacle's pin grid (J3) — which are fixed
+  package geometry. Everything here is far above JLC's 0.127 mm capability.
+- 89× copper near Edge.Cuts: 84 are the reverse-mount SK6812 LEDs, whose
+  footprints carry their own board cutout, so their pads border that opening
+  by construction. The remaining five are the edge-mount USB-C shield tabs
+  (J3, flush with the board edge by design) and the three odd-row pads of the
+  SWD socket J2, which end 0.18 mm from the top edge — the socket sits at
+  y = 43.0 mm on a board that ends at 47.5 mm. Accepted: it is a hand-soldered
+  through-board socket land, and 0.18 mm clears a routed outline comfortably.
+- 6× hole clearance — tracks passing 0.16–0.18 mm from the NPTH locating
+  holes of the keyswitches and USB-C. These take plastic bosses, not pins;
+  there is no copper barrel to short to.
+- 74× silkscreen warnings (over copper / near edge / overlaps) — cosmetic.
 
 ## Fab parameters
 
@@ -40,21 +50,21 @@ B.Cu signal), 1.6 mm FR-4, 1 oz copper, dielectric 0.2 / 1.03 / 0.2 mm
 (impedance-controlled — the USB differential pairs target 100 Ω differential /
 50 Ω single-ended per the design constraints in
 [`../out/differential_pairs.csv`](../out/differential_pairs.csv); on JLCPCB
-pick the JLC04161H-7628 standard stackup), min track/space used 0.15/0.15 mm,
-vias 0.495/0.3 mm, surface finish your choice (ENIG recommended for the
-capacitive touch pad TP1).
+pick the JLC04161H-7628 standard stackup), min track/space used
+0.153/0.154 mm, vias 0.45 mm pad / 0.305 mm drill (216 of them), surface
+finish your choice (ENIG recommended for the capacitive touch pad TP1).
 
 ## Regenerating
 
 ```sh
-# Gerbers + drill (from the repo root)
+# Gerbers + drill (from hw/v1/)
 kicad-cli pcb export gerbers -o fab/gerbers/ \
   --layers F.Cu,In1.Cu,In2.Cu,B.Cu,F.Paste,B.Paste,F.Silkscreen,B.Silkscreen,F.Mask,B.Mask,Edge.Cuts \
   pcb/openmicro.kicad_pcb
 kicad-cli pcb export drill -o fab/gerbers/ --excellon-separate-th pcb/openmicro.kicad_pcb
 
 # BOM (CoHDL compiler) and CPL (smt_pos.py, run with KiCad's bundled python)
-cohdl build                       # -> out/openmicro-bom.csv
+cohdl build .                     # -> out/openmicro-bom.csv
 smt_pos.py pcb/openmicro.kicad_pcb out/openmicro-smt.csv
 smt_pos.py --all pcb/openmicro.kicad_pcb fab/openmicro-pos-all.csv
 ```

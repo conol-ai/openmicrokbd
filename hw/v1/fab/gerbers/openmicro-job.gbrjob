@@ -5,7 +5,7 @@
       "Application": "Pcbnew",
       "Version": "10.0.4"
     },
-    "CreationDate": "2026-07-30T09:24:51+08:00"
+    "CreationDate": "2026-08-10T16:17:23+08:00"
   },
   "GeneralSpecs": {
     "ProjectId": {
@@ -19,7 +19,7 @@
     },
     "LayerNumber": 4,
     "BoardThickness": 1.6,
-    "Finish": "Nickel, Gold",
+    "Finish": "Lead-Free",
     "ImpedanceControlled": true
   },
   "DesignRules": [
@@ -28,7 +28,7 @@
       "PadToPad": 0.2032,
       "PadToTrack": 0.2032,
       "TrackToTrack": 0.2032,
-      "MinLineWidth": 0.2034
+      "MinLineWidth": 0.1526
     },
     {
       "Layers": "Inner",
@@ -108,9 +108,9 @@
     {
       "Type": "SolderMask",
       "Color": "R255G0B128",
-      "Thickness": 0.0254,
+      "Thickness": 0.0305,
       "Material": "SM-001",
-      "DielectricConstant": "4",
+      "DielectricConstant": "3.8",
       "LossTangent": "0.03",
       "Name": "Top Solder Mask"
     },
@@ -121,37 +121,37 @@
     },
     {
       "Type": "Dielectric",
-      "Thickness": 0.2,
-      "Material": "PP-006",
-      "DielectricConstant": "4.7",
+      "Thickness": 0.2104,
+      "Material": "NP-140F",
+      "DielectricConstant": "4.4",
       "LossTangent": "0.02",
       "Name": "Top Layer/Ground Layer 1",
       "Notes": "Type: dielectric layer 1 (from Top Layer to Ground Layer 1)"
     },
     {
       "Type": "Copper",
-      "Thickness": 0.035,
+      "Thickness": 0.0152,
       "Name": "Ground Layer 1"
     },
     {
       "Type": "Dielectric",
-      "Thickness": 1.03,
-      "Material": "IPC-4101C/21",
+      "Thickness": 1.065,
+      "Material": "FR4-Generic",
       "DielectricConstant": "4.6",
-      "LossTangent": "0.022",
+      "LossTangent": "0.02",
       "Name": "Ground Layer 1/Ground Layer 2",
       "Notes": "Type: dielectric layer 2 (from Ground Layer 1 to Ground Layer 2)"
     },
     {
       "Type": "Copper",
-      "Thickness": 0.035,
+      "Thickness": 0.0152,
       "Name": "Ground Layer 2"
     },
     {
       "Type": "Dielectric",
-      "Thickness": 0.2,
-      "Material": "PP-006",
-      "DielectricConstant": "4.7",
+      "Thickness": 0.2104,
+      "Material": "NP-140F",
+      "DielectricConstant": "4.4",
       "LossTangent": "0.02",
       "Name": "Ground Layer 2/Bottom Layer",
       "Notes": "Type: dielectric layer 3 (from Ground Layer 2 to Bottom Layer)"
@@ -164,9 +164,9 @@
     {
       "Type": "SolderMask",
       "Color": "R255G0B128",
-      "Thickness": 0.0254,
+      "Thickness": 0.0305,
       "Material": "SM-001",
-      "DielectricConstant": "4",
+      "DielectricConstant": "3.8",
       "LossTangent": "0.03",
       "Name": "Bottom Solder Mask"
     },
