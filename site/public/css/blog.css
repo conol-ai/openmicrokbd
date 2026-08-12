@@ -173,7 +173,24 @@ html[data-theme="night"] .costchart {
 .costchart .cc-axis { stroke: var(--c-axis); stroke-width: 2; opacity: .5; }
 .costchart .cc-bracket { stroke: var(--c-axis); stroke-width: 2; fill: none; opacity: .7; }
 .chart-scroll { overflow-x: auto; }
-.chart-scroll .costchart { min-width: 600px; }
+.chart-scroll .costchart, .chart-scroll .clocktree { min-width: 600px; }
+
+/* ---------- clock tree ---------- */
+.clocktree { display: block; width: 100%; height: auto; color: var(--ink-dim); }
+.clocktree .ct-box rect {
+  fill: var(--panel-2); stroke: var(--panel-edge-2); stroke-width: 3;
+}
+.clocktree .ct-box--key rect { fill: var(--sun); stroke: var(--panel-edge-2); }
+html[data-theme="night"] .clocktree .ct-box--key rect { fill: var(--wood-mid); }
+.clocktree .ct-box--idle rect { fill: none; stroke: var(--ink-dim); opacity: .7; }
+.clocktree .ct-h { font-family: "Press Start 2P", monospace; font-size: 10px; fill: var(--ink); }
+.clocktree .ct-box--key .ct-h { fill: var(--wood-dark); }
+html[data-theme="night"] .clocktree .ct-box--key .ct-h { fill: var(--cream); }
+.clocktree .ct-s { font-family: "VT323", monospace; font-size: 18px; fill: var(--ink-soft); }
+.clocktree .ct-box--key .ct-s { fill: var(--wood-dark); }
+html[data-theme="night"] .clocktree .ct-box--key .ct-s { fill: var(--cream); }
+.clocktree .ct-note { font-family: "VT323", monospace; font-size: 19px; fill: var(--ink-dim); }
+.clocktree .ct-wire { stroke: var(--ink-dim); stroke-width: 3; fill: none; }
 
 /* ---------- post footer nav ---------- */
 .post-foot {

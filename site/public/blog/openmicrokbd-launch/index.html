@@ -301,6 +301,11 @@
 
 <p>CoHDL emitted the netlist, BOM, footprints, and constraints. The design then went to <strong><a href="https://quilter.ai" rel="noopener">Quilter.ai</a></strong> for physical layout. The resulting boards were ordered from a fab and populated.</p>
 
+<figure class="post-figure">
+  <img src="/blog/openmicrokbd-launch/img/quilter.webp" alt="The Quilter.ai layout screen showing the routed 95 by 95 millimetre board, its switch and LED footprints, layer list and a design review panel" width="1400" height="837" loading="lazy" />
+  <figcaption>Physical layout is Quilter's work, not CoHDL's: 88 components and 337 pins placed and routed, returned as ten candidate boards in about twelve minutes.</figcaption>
+</figure>
+
 <p>An agent also assisted with firmware and host-app development. It did not produce a finished system from one prompt. Pin assignments, component choices, generated outputs, layout, soldering, bring-up, behavior, and failure modes all required review and debugging.</p>
 
 <figure class="post-figure">
@@ -392,6 +397,11 @@ net V3V3 [3.3V]: ldo.VOUT, mcu.VDD, mcu.VDDA, mcu.VBAT, mcu.VDDIO2, joy.X_END_B,
 
 <p>That trade is acceptable for a board with an exposed debug socket. It would need reconsideration in a sealed consumer product.</p>
 
+<figure class="post-figure">
+  <img src="/blog/openmicrokbd-launch/img/update.webp" alt="The companion app's Firmware dialog mid-install, showing version 0.6.0 available, the raw .bin image selected, and a progress bar at 26 percent" width="1400" height="921" loading="lazy" />
+  <figcaption>The whole update is one dialog and no held buttons. The keymap sits in a flash page the programming pass never covers, so profiles survive the install.</figcaption>
+</figure>
+
 <h3 id="deep-dive-three-fitting-21-leds-inside-the-usb-budget">Deep dive three: fitting 21 LEDs inside the USB budget</h3>
 
 <p>Twenty-one addressable LEDs can still exceed the <strong>USB 2.0 500 mA budget</strong> at full white. Firmware limits every channel using <code>scaled(n / 64)</code>, across both the 13 key LEDs and the 8 perimeter LEDs sharing VBUS.</p>
@@ -405,6 +415,73 @@ net V3V3 [3.3V]: ldo.VOUT, mcu.VDD, mcu.VDDA, mcu.VBAT, mcu.VDDIO2, joy.X_END_B,
 <p>Although the board includes an <strong>8 MHz HSE crystal</strong>, the current firmware does not depend on it. HSI48 drives the CPU and USB peripheral at 48 MHz.</p>
 
 <p>The STM32 <strong>Clock Recovery System</strong> disciplines HSI48 against USB Start-of-Frame packets. USB becomes the timing reference, keeping the core at the frequency the LED driver assumes while leaving the crystal available for future firmware and debugging.</p>
+
+<figure class="post-figure">
+  <div class="chart-scroll">
+    <svg class="clocktree" viewBox="0 0 860 340" role="img" aria-labelledby="ctTitle ctDesc">
+      <title id="ctTitle">How the USB host ends up setting the core clock</title>
+      <desc id="ctDesc">The USB host sends start-of-frame packets once per millisecond. The Clock Recovery System compares them against the HSI48 on-chip oscillator and trims it, so HSI48 holds 48 MHz. HSI48 clocks both the CPU core and the USB full-speed peripheral. The WS2812 bit-bang driver runs on the CPU and its cycle counts assume exactly 48 MHz, which is why the clock choice is part of driver correctness. The 8 MHz HSE crystal is fitted on the board but the current firmware does not use it.</desc>
+
+      <g class="ct-box">
+        <rect x="16" y="24" width="180" height="62" />
+        <text class="ct-h" x="106" y="50" text-anchor="middle">USB HOST</text>
+        <text class="ct-s" x="106" y="72" text-anchor="middle">SOF every 1 ms</text>
+      </g>
+      <path class="ct-wire" d="M196,55 L262,55" marker-end="url(#ctArrow)" />
+
+      <g class="ct-box">
+        <rect x="262" y="24" width="170" height="62" />
+        <text class="ct-h" x="347" y="50" text-anchor="middle">CRS</text>
+        <text class="ct-s" x="347" y="72" text-anchor="middle">compares &amp; trims</text>
+      </g>
+      <path class="ct-wire" d="M347,86 L347,126" marker-end="url(#ctArrow)" />
+
+      <g class="ct-box ct-box--idle">
+        <rect x="16" y="126" width="180" height="62" stroke-dasharray="6 5" />
+        <text class="ct-h" x="106" y="152" text-anchor="middle">HSE 8 MHz</text>
+        <text class="ct-s" x="106" y="174" text-anchor="middle">fitted, unused</text>
+      </g>
+
+      <g class="ct-box ct-box--key">
+        <rect x="262" y="126" width="170" height="62" />
+        <text class="ct-h" x="347" y="152" text-anchor="middle">HSI48</text>
+        <text class="ct-s" x="347" y="174" text-anchor="middle">48 MHz on-chip RC</text>
+      </g>
+
+      <path class="ct-wire" d="M432,157 L500,157" marker-end="url(#ctArrow)" />
+      <path class="ct-wire" d="M500,157 L500,55 L560,55" marker-end="url(#ctArrow)" />
+      <path class="ct-wire" d="M500,157 L500,258 L560,258" marker-end="url(#ctArrow)" />
+
+      <g class="ct-box">
+        <rect x="560" y="24" width="284" height="62" />
+        <text class="ct-h" x="702" y="50" text-anchor="middle">USB FS PERIPHERAL</text>
+        <text class="ct-s" x="702" y="72" text-anchor="middle">the same clock it disciplines</text>
+      </g>
+
+      <g class="ct-box ct-box--key">
+        <rect x="560" y="126" width="284" height="62" />
+        <text class="ct-h" x="702" y="152" text-anchor="middle">CPU CORE</text>
+        <text class="ct-s" x="702" y="174" text-anchor="middle">48 MHz</text>
+      </g>
+      <path class="ct-wire" d="M702,188 L702,228" marker-end="url(#ctArrow)" />
+
+      <g class="ct-box">
+        <rect x="560" y="228" width="284" height="62" />
+        <text class="ct-h" x="702" y="254" text-anchor="middle">WS2812 BIT-BANG</text>
+        <text class="ct-s" x="702" y="276" text-anchor="middle">cycle counts assume 48 MHz</text>
+      </g>
+
+      <text class="ct-note" x="16" y="318">USB is the timing reference — lose the host and the LED driver loses its yardstick.</text>
+
+      <defs>
+        <marker id="ctArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,1 L9,5 L0,9 z" fill="currentColor" />
+        </marker>
+      </defs>
+    </svg>
+  </div>
+  <figcaption>The crystal is on the board, but the host is what keeps the core at the frequency the LED driver counts on.</figcaption>
+</figure>
 
 <p>The boundary is explicit: this design assumes a USB-connected device. It would be a poor clock strategy for a wireless, battery-powered variant running for long periods without SOF packets — one concrete example of how far the two designs diverge once a radio is involved.</p>
 
