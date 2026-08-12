@@ -137,6 +137,44 @@ blockquote.plain {
 }
 blockquote.plain p { margin: 0; }
 
+/* ---------- figures ---------- */
+.post-figure { margin: 2.2em 0; }
+.post-figure img {
+  display: block; width: 100%; height: auto;
+  image-rendering: auto;
+  box-shadow:
+    0 0 0 var(--px) var(--panel-edge),
+    0 0 0 calc(var(--px)*2) var(--panel-edge-2),
+    calc(var(--px)*2) calc(var(--px)*2) 0 0 rgba(0,0,0,.18);
+}
+.post-figure figcaption {
+  font-size: 19px; line-height: 1.45; color: var(--ink-dim);
+  margin-top: 18px; text-align: center;
+}
+
+/* ---------- cost chart ---------- */
+/* Both palettes were run through the categorical validator against their own
+   surface — the dark steps are chosen, not a flip of the light ones. */
+.costchart {
+  --c-pcb: #2f6fb5; --c-smt: #d99323; --c-sw: #8a4bbd; --c-cap: #2e9e5c;
+  --c-rival: #8d7b5e;
+  --c-axis: var(--ink-dim); --c-ink: var(--ink); --c-mute: var(--ink-dim);
+  display: block; width: 100%; height: auto;
+}
+html[data-theme="night"] .costchart {
+  --c-pcb: #5b95d8; --c-smt: #bd8828; --c-sw: #a878cc; --c-cap: #42a26e;
+  --c-rival: #6b7495;
+}
+.costchart text { font-family: "VT323", monospace; fill: var(--c-ink); }
+.costchart .cc-name { font-family: "Press Start 2P", monospace; font-size: 11px; fill: var(--c-ink); }
+.costchart .cc-total { font-family: "Press Start 2P", monospace; font-size: 13px; fill: var(--c-ink); }
+.costchart .cc-tick, .costchart .cc-note { font-size: 19px; fill: var(--c-mute); }
+.costchart .cc-legend { font-size: 19px; fill: var(--c-ink); }
+.costchart .cc-axis { stroke: var(--c-axis); stroke-width: 2; opacity: .5; }
+.costchart .cc-bracket { stroke: var(--c-axis); stroke-width: 2; fill: none; opacity: .7; }
+.chart-scroll { overflow-x: auto; }
+.chart-scroll .costchart { min-width: 600px; }
+
 /* ---------- post footer nav ---------- */
 .post-foot {
   margin-top: 56px; padding-top: 22px;

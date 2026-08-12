@@ -124,6 +124,11 @@
 
 <article class="post-body">
 
+<figure class="post-figure">
+  <img src="/blog/openmicrokbd-launch/img/hero.webp" alt="The finished OpenMicroKbd held in one hand: black PCB in a white printed case, icon keycaps, a knob, a joystick and a yellow accent key" width="1400" height="788" fetchpriority="high" />
+  <figcaption>The finished board: 13 keys, a knob, an analog joystick, a capacitive touch pad, and a white 3D-printed case.</figcaption>
+</figure>
+
 <p>In July 2026, OpenAI shipped its first branded hardware: the <strong>Codex Micro</strong>, a <strong>$230</strong> macropad built with Work Louder. Thirteen keys, a dial, a joystick, a touch sensor, RGB lighting, Bluetooth, and a CNC aluminium and polycarbonate case.</p>
 
 <p><strong>OpenMicroKbd</strong> is an open-source board that recreates that control layout. MIT licensed, wired USB-C, and <strong>about $37 in parts and assembly</strong> for one board. The schematic, firmware, companion app, routed board, and the full manufacturing package are all published — you can send the Gerbers to a fab today.</p>
@@ -143,6 +148,11 @@
 <p>It began as a recreation of the Codex Micro's layout, but it is not limited to Codex. It targets AI-assisted coding, terminal workflows, video editing, color grading, and other work built around shortcuts and scrubbing.</p>
 
 <p>Every input's emitted code is <strong>configurable and stored in the board's own flash</strong>. Out of the box the keys send F13–F20 and Shift+F13–F17 — deliberately chosen because those are interceptable on every OS and collide with nothing — but you can reassign any key to a different keycode, a modifier-qualified combination, or a media usage, save it to the device, and it keeps that mapping on any machine you plug it into.</p>
+
+<figure class="post-figure">
+  <img src="/blog/openmicrokbd-launch/img/kit.webp" alt="The assembled board in its white printed case, beside the embossed Open Micro Kbd packaging box and two printed trays of alternate keycaps" width="1051" height="1400" loading="lazy" />
+  <figcaption>All of it printable: the case the board sits in, the packaging behind it, and trays of interchangeable keycaps.</figcaption>
+</figure>
 
 <h2 id="why-build-one-at-all">Why build one at all</h2>
 
@@ -177,6 +187,16 @@
 </ul>
 
 <p>Lighting uses two WS2812-compatible chains, <strong>21 LEDs total</strong>: 13 reverse-mount <code>SK6812MINI-E</code> LEDs beneath the keys, and 8 more around the perimeter as underglow. <code>USBLC6</code> provides USB ESD protection, and an <code>AP2112</code> regulates 3.3 V.</p>
+
+<figure class="post-figure">
+  <img src="/blog/openmicrokbd-launch/img/hardware.webp" alt="Close-up of the finished board showing per-key lighting, perimeter underglow, the knob, the joystick and the capacitive touch pad" width="1050" height="1400" loading="lazy" />
+  <figcaption>The finished control surface: two LED chains, the knob and joystick along the top, and the capacitive touch pad at lower left.</figcaption>
+</figure>
+
+<figure class="post-figure">
+  <img src="/blog/openmicrokbd-launch/img/underside.webp" alt="Macro view of the board's underside during hand assembly: a soldering iron and solder wire at one joint, surrounded by the teal reverse-mount LED packages silkscreened LED17 through LED29" width="1400" height="788" loading="lazy" />
+  <figcaption>The key LEDs are reverse-mount: they sit on the underside and fire up through cutouts toward the keycaps.</figcaption>
+</figure>
 
 <h3 id="what-one-board-actually-costs">What one board actually costs</h3>
 
@@ -232,6 +252,49 @@
 
 <p>The honest claim is not "six times cheaper." It is that <strong>an open board with the same control surface costs tens of dollars to make</strong>, and you can inspect and change every layer of it.</p>
 
+<figure class="post-figure">
+  <div class="chart-scroll">
+    <svg class="costchart" viewBox="0 0 860 404" role="img" aria-labelledby="ccTitle ccDesc">
+      <title id="ccTitle">One assembled board at $36.90 against the commercial product at $230</title>
+      <desc id="ccDesc">A stacked bar shows the $36.90 board: $6.93 PCB, $18.14 turnkey SMT, $2.97 switches, $8.85 keycaps. A second bar shows the Codex Micro at $230. The roughly $193 difference is bracketed and labelled with what it pays for: wireless operation and its battery, a machined case, assembly at volume, testing, packaging, distribution, warranty, support and margin. The same figures appear in the two tables above.</desc>
+
+      <text class="cc-name" x="140" y="78" text-anchor="end">OPENMICROKBD</text>
+      <rect x="150"   y="52" width="17"   height="42" fill="var(--c-pcb)" />
+      <rect x="169"   y="52" width="48"   height="42" fill="var(--c-smt)" />
+      <rect x="219"   y="52" width="6"    height="42" fill="var(--c-sw)" />
+      <rect x="227"   y="52" width="22.5" height="42" fill="var(--c-cap)" />
+      <text class="cc-total" x="265" y="79">$36.90</text>
+
+      <text class="cc-name" x="140" y="146" text-anchor="end">CODEX MICRO</text>
+      <rect x="150" y="120" width="632.5" height="42" fill="var(--c-rival)" />
+      <text class="cc-total" x="792" y="147">$230</text>
+
+      <line class="cc-axis" x1="150" y1="180" x2="810" y2="180" />
+      <line class="cc-axis" x1="150" y1="180" x2="150" y2="187" />
+      <line class="cc-axis" x1="425" y1="180" x2="425" y2="187" />
+      <line class="cc-axis" x1="700" y1="180" x2="700" y2="187" />
+      <text class="cc-tick" x="150" y="206" text-anchor="middle">$0</text>
+      <text class="cc-tick" x="425" y="206" text-anchor="middle">$100</text>
+      <text class="cc-tick" x="700" y="206" text-anchor="middle">$200</text>
+
+      <path class="cc-bracket" d="M251,236 L251,244 L782,244 L782,236" />
+      <text class="cc-note" x="516" y="272" text-anchor="middle">the remaining ~$193 buys things this board does not have</text>
+      <text class="cc-note" x="516" y="296" text-anchor="middle">wireless operation and its battery · a machined case</text>
+      <text class="cc-note" x="516" y="320" text-anchor="middle">assembly at volume · testing · packaging · distribution · warranty · support · margin</text>
+
+      <rect x="150" y="352" width="16" height="16" fill="var(--c-pcb)" />
+      <text class="cc-legend" x="174" y="366">PCB $6.93</text>
+      <rect x="300" y="352" width="16" height="16" fill="var(--c-smt)" />
+      <text class="cc-legend" x="324" y="366">Turnkey SMT $18.14</text>
+      <rect x="530" y="352" width="16" height="16" fill="var(--c-sw)" />
+      <text class="cc-legend" x="554" y="366">Switches $2.97</text>
+      <rect x="700" y="352" width="16" height="16" fill="var(--c-cap)" />
+      <text class="cc-legend" x="724" y="366">Keycaps $8.85</text>
+    </svg>
+  </div>
+  <figcaption>Same length scale for both, because that is the honest picture — but the gap is not markup. The bracket is what the difference actually pays for.</figcaption>
+</figure>
+
 <h3 id="from-requirements-to-routed-copper">From requirements to routed copper</h3>
 
 <p>The workflow started with concrete requirements given to an agent: control layout, matrix, power rails, USB, LEDs, MCU resources, mechanical constraints. That conversation became <strong>CoHDL source</strong> for the schematic-level design.</p>
@@ -239,6 +302,11 @@
 <p>CoHDL emitted the netlist, BOM, footprints, and constraints. The design then went to <strong><a href="https://quilter.ai" rel="noopener">Quilter.ai</a></strong> for physical layout. The resulting boards were ordered from a fab and populated.</p>
 
 <p>An agent also assisted with firmware and host-app development. It did not produce a finished system from one prompt. Pin assignments, component choices, generated outputs, layout, soldering, bring-up, behavior, and failure modes all required review and debugging.</p>
+
+<figure class="post-figure">
+  <img src="/blog/openmicrokbd-launch/img/bench.webp" alt="Hand-soldering the board at an electronics workbench, with magnifier, iron and board vise in frame" width="1400" height="788" loading="lazy" />
+  <figcaption>The through-hole parts are still hand work: switches, encoder and joystick are not in the pick-and-place file.</figcaption>
+</figure>
 
 <h3 id="the-pcb-is-written-not-drawn">The PCB is written, not drawn</h3>
 
@@ -267,7 +335,12 @@ net V3V3 [3.3V]: ldo.VOUT, mcu.VDD, mcu.VDDA, mcu.VBAT, mcu.VDDIO2, joy.X_END_B,
 
 <p>A bare PCB is not a satisfactory desktop device. It rocks on components or standoffs, exposes solder joints, and makes a side-mounted USB connector awkward to reach.</p>
 
-<p>The prototype wears a <strong>single-piece 3D-printed case</strong>, and the repository ships the exact <strong>board outline as DXF</strong> under <code>hw/v1/mechanical/</code> — everything needed to model a case around the board. The printable case model itself is still being tidied up for release.</p>
+<p>So the repository ships a <strong>printable enclosure</strong> under <code>hw/v1/mechanical/</code>, as both editable Fusion sources and ready-to-slice meshes: the case, the encoder knob, the joystick cap, the packaging, and the soldering jig used to hold the board while the through-hole parts go in. The board outline is there as DXF too, for anyone modelling their own.</p>
+
+<figure class="post-figure">
+  <img src="/blog/openmicrokbd-launch/img/enclosure.webp" alt="Securing the PCB into the white 3D-printed enclosure with a corner screw" width="1400" height="788" loading="lazy" />
+  <figcaption>The board mounts at the four corners, with a side opening for USB-C.</figcaption>
+</figure>
 
 <p>The enclosure is also the layer most worth remixing, and the easiest to change safely. Tilt, feet, material, encoder height, and USB-cable clearance can all vary without touching the electronics. If you design a variant, publish the editable source beside the printable output, and <strong>leave the SWD socket accessible</strong> — it is the recovery path if a firmware update goes wrong.</p>
 
@@ -299,6 +372,11 @@ net V3V3 [3.3V]: ldo.VOUT, mcu.VDD, mcu.VDDA, mcu.VBAT, mcu.VDDIO2, joy.X_END_B,
 <p>The save path is ordered deliberately. The body is written first and <strong>the magic word is written last, as its own operation</strong>. If power dies mid-save, the header stays erased, the magic check fails on next boot, and the board comes up on factory defaults rather than a half-written keymap. The checksum catches the subtler tear where power drops between body and magic during a re-save.</p>
 
 <p>Corrupt slots degrade rather than propagate: a bad <code>kind</code>, or a keyboard code above <code>0xFF</code>, becomes a disabled slot instead of a wrong keypress.</p>
+
+<figure class="post-figure">
+  <img src="/blog/openmicrokbd-launch/img/app.webp" alt="The board in front of a laptop running the config app, showing key, rotary and joystick assignments" width="1050" height="1400" loading="lazy" />
+  <figcaption>Remapping on the device: the app reads and writes the assignments for keys, encoder and joystick, then saves the table into flash.</figcaption>
+</figure>
 
 <h3 id="deep-dive-two-dfu-without-a-resident-bootloader">Deep dive two: DFU without a resident bootloader</h3>
 
@@ -348,12 +426,17 @@ net V3V3 [3.3V]: ldo.VOUT, mcu.VDD, mcu.VDDA, mcu.VBAT, mcu.VDDIO2, joy.X_END_B,
 
 <p>Separately, the app can bind a key to a <strong>host-side action</strong> — running a shell command (<code>sh -c</code>, or <code>cmd /C</code> on Windows) or opening a URL, file, or app through the OS default handler. Those bindings are host-side by nature and live in the app's own configuration; a keyboard cannot launch your build script by itself. So there are two layers available, and the trade-off between them is explicit: <strong>device-resident keymaps are portable, host-side actions are more powerful.</strong></p>
 
+<figure class="post-figure">
+  <img src="/blog/openmicrokbd-launch/img/desk.webp" alt="The board plugged into a MacBook over USB-C with its key lighting and underglow active" width="1050" height="1400" loading="lazy" />
+  <figcaption>In daily use the keymap lives on the board — it keeps working with the app closed, and travels to whatever machine you plug into.</figcaption>
+</figure>
+
 <h2 id="scope-and-what-you-are-choosing">Scope, and what you are choosing</h2>
 
 <p>A different device with different priorities, not a feature-for-feature substitute:</p>
 <ul>
 <li><strong>Wired only</strong> — USB-C, with no radio and no battery. The commercial device works wirelessly over Bluetooth.</li>
-<li><strong>Printed case, not machined</strong> — the enclosure is FDM plastic rather than CNC aluminium and polycarbonate.</li>
+<li><strong>Printed case, not machined</strong> — the enclosure is FDM plastic rather than CNC aluminium and polycarbonate, though the source is yours to change.</li>
 <li><strong>Rust and Embassy instead of QMK/ZMK</strong> — a small async firmware with direct control over USB, updating, keymap persistence, and peripherals, in exchange for the tooling ecosystem those projects have built. It is not VIA-compatible; keymap editing goes through this project's own app.</li>
 <li><strong>No Codex integration</strong> — no ChatGPT desktop bridge and no agent-status choreography. The vendor HID interface is open and documented in the firmware source for anyone who wants to build one.</li>
 <li><strong>The CoHDL compiler is not public yet</strong> — you can read the schematic source and every generated artifact, but you cannot yet regenerate them yourself.</li>
@@ -369,7 +452,7 @@ net V3V3 [3.3V]: ldo.VOUT, mcu.VDD, mcu.VDDA, mcu.VBAT, mcu.VDDIO2, joy.X_END_B,
 <li>Generated netlist, BOM, footprints, constraints — <code>hw/v1/out/</code></li>
 <li>The routed board — <code>hw/v1/pcb/openmicro.kicad_pcb</code>, opens in KiCad 10+</li>
 <li><strong>Fab-ready manufacturing package</strong> — <code>hw/v1/fab/</code></li>
-<li>Board outline DXF — <code>hw/v1/mechanical/</code></li>
+<li>Printable enclosure, knob, joystick cap, packaging, soldering jig, and the board outline DXF — <code>hw/v1/mechanical/</code></li>
 <li>Datasheets for every active, connector, and electromechanical part — <code>hw/v1/docs/</code></li>
 <li>Firmware — <code>fw/</code></li>
 <li>Companion app — <code>app/</code></li>
