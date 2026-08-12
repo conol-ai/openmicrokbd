@@ -866,6 +866,37 @@
   })();
 
   /* ------------------------------------------------------------
+     8c. THE FILM
+     The embed is built only on the first press, so a visitor who
+     never watches never loads YouTube's player or its cookies.
+     ------------------------------------------------------------ */
+  (function film() {
+    var button = $('#filmPlay');
+    var mount = $('#filmMount');
+    if (!button || !mount) return;
+
+    var VIDEO_ID = '6KsWtJfjr1Q';
+
+    button.addEventListener('click', function () {
+      var frame = document.createElement('iframe');
+      // nocookie host, and enablejsapi is deliberately left off — nothing here
+      // needs to talk to the player
+      frame.src = 'https://www.youtube-nocookie.com/embed/' + VIDEO_ID +
+                  '?autoplay=1&rel=0&modestbranding=1&playsinline=1';
+      frame.title = 'OpenMicroKbd — the film';
+      frame.allow = 'accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; web-share';
+      frame.referrerPolicy = 'strict-origin-when-cross-origin';
+      frame.allowFullscreen = true;
+
+      mount.replaceChildren(frame);
+      var screen = mount.closest('.tv__screen');
+      if (screen) screen.classList.add('is-playing');
+      window.OMK_blip && window.OMK_blip(660, 0.06);
+      frame.focus();
+    }, { once: true });
+  })();
+
+  /* ------------------------------------------------------------
      9. Button press feedback
      ------------------------------------------------------------ */
   (function buttons() {

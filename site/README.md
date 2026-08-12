@@ -85,6 +85,12 @@ site/
 - **Check photos are not mirrored** before adding them — read the PCB
   silkscreen (`LED16`, `C21`…). If it is reversed, so is the photo:
   `magick in.jpg -flop out.jpg`. Both shots in the stack needed this.
+- **The film** (`#film`): the TV is drawn in CSS and shows a colour-bar
+  standby card; YouTube is only contacted when someone presses play, so no
+  third-party script or cookie loads before that. The video ID lives in the
+  `film()` module in `js/main.js`, and `frame-src` in `_headers` allows the
+  `youtube-nocookie.com` embed. **The video must be Public or Unlisted** —
+  a Private video renders as "This video is private" inside the cabinet.
 - Motion respects `prefers-reduced-motion`; theme choice persists in `localStorage`.
 - **Analytics — required on every new page**: each HTML page carries the Google
   tag (gtag.js, `G-M69BJY7W5P`) at the end of `<head>`. When adding a page
