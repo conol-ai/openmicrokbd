@@ -81,7 +81,20 @@ site/
   ```
 
   A shot with no night twin simply keeps showing its day photo in both themes,
-  so the sets can be filled in one at a time.
+  so the sets can be filled in one at a time. Two of the five cards are still
+  waiting for a dark-background twin.
+
+  Gallery photos are exported to **900×1200** (3:4) at quality 84, stripped:
+
+  ```sh
+  # portrait source (already ~3:4)
+  magick in.jpg -resize 900x1200^ -gravity center -extent 900x1200 -quality 84 -strip out.jpg
+  # landscape source, centre-cropped to portrait
+  magick in.jpg -gravity center -resize x1200^ -crop 900x1200+0+0 +repage -quality 84 -strip out.jpg
+  ```
+
+  The stack advances on tap, on a horizontal swipe, with PREV/NEXT, and with
+  the arrow keys while focus is anywhere in the gallery column.
 - **Check photos are not mirrored** before adding them — read the PCB
   silkscreen (`LED16`, `C21`…). If it is reversed, so is the photo:
   `magick in.jpg -flop out.jpg`. Both shots in the stack needed this.

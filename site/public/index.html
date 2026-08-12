@@ -677,7 +677,7 @@
     <header class="section-head reveal">
       <p class="section-kicker">CHAPTER VI</p>
       <h2 class="section-title">THE REAL THING</h2>
-      <p class="section-lede">Pixel art is fun. Here's the one on our desk — tap the stack to flip through it.</p>
+      <p class="section-lede">Pixel art is fun. Here's the one on our desk — tap the stack, swipe it, or use the arrows.</p>
     </header>
 
     <div class="polaroid-wrap reveal">
@@ -687,14 +687,47 @@
            <img class="shot__img shot__img--night"> — without one, the day
            photo simply stays put in both themes. -->
       <div class="shots-col">
-        <div class="shots" id="shots">
+        <div class="shots" id="shots" role="group" aria-label="Photos of the finished board">
           <figure class="shot">
             <div class="shot__win">
-              <img class="shot__img shot__img--day" src="/assets/product.jpg" alt="The OpenMicroKbd on a desk stand: dark PCB face in a white case, engraved keycaps, a knurled knob, a joystick, a yellow smiley key and a round gold touch pad" width="820" height="980" loading="lazy" />
+              <img class="shot__img shot__img--day" src="/assets/shot-build.jpg" alt="The finished OpenMicroKbd: dark PCB face in a white case, engraved keycaps, a knurled knob, a joystick, a yellow smiley key and a round gold touch pad" width="900" height="1200" loading="lazy" />
+              <img class="shot__img shot__img--night" src="/assets/shot-build-night.jpg" alt="" aria-hidden="true" width="900" height="1200" loading="lazy" />
             </div>
             <figcaption class="shot__cap">
               <span class="shot__cap-title">THE CURRENT BUILD</span>
               <span class="shot__cap-body">Engraved keycaps, a real knob, and the happy key that survived every revision.</span>
+            </figcaption>
+          </figure>
+
+          <figure class="shot">
+            <div class="shot__win">
+              <img class="shot__img shot__img--day" src="/assets/shot-keycaps.jpg" alt="The board surrounded by loose engraved keycaps, each carrying a different legend" width="900" height="1200" loading="lazy" />
+              <img class="shot__img shot__img--night" src="/assets/shot-keycaps-night.jpg" alt="" aria-hidden="true" width="900" height="1200" loading="lazy" />
+            </div>
+            <figcaption class="shot__cap">
+              <span class="shot__cap-title">EVERY LEGEND ENGRAVED</span>
+              <span class="shot__cap-body">Caps are engraved in-house — the laser jig that does it is in the repo too.</span>
+            </figcaption>
+          </figure>
+
+          <figure class="shot">
+            <div class="shot__win">
+              <img class="shot__img shot__img--day" src="/assets/shot-box.jpg" alt="The board seated in its printed box beside a printed keycap tray" width="900" height="1200" loading="lazy" />
+              <img class="shot__img shot__img--night" src="/assets/shot-box-night.jpg" alt="" aria-hidden="true" width="900" height="1200" loading="lazy" />
+            </div>
+            <figcaption class="shot__cap">
+              <span class="shot__cap-title">IN THE BOX</span>
+              <span class="shot__cap-body">Case, keycap tray and packaging — all printed, all in <code>hw/v1/mechanical/</code>.</span>
+            </figcaption>
+          </figure>
+
+          <figure class="shot">
+            <div class="shot__win">
+              <img class="shot__img shot__img--day" src="/assets/shot-app.jpg" alt="The board in front of a laptop running the config app, showing rotation and press bindings for the encoder" width="900" height="1200" loading="lazy" />
+            </div>
+            <figcaption class="shot__cap">
+              <span class="shot__cap-title">REMAP ANYTHING</span>
+              <span class="shot__cap-body">Every input is editable in the app. Changes land live, then persist on the board.</span>
             </figcaption>
           </figure>
 
@@ -710,8 +743,9 @@
         </div>
 
         <div class="shots-bar">
-          <button class="pxbtn shots__next" id="shotsNext" type="button">NEXT ▸</button>
-          <span class="shots__count" id="shotsCount" role="status">1 / 2</span>
+          <button class="pxbtn shots__nav" id="shotsPrev" type="button" aria-label="Previous photo">◂ PREV</button>
+          <span class="shots__count" id="shotsCount" role="status">1 / 5</span>
+          <button class="pxbtn shots__nav" id="shotsNext" type="button" aria-label="Next photo">NEXT ▸</button>
         </div>
       </div>
 

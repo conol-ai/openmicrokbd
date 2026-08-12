@@ -836,32 +836,64 @@
     if (!stack) return;
 
     var shots = $$('.shot', stack);
+    var prevBtn = $('#shotsPrev');
     var nextBtn = $('#shotsNext');
     var count = $('#shotsCount');
+    var column = stack.parentElement;
+    var total = shots.length;
     var front = 0;
 
     function paint() {
       shots.forEach(function (shot, i) {
-        var pos = (i - front + shots.length) % shots.length;
+        var pos = (i - front + total) % total;
         shot.setAttribute('data-pos', pos);
         // the buried shots are decoration; keep them out of the a11y tree
         shot.setAttribute('aria-hidden', pos === 0 ? 'false' : 'true');
       });
-      if (count) count.textContent = (front + 1) + ' / ' + shots.length;
+      if (count) count.textContent = (front + 1) + ' / ' + total;
     }
 
-    function advance() {
-      if (shots.length < 2) return;
-      front = (front + 1) % shots.length;
+    function go(step) {
+      if (total < 2) return;
+      front = (front + step + total) % total;
       paint();
-      window.OMK_blip && window.OMK_blip(520, 0.05);
+      window.OMK_blip && window.OMK_blip(step > 0 ? 520 : 460, 0.05);
     }
 
-    stack.addEventListener('click', advance);
-    if (nextBtn) {
-      nextBtn.addEventListener('click', advance);
-      if (shots.length < 2) nextBtn.disabled = true;
+    if (prevBtn) prevBtn.addEventListener('click', function () { go(-1); });
+    if (nextBtn) nextBtn.addEventListener('click', function () { go(1); });
+    if (total < 2 && prevBtn && nextBtn) { prevBtn.disabled = nextBtn.disabled = true; }
+
+    // Tap anywhere on the stack to advance; drag sideways to flick either way.
+    // Pointer events cover mouse and touch, so no separate click handler (which
+    // would otherwise fire a second advance after every swipe).
+    var startX = null, startY = null, swiped = false;
+    stack.addEventListener('pointerdown', function (e) {
+      startX = e.clientX; startY = e.clientY; swiped = false;
+    });
+    stack.addEventListener('pointermove', function (e) {
+      if (startX === null) return;
+      if (Math.abs(e.clientX - startX) > 12) swiped = true;
+    });
+    stack.addEventListener('pointerup', function (e) {
+      if (startX === null) return;
+      var dx = e.clientX - startX;
+      var dy = e.clientY - startY;
+      startX = startY = null;
+      // ignore a mostly-vertical drag: that is the page being scrolled
+      if (swiped && Math.abs(dx) > Math.abs(dy)) go(dx < 0 ? 1 : -1);
+      else if (!swiped) go(1);
+    });
+    stack.addEventListener('pointercancel', function () { startX = startY = null; });
+
+    // arrows work whenever focus sits anywhere in the gallery column
+    if (column) {
+      column.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowLeft') { e.preventDefault(); go(-1); }
+        else if (e.key === 'ArrowRight') { e.preventDefault(); go(1); }
+      });
     }
+
     paint();
   })();
 

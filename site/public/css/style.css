@@ -1311,7 +1311,15 @@ html[data-theme="night"] .shot__cap-title { color: var(--sun); }
 .shot__cap-body { display: block; font-size: 20px; color: var(--ink-soft); line-height: 1.35; }
 
 .shots-bar { display: flex; align-items: center; gap: 14px; }
-.shots__count { font-family: "Press Start 2P", monospace; font-size: 9px; letter-spacing: .1em; color: var(--ink-dim); }
+.shots__nav { min-width: 92px; }
+.shots__count { font-family: "Press Start 2P", monospace; font-size: 9px; letter-spacing: .1em; color: var(--ink-dim); min-width: 54px; text-align: center; }
+/* a horizontal flick should move the stack, not start a text selection */
+.shots { touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.shot__cap-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .74em; background: var(--panel-2); padding: 1px 5px;
+  box-shadow: 0 0 0 2px var(--panel-edge);
+}
 
 .build-notes { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
 .build-notes li {
