@@ -6,19 +6,20 @@
 //! native menu bar; this module is the single main-thread reducer for their
 //! results.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use crate::actions;
 use crate::config::{self, Action, AppConfig, Profile, SLOT_COUNT};
-use crate::config::LedPattern;
 use crate::device::{DeviceCmd, DeviceMsg, PadEvent, UpdateMsg};
 use crate::events::AppEvent;
 use crate::intercept::Intercept;
 use crate::menubar::{Menubar, MenubarMsg};
 use crate::release::{DownloadKind, ReleaseCatalog, ReleaseMsg};
+use crate::status::ActivityStatus;
+use crate::status_ipc::ActivityEvent;
 
 #[cfg(not(test))]
 use crate::{device, intercept, release};
@@ -33,6 +34,14 @@ pub const CELL_TOUCH: usize = 15;
 pub const MOMENTARY_RELEASE_DELAY: Duration = Duration::from_millis(250);
 
 const LOG_LIMIT: usize = 8;
+const TERMINAL_LED_TTL: Duration = Duration::from_secs(4);
+
+#[derive(Clone, Debug)]
+struct SessionActivity {
+    status: ActivityStatus,
+    turn_id: Option<String>,
+    epoch: u64,
+}
 
 /// Side effects which must be performed by the owning UI/event loop.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,6 +56,12 @@ pub enum HostEffect {
         cell: usize,
         delay: Duration,
     },
+    /// Clear a terminal activity colour after its short completion window.
+    RestoreActivityAfter {
+        session_id: String,
+        epoch: u64,
+        delay: Duration,
+    },
 }
 
 /// Application model and ownership boundary for all host-side services.
@@ -59,6 +74,11 @@ pub struct HostState {
     /// Last connected `(firmware version, serial)` pair.
     pub last_conn: Option<(String, String)>,
     pub pressed_cells: [bool; CELL_COUNT],
+
+    /// Runtime activity reported by local integrations such as Codex Hooks.
+    /// It is deliberately separate from the persisted LED configuration.
+    activities: HashMap<String, SessionActivity>,
+    activity_epoch: u64,
 
     pub intercept: Option<Intercept>,
     pub menubar: Option<Menubar>,
@@ -103,6 +123,8 @@ impl HostState {
             let mut state = Self::detached(config::load());
             state.persist_to_disk = true;
 
+            crate::status_ipc::spawn_listener();
+
             let mut interception = Intercept::new();
             interception.apply(state.active_profile());
             state.intercept = Some(interception);
@@ -136,6 +158,8 @@ impl HostState {
             connected: false,
             last_conn: None,
             pressed_cells: [false; CELL_COUNT],
+            activities: HashMap::new(),
+            activity_epoch: 0,
             intercept: None,
             menubar: None,
             release: None,
@@ -209,6 +233,7 @@ impl HostState {
             led_ambient_pattern: self.config.led_ambient_pattern,
         })
         .is_ok()
+            && self.refresh_activity_led()
     }
 
     pub fn select_slot(&mut self, slot: usize) -> bool {
@@ -283,6 +308,7 @@ impl HostState {
             AppEvent::Hotkey(message) => self.handle_hotkey(message.hotkey_id, &mut effects),
             AppEvent::Menubar(message) => self.handle_menubar(message, &mut effects),
             AppEvent::OpenSettings => push_open_settings(&mut effects),
+            AppEvent::Activity(message) => self.handle_activity(message, &mut effects),
         }
         effects
     }
@@ -324,6 +350,7 @@ impl HostState {
                 self.last_conn = Some((version, serial));
                 self.firmware_banner_dismissed = false;
                 self.refresh_menubar();
+                self.refresh_activity_led();
             }
             DeviceMsg::Disconnected => {
                 self.connected = false;
@@ -363,6 +390,7 @@ impl HostState {
                     self.push_log("pad keymap differs from the active profile — syncing");
                     self.sync_device();
                 }
+                self.refresh_activity_led();
             }
             DeviceMsg::SyncDone { ok, detail } => {
                 if ok {
@@ -372,6 +400,96 @@ impl HostState {
                 }
             }
         }
+    }
+
+    fn handle_activity(&mut self, event: ActivityEvent, effects: &mut Vec<HostEffect>) {
+        let session_id = if event.session_id.trim().is_empty() {
+            "default".to_string()
+        } else {
+            event.session_id
+        };
+
+        // A late status hook from an earlier turn must not replace the state
+        // of a newer turn in the same Codex session. UserPromptSubmit is the
+        // one event allowed to establish a different turn; hooks that omit
+        // turn_id remain compatible and are accepted.
+        if !event.begins_turn
+            && event.turn_id.is_some()
+            && self
+                .activities
+                .get(&session_id)
+                .and_then(|activity| activity.turn_id.as_ref())
+                .is_some_and(|current| Some(current) != event.turn_id.as_ref())
+        {
+            return;
+        }
+
+        self.activity_epoch = self.activity_epoch.wrapping_add(1);
+        let epoch = self.activity_epoch;
+        match event.status {
+            ActivityStatus::Idle => {
+                self.activities.remove(&session_id);
+            }
+            status => {
+                self.activities.insert(
+                    session_id.clone(),
+                    SessionActivity {
+                        status,
+                        turn_id: event.turn_id,
+                        epoch,
+                    },
+                );
+                if matches!(status, ActivityStatus::Success | ActivityStatus::Error) {
+                    effects.push(HostEffect::RestoreActivityAfter {
+                        session_id,
+                        epoch,
+                        delay: TERMINAL_LED_TTL,
+                    });
+                }
+            }
+        }
+        self.refresh_activity_led();
+    }
+
+    /// Remove a terminal activity state if no newer event superseded it.
+    /// Returns whether an LED refresh was needed.
+    pub fn restore_activity(&mut self, session_id: &str, epoch: u64) -> bool {
+        let should_remove = self.activities.get(session_id).is_some_and(|activity| {
+            activity.epoch == epoch
+                && matches!(activity.status, ActivityStatus::Success | ActivityStatus::Error)
+        });
+        if should_remove {
+            self.activities.remove(session_id);
+            self.refresh_activity_led();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn activity_status(&self) -> ActivityStatus {
+        self.activities
+            .values()
+            .max_by_key(|activity| activity.status.priority())
+            .map(|activity| activity.status)
+            .unwrap_or(ActivityStatus::Idle)
+    }
+
+    /// Re-apply the current transient status after a status-colour setting
+    /// changes. When idle this simply restores the configured idle patterns.
+    pub fn refresh_activity_led(&self) -> bool {
+        let Some(tx) = &self.device_tx else {
+            return false;
+        };
+        let status = self.activity_status();
+        let (key_pattern, ambient_pattern) = status
+            .patterns_with(&self.config.codex_status_colors)
+            .unwrap_or((self.config.led_key_pattern, self.config.led_ambient_pattern));
+        tx.send(DeviceCmd::SetTransientLedPattern {
+            key_pattern,
+            ambient_pattern,
+        })
+        .is_ok()
     }
 
     fn handle_update(&mut self, message: UpdateMsg) {
@@ -615,7 +733,7 @@ mod tests {
     use std::sync::mpsc;
 
     use super::*;
-    use crate::config::{Slot, SlotKind};
+    use crate::config::{LedPattern, Slot, SlotKind};
     use crate::release::{AppRelease, FirmwareRelease, MacOsRelease, ReleaseAsset, ReleaseCatalog};
 
     fn state() -> HostState {
@@ -721,7 +839,10 @@ mod tests {
             led_key_pattern: host.config.led_key_pattern,
             led_ambient_pattern: host.config.led_ambient_pattern,
         }));
-        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(DeviceCmd::SetTransientLedPattern { .. })
+        ));
 
         let mut changed = profile.slots();
         changed[0] = Slot {
@@ -744,6 +865,119 @@ mod tests {
             _ => panic!("unexpected device command"),
         }
         assert!(host.logs.back().unwrap().contains("differs"));
+    }
+
+    #[test]
+    fn activity_events_override_leds_and_ignore_stale_terminal_hooks() {
+        let mut host = state();
+        let (tx, rx) = mpsc::channel();
+        host.device_tx = Some(tx);
+
+        assert!(host
+            .handle_event(AppEvent::Activity(ActivityEvent {
+                session_id: "session".into(),
+                turn_id: Some("turn-2".into()),
+                status: ActivityStatus::Working,
+                begins_turn: true,
+            }))
+            .is_empty());
+        assert_eq!(host.activity_status(), ActivityStatus::Working);
+        match rx.try_recv().expect("working LED override") {
+            DeviceCmd::SetTransientLedPattern { key_pattern, .. } => assert_eq!(
+                key_pattern,
+                LedPattern::Solid {
+                    r: 0,
+                    g: 96,
+                    b: 255,
+                }
+            ),
+            _ => panic!("unexpected device command"),
+        }
+
+        // A delayed Stop for turn-1 must not terminate the newer turn-2.
+        assert!(host
+            .handle_event(AppEvent::Activity(ActivityEvent {
+                session_id: "session".into(),
+                turn_id: Some("turn-1".into()),
+                status: ActivityStatus::Success,
+                begins_turn: false,
+            }))
+            .is_empty());
+        assert_eq!(host.activity_status(), ActivityStatus::Working);
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+
+        // The same stale-turn guard applies to a delayed approval request.
+        assert!(host
+            .handle_event(AppEvent::Activity(ActivityEvent {
+                session_id: "session".into(),
+                turn_id: Some("turn-1".into()),
+                status: ActivityStatus::Attention,
+                begins_turn: false,
+            }))
+            .is_empty());
+        assert_eq!(host.activity_status(), ActivityStatus::Working);
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+
+        // A PostToolUse from an older turn also reports Working, but it must
+        // not masquerade as a new UserPromptSubmit event.
+        assert!(host
+            .handle_event(AppEvent::Activity(ActivityEvent {
+                session_id: "session".into(),
+                turn_id: Some("turn-1".into()),
+                status: ActivityStatus::Working,
+                begins_turn: false,
+            }))
+            .is_empty());
+        assert_eq!(host.activity_status(), ActivityStatus::Working);
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+
+        let effects = host.handle_event(AppEvent::Activity(ActivityEvent {
+            session_id: "session".into(),
+            turn_id: Some("turn-2".into()),
+            status: ActivityStatus::Success,
+            begins_turn: false,
+        }));
+        let (session_id, epoch) = match effects.as_slice() {
+            [HostEffect::RestoreActivityAfter {
+                session_id,
+                epoch,
+                ..
+            }] => (session_id.clone(), *epoch),
+            other => panic!("unexpected effects: {other:?}"),
+        };
+        assert_eq!(host.activity_status(), ActivityStatus::Success);
+        let _ = rx.try_recv().expect("success LED override");
+
+        assert!(host.restore_activity(&session_id, epoch));
+        assert_eq!(host.activity_status(), ActivityStatus::Idle);
+        match rx.try_recv().expect("idle pattern restore") {
+            DeviceCmd::SetTransientLedPattern {
+                key_pattern,
+                ambient_pattern,
+            } => {
+                assert_eq!(key_pattern, host.config.led_key_pattern);
+                assert_eq!(ambient_pattern, host.config.led_ambient_pattern);
+            }
+            _ => panic!("unexpected device command"),
+        }
+    }
+
+    #[test]
+    fn attention_has_priority_over_background_work() {
+        let mut host = state();
+        host.handle_event(AppEvent::Activity(ActivityEvent {
+            session_id: "background".into(),
+            turn_id: None,
+            status: ActivityStatus::Working,
+            begins_turn: false,
+        }));
+        host.handle_event(AppEvent::Activity(ActivityEvent {
+            session_id: "foreground".into(),
+            turn_id: None,
+            status: ActivityStatus::Attention,
+            begins_turn: false,
+        }));
+        assert_eq!(host.activity_status(), ActivityStatus::Attention);
     }
 
     #[test]

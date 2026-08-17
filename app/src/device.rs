@@ -149,6 +149,12 @@ pub enum DeviceCmd {
     SetLedBrightness {
         brightness: u8,
     },
+    /// Runtime-only LED override.  This deliberately does not call SAVE, so
+    /// activity feedback never replaces the user's configured idle pattern.
+    SetTransientLedPattern {
+        key_pattern: LedPattern,
+        ambient_pattern: LedPattern,
+    },
     ReadKeymap,
     FactoryReset,
 }
@@ -247,7 +253,9 @@ fn handle_cmd_offline(api: &mut HidApi, cmd: DeviceCmd) {
         }
         // Nothing to read; the next Connected re-posts the keymap anyway.
         // A brightness preview with no pad is simply moot.
-        DeviceCmd::ReadKeymap | DeviceCmd::SetLedBrightness { .. } => {}
+        DeviceCmd::ReadKeymap
+        | DeviceCmd::SetLedBrightness { .. }
+        | DeviceCmd::SetTransientLedPattern { .. } => {}
     }
 }
 
@@ -313,6 +321,32 @@ fn session(api: &mut HidApi, rx: &mpsc::Receiver<DeviceCmd>, dev: &HidDevice) ->
                     // persists and reports.
                     let mut reply = [0u8; 32];
                     let _ = command(dev, &[CMD_SET_LED, brightness], &mut reply, REPLY_TIMEOUT);
+                }
+                Ok(DeviceCmd::SetTransientLedPattern {
+                    key_pattern,
+                    ambient_pattern,
+                }) => {
+                    // This is the same RAM-only pattern command used during
+                    // keymap sync, but intentionally omits CMD_SAVE.
+                    let key = key_pattern.to_wire();
+                    let ambient = ambient_pattern.to_wire();
+                    let mut reply = [0u8; 32];
+                    let _ = command(
+                        dev,
+                        &[
+                            CMD_SET_LEDPATTERN,
+                            key[0],
+                            key[1],
+                            key[2],
+                            key[3],
+                            ambient[0],
+                            ambient[1],
+                            ambient[2],
+                            ambient[3],
+                        ],
+                        &mut reply,
+                        REPLY_TIMEOUT,
+                    );
                 }
                 Ok(DeviceCmd::ReadKeymap) => match read_keymap(dev) {
                     Ok(keymap) => events::post(keymap.into_msg()),

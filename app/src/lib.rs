@@ -16,3 +16,5 @@ pub mod menubar;
 pub mod pixel;
 pub mod release;
 pub mod simple_icons;
+pub mod status;
+pub mod status_ipc;

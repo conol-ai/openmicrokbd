@@ -14,6 +14,7 @@ use crate::device::{DeviceMsg, UpdateMsg};
 use crate::intercept::HotkeyMsg;
 use crate::menubar::MenubarMsg;
 use crate::release::ReleaseMsg;
+use crate::status_ipc::ActivityEvent;
 
 /// Every notification that background or platform services deliver to the UI.
 #[derive(Clone, Debug)]
@@ -24,6 +25,7 @@ pub enum AppEvent {
     Hotkey(HotkeyMsg),
     Menubar(MenubarMsg),
     OpenSettings,
+    Activity(ActivityEvent),
 }
 
 type EventChannel = (Sender<AppEvent>, Receiver<AppEvent>);

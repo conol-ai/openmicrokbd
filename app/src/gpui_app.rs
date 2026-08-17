@@ -36,6 +36,7 @@ use crate::i18n::{self, tr};
 use crate::keycodes;
 use crate::pixel::{self, BadgeTone};
 use crate::release::{self, DownloadKind};
+use crate::status::ActivityStatus;
 
 // Quit is a real GPUI action (not just a tray menu id) so macOS gives it the
 // standard Cmd+Q route: app menu item + global key binding, wired in run().
@@ -963,6 +964,21 @@ impl OpenMicro {
                     })
                     .detach();
                 }
+                HostEffect::RestoreActivityAfter {
+                    session_id,
+                    epoch,
+                    delay,
+                } => {
+                    cx.spawn(async move |weak, cx| {
+                        Timer::after(delay).await;
+                        let _ = weak.update(cx, |this, cx| {
+                            if this.host.restore_activity(&session_id, epoch) {
+                                cx.notify();
+                            }
+                        });
+                    })
+                    .detach();
+                }
             }
         }
     }
@@ -1498,6 +1514,33 @@ impl OpenMicro {
         }
     }
 
+    fn status_color_label(pattern: LedPattern) -> String {
+        match pattern {
+            // Keep the original runtime defaults human-readable even though
+            // their tuned RGB values are a little softer than the idle
+            // palette presets.
+            LedPattern::Solid { r: 0, g: 96, b: 255 } => tr("pat_blue").to_string(),
+            LedPattern::Solid {
+                r: 255,
+                g: 150,
+                b: 0,
+            } => tr("pat_yellow").to_string(),
+            LedPattern::Solid { r: 0, g: 210, b: 90 } => tr("pat_green").to_string(),
+            LedPattern::Solid { r: 255, g: 30, b: 50 } => tr("pat_red").to_string(),
+            other => Self::pattern_label(other),
+        }
+    }
+
+    fn status_color_value(pattern: LedPattern) -> String {
+        match pattern {
+            LedPattern::Solid { r, g, b } => format!(
+                "{}  #{r:02X}{g:02X}{b:02X}",
+                Self::status_color_label(pattern)
+            ),
+            other => Self::status_color_label(other),
+        }
+    }
+
     fn cycle_pattern(&mut self, key_chain: bool, delta: i32, cx: &mut Context<Self>) {
         let n = (PATTERN_PALETTE.len() + 2) as i32;
         let current = if key_chain {
@@ -1529,6 +1572,48 @@ impl OpenMicro {
             self.host.config.led_ambient_pattern = pattern;
         }
         self.commit(true, cx);
+    }
+
+    fn cycle_status_color(
+        &mut self,
+        status: ActivityStatus,
+        delta: isize,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self.host.config.codex_status_colors.get(status);
+        let current_index = PATTERN_PALETTE
+            .iter()
+            .position(|(_, r, g, b)| {
+                matches!(current, LedPattern::Solid { r: cr, g: cg, b: cb } if (cr, cg, cb) == (*r, *g, *b))
+            })
+            .unwrap_or_else(|| {
+                // Tuned defaults (and imported custom colours) start from
+                // the nearest named preset when the user first cycles them.
+                let (cr, cg, cb) = match current {
+                    LedPattern::Solid { r, g, b } => (r as i32, g as i32, b as i32),
+                    LedPattern::White => (255, 255, 255),
+                    LedPattern::Rainbow => (0, 80, 255),
+                };
+                PATTERN_PALETTE
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, (_, r, g, b))| {
+                        let dr = cr - *r as i32;
+                        let dg = cg - *g as i32;
+                        let db = cb - *b as i32;
+                        dr * dr + dg * dg + db * db
+                    })
+                    .map(|(index, _)| index)
+                    .unwrap_or(0)
+            });
+        let next = wrapped_index(current_index, PATTERN_PALETTE.len(), delta);
+        let (_, r, g, b) = PATTERN_PALETTE[next];
+        self.host.config.codex_status_colors.set(
+            status,
+            LedPattern::Solid { r, g, b },
+        );
+        self.host.refresh_activity_led();
+        self.commit(false, cx);
     }
 
     fn open_key_picker(&mut self, target: KeyTarget, cx: &mut Context<Self>) {
@@ -3231,6 +3316,81 @@ impl OpenMicro {
                             ("settings-ambient-pattern", 1usize).into(),
                             cx.listener(|this, _, _, cx| this.cycle_pattern(false, -1, cx)),
                             cx.listener(|this, _, _, cx| this.cycle_pattern(false, 1, cx)),
+                        ),
+                    ))
+                    .child(pixel::divider())
+                    .child(
+                        div()
+                            .font_family("Monaco")
+                            .text_size(px(11.))
+                            .font_semibold()
+                            .text_color(pixel::accent_highlight_color())
+                            .child(tr("codex_status_colors")),
+                    )
+                    .child(inspector_field(
+                        tr("codex_working_color"),
+                        tr("codex_working_color_note"),
+                        controls::cycle_control(
+                            Self::status_color_value(
+                                self.host.config.codex_status_colors.working,
+                            ),
+                            ("settings-codex-working", 0usize).into(),
+                            ("settings-codex-working", 1usize).into(),
+                            cx.listener(|this, _, _, cx| {
+                                this.cycle_status_color(ActivityStatus::Working, -1, cx)
+                            }),
+                            cx.listener(|this, _, _, cx| {
+                                this.cycle_status_color(ActivityStatus::Working, 1, cx)
+                            }),
+                        ),
+                    ))
+                    .child(inspector_field(
+                        tr("codex_attention_color"),
+                        tr("codex_attention_color_note"),
+                        controls::cycle_control(
+                            Self::status_color_value(
+                                self.host.config.codex_status_colors.attention,
+                            ),
+                            ("settings-codex-attention", 0usize).into(),
+                            ("settings-codex-attention", 1usize).into(),
+                            cx.listener(|this, _, _, cx| {
+                                this.cycle_status_color(ActivityStatus::Attention, -1, cx)
+                            }),
+                            cx.listener(|this, _, _, cx| {
+                                this.cycle_status_color(ActivityStatus::Attention, 1, cx)
+                            }),
+                        ),
+                    ))
+                    .child(inspector_field(
+                        tr("codex_success_color"),
+                        tr("codex_success_color_note"),
+                        controls::cycle_control(
+                            Self::status_color_value(
+                                self.host.config.codex_status_colors.success,
+                            ),
+                            ("settings-codex-success", 0usize).into(),
+                            ("settings-codex-success", 1usize).into(),
+                            cx.listener(|this, _, _, cx| {
+                                this.cycle_status_color(ActivityStatus::Success, -1, cx)
+                            }),
+                            cx.listener(|this, _, _, cx| {
+                                this.cycle_status_color(ActivityStatus::Success, 1, cx)
+                            }),
+                        ),
+                    ))
+                    .child(inspector_field(
+                        tr("codex_error_color"),
+                        tr("codex_error_color_note"),
+                        controls::cycle_control(
+                            Self::status_color_value(self.host.config.codex_status_colors.error),
+                            ("settings-codex-error", 0usize).into(),
+                            ("settings-codex-error", 1usize).into(),
+                            cx.listener(|this, _, _, cx| {
+                                this.cycle_status_color(ActivityStatus::Error, -1, cx)
+                            }),
+                            cx.listener(|this, _, _, cx| {
+                                this.cycle_status_color(ActivityStatus::Error, 1, cx)
+                            }),
                         ),
                     ))
                     .child(

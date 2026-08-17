@@ -85,6 +85,37 @@ icons from the full bundled Lucide set). The icon picker also includes the
 bundled Simple Icons catalog for monochrome brand marks. Brand names and logos
 remain trademarks of their respective owners.
 
+## Runtime activity light bridge
+
+The companion app exposes a transient, non-persistent LED status bridge for
+agent clients. Start the app normally, then send a small JSON event to
+`openmicro-app codex-hook` from a Codex command hook. The helper maps
+`UserPromptSubmit` to blue (working), `PermissionRequest` to amber (waiting for
+approval), `PostToolUse` back to working after an approved tool finishes,
+`Stop` to green (completed), and `SessionEnd` back to the configured idle
+pattern. The bridge uses a per-user Unix socket and never calls `SAVE`, so
+status feedback cannot overwrite the profile's LED settings.
+
+To connect an installed macOS app, merge
+[`codex-hooks.example.json`](codex-hooks.example.json) into
+`~/.codex/hooks.json`. The example assumes the standard
+`/Applications/OpenMicro.app` install location; source builds must replace the
+command with their own absolute binary path. Codex requires non-managed command
+hooks to be reviewed and trusted before they run. Open `/hooks` after adding or
+changing the definition; see the official [Codex hooks
+documentation](https://learn.chatgpt.com/codex/hooks).
+
+The same binary accepts `openmicro-app status <idle|working|attention|success|error>`
+for manual smoke tests and other local integrations. `error` is available to
+generic status clients; the current Codex lifecycle adapter does not infer a
+failure state from tool-specific output.
+
+The Settings sheet exposes four Codex status-colour controls (working,
+waiting for approval, completed, and error). Each control cycles through the
+named palette, shows its hex value, persists to the local JSON config, and
+refreshes an active transient status immediately; the idle key and ambient
+patterns remain independent.
+
 ## Firmware updates
 
 The product's field-update path (no buttons, no probe): the sheet checks the
@@ -136,7 +167,9 @@ for packaging, Developer ID signing, notarization, and publishing.
   the keymap flash page once per plug (the profile always wins). The page is
   rated for 10k erase cycles — years of plugging — but worth knowing.
 - Per the PRD's out-of-scope list: no auto per-app switching, no layers, no
-  lighting control, no snippets, no multi-device, no plugins.
+  lighting control, no snippets, no multi-device, no plugins. Runtime
+  activity colours are an app-side status bridge; user-configured idle
+  lighting remains the only persisted lighting setting.
 
 This crate is standalone (like `../fw`), but the tag-triggered release workflow
 builds and publishes it as native Apple Silicon and Intel DMGs.

@@ -669,6 +669,81 @@ impl LedPattern {
             _ => LedPattern::Rainbow,
         }
     }
+
+    /// Derive a lower-intensity ambient-ring colour for a transient status.
+    /// The status colour picker controls the bright per-key colour while the
+    /// ring stays visually subordinate. Non-solid patterns are kept intact so
+    /// imported configurations remain lossless.
+    pub fn dimmed_for_status(self) -> Self {
+        match self {
+            LedPattern::Solid { r, g, b } => LedPattern::Solid {
+                r: ((r as u16 * 28) / 100) as u8,
+                g: ((g as u16 * 28) / 100) as u8,
+                b: ((b as u16 * 28) / 100) as u8,
+            },
+            other => other,
+        }
+    }
+}
+
+/// Colours used by the local Codex activity integration. These are separate
+/// from the persisted idle backlight patterns: a running Codex turn can
+/// temporarily override the LEDs, then the configured idle patterns return.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CodexStatusColors {
+    pub working: LedPattern,
+    pub attention: LedPattern,
+    pub success: LedPattern,
+    pub error: LedPattern,
+}
+
+impl Default for CodexStatusColors {
+    fn default() -> Self {
+        Self {
+            working: LedPattern::Solid {
+                r: 0,
+                g: 96,
+                b: 255,
+            },
+            attention: LedPattern::Solid {
+                r: 255,
+                g: 150,
+                b: 0,
+            },
+            success: LedPattern::Solid {
+                r: 0,
+                g: 210,
+                b: 90,
+            },
+            error: LedPattern::Solid {
+                r: 255,
+                g: 30,
+                b: 50,
+            },
+        }
+    }
+}
+
+impl CodexStatusColors {
+    pub fn get(self, status: crate::status::ActivityStatus) -> LedPattern {
+        match status {
+            crate::status::ActivityStatus::Working => self.working,
+            crate::status::ActivityStatus::Attention => self.attention,
+            crate::status::ActivityStatus::Success => self.success,
+            crate::status::ActivityStatus::Error => self.error,
+            crate::status::ActivityStatus::Idle => LedPattern::Rainbow,
+        }
+    }
+
+    pub fn set(&mut self, status: crate::status::ActivityStatus, pattern: LedPattern) {
+        match status {
+            crate::status::ActivityStatus::Working => self.working = pattern,
+            crate::status::ActivityStatus::Attention => self.attention = pattern,
+            crate::status::ActivityStatus::Success => self.success = pattern,
+            crate::status::ActivityStatus::Error => self.error = pattern,
+            crate::status::ActivityStatus::Idle => {}
+        }
+    }
 }
 
 /// UI language: follow the OS or pin one of the supported languages.
@@ -714,6 +789,10 @@ pub struct AppConfig {
     /// Idle pattern of the underglow ring.
     #[serde(default)]
     pub led_ambient_pattern: LedPattern,
+    /// Per-status colours for the local Codex activity indicator. Missing in
+    /// older config files, so serde fills the original defaults.
+    #[serde(default)]
+    pub codex_status_colors: CodexStatusColors,
 }
 
 impl Default for AppConfig {
@@ -728,6 +807,7 @@ impl Default for AppConfig {
             theme: ThemeSetting::System,
             led_key_pattern: LedPattern::Rainbow,
             led_ambient_pattern: LedPattern::Rainbow,
+            codex_status_colors: CodexStatusColors::default(),
         }
     }
 }
@@ -993,6 +1073,7 @@ fn migrate_legacy(legacy: LegacyConfig) -> AppConfig {
         theme: ThemeSetting::System,
         led_key_pattern: LedPattern::Rainbow,
         led_ambient_pattern: LedPattern::Rainbow,
+        codex_status_colors: CodexStatusColors::default(),
     }
 }
 
@@ -1609,6 +1690,7 @@ mod tests {
             theme: ThemeSetting::System,
             led_key_pattern: LedPattern::Rainbow,
             led_ambient_pattern: LedPattern::Rainbow,
+            codex_status_colors: CodexStatusColors::default(),
         };
         sanitize(&mut cfg);
         assert_eq!(cfg.active_profile, 0);
@@ -1698,6 +1780,7 @@ mod tests {
         let back = parse_any(&text).expect("new schema roundtrips");
         assert_eq!(back.profiles, cfg.profiles);
         assert_eq!(back.theme, cfg.theme);
+        assert_eq!(back.codex_status_colors, cfg.codex_status_colors);
 
         let mut into = AppConfig::default();
         let name = unique_name(&into.profiles, "Codex");
@@ -1707,6 +1790,16 @@ mod tests {
             ..default_codex_profile()
         });
         assert_eq!(unique_name(&into.profiles, "Codex"), "Codex (imported 2)");
+    }
+
+    #[test]
+    fn current_json_without_status_colours_uses_runtime_defaults() {
+        let mut json = serde_json::to_value(AppConfig::default()).expect("serialize");
+        json.as_object_mut()
+            .expect("config object")
+            .remove("codex_status_colors");
+        let parsed: AppConfig = serde_json::from_value(json).expect("old current schema");
+        assert_eq!(parsed.codex_status_colors, CodexStatusColors::default());
     }
 
     #[test]

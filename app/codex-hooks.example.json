@@ -1,0 +1,64 @@
+{
+  "description": "OpenMicro transient activity lights for Codex",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro codex-hook",
+            "timeout": 2,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro codex-hook",
+            "timeout": 2,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro codex-hook",
+            "timeout": 2,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro codex-hook",
+            "timeout": 2,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro codex-hook",
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}
