@@ -367,6 +367,7 @@ pub fn status_rail(
         .child(
             div()
                 .flex_1()
+                .min_w(px(0.))
                 .flex()
                 .items_center()
                 .gap(px(8.))
@@ -381,6 +382,8 @@ pub fn status_rail(
                 )
                 .child(
                     div()
+                        .flex_1()
+                        .min_w(px(0.))
                         .text_size(px(12.))
                         .text_color(muted_text_color())
                         .child(detail.into()),

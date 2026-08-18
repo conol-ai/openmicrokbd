@@ -1,3 +1,4 @@
+// Managed by OpenMicro Settings. Remove this line before editing; marked files may be replaced on update.
 import type { Plugin } from "@opencode-ai/plugin"
 
 const OPENMICRO = "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro"

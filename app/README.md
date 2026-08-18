@@ -100,19 +100,52 @@ seconds, abandoned working/attention states have a 30-minute failsafe, and then
 the configured idle key and ambient patterns return. The activity bridge is
 currently available on macOS and Linux; Windows transport is not implemented.
 
-| Client | Install | Main event mapping |
+The easiest setup is in **Settings → Agent integrations**. Each **Install**
+button adds the integration to that client's user-level configuration using the
+exact OpenMicro executable that is currently running. **Configured** means the
+files already match this app; **Reinstall** updates a recognized older
+OpenMicro integration, which is useful after moving the app or upgrading its
+hook format.
+
+| Client | User-level target | Main event mapping |
 | --- | --- | --- |
-| Codex | Merge [`codex-hooks.example.json`](codex-hooks.example.json) into `~/.codex/hooks.json`, then review it with `/hooks` | prompt → working, approval → attention, stop → success, session end → idle |
-| Claude Code | Merge [`claude-code-hooks.example.json`](claude-code-hooks.example.json) into `~/.claude/settings.json` | prompt/tool → working, permission/question/elicitation → attention, stop → success, API failure → error |
-| OpenCode | Copy [`opencode-openmicro.example.ts`](opencode-openmicro.example.ts) to `~/.config/opencode/plugins/openmicro.ts` or `.opencode/plugins/openmicro.ts` | busy/retry → working, permission/question → attention, idle → success, session error → error |
-| Deep Code | Copy [`deep-code-notify.example.sh`](deep-code-notify.example.sh) to `~/.deepcode/openmicro-notify.sh`, run `chmod +x` on it, and set `notify` to that absolute path in `~/.deepcode/settings.json` | completed turn → success, failed turn → error |
+| Codex | `$CODEX_HOME/hooks.json`, or `~/.codex/hooks.json` | prompt → working, approval → attention, stop → success, session end → idle |
+| Claude Code | `$CLAUDE_CONFIG_DIR/settings.json`, or `~/.claude/settings.json` | prompt/tool → working, permission/question/elicitation → attention, stop → success, API failure → error |
+| OpenCode | `$XDG_CONFIG_HOME/opencode/plugins/openmicro.ts`, or `~/.config/opencode/plugins/openmicro.ts` | busy/retry → working, permission/question → attention, idle → success, session error → error |
+| Deep Code | `~/.deepcode/settings.json` plus `~/.deepcode/openmicro-notify.sh` | completed turn → success, failed turn → error |
+
+The installer parses Codex, Claude Code, and Deep Code JSON structurally. It
+keeps unrelated settings and third-party hooks, removes only recognized
+OpenMicro entries, and creates a uniquely named private backup beside a file
+before changing it. OpenCode and Deep Code helper scripts carry an OpenMicro
+managed marker; remove that marker before customizing a script, because marked
+files may be replaced on update after backup. A malformed JSON file, an
+unrelated file at the OpenCode plugin path, or a different Deep Code notifier
+is reported as a conflict and is left untouched for manual review. The
+installer also refuses to write if a file changes while installation is being
+prepared.
+
+Hook execution remains under each client's security controls. After installing
+the Codex integration, use `/hooks` in Codex to inspect and trust the new
+commands; OpenMicro does not bypass that review. Existing agent processes may
+have cached their configuration, so start a new session or restart the client
+if the lights do not appear. The OpenMicro companion app must also be running
+when a hook fires. On macOS, move OpenMicro out of a downloaded/translocated
+location (normally into `/Applications`) and reopen it before installing.
+
+The buttons install only user-level integrations on macOS and Linux. For a
+project-local setup or a manual review before installation, the equivalent
+templates remain available as [`codex-hooks.example.json`](codex-hooks.example.json),
+[`claude-code-hooks.example.json`](claude-code-hooks.example.json),
+[`opencode-openmicro.example.ts`](opencode-openmicro.example.ts), and
+[`deep-code-notify.example.sh`](deep-code-notify.example.sh).
 
 The examples assume the installed macOS binary at
 `/Applications/OpenMicro.app/Contents/MacOS/OpenMicro`; source builds must use
 their own absolute binary path. Hook commands are deliberately synchronous and
 short-lived in the Codex and Claude Code examples; the OpenCode plugin queues
 its fire-and-forget callbacks so a late helper cannot replace a newer state.
-See the official [Codex hooks](https://learn.chatgpt.com/codex/hooks), [Claude
+See the official [Codex hooks](https://learn.chatgpt.com/docs/hooks), [Claude
 Code hooks](https://code.claude.com/docs/en/hooks), [OpenCode plugin
 documentation](https://opencode.ai/docs/plugins/), and [Deep Code notify
 documentation](https://github.com/lessweb/deepcode-cli/blob/main/docs/notify.md)

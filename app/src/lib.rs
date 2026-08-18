@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod agent_integrations;
 pub mod behaviors;
 pub mod config;
 pub mod device;

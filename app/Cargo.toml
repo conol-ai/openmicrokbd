@@ -1,6 +1,6 @@
 [package]
 name = "openmicro-app"
-version = "0.6.2"
+version = "0.7.0"
 edition = "2021"
 license = "MIT"
 description = "OpenMicro companion app: profiles, key actions, firmware updates (GPUI)"
@@ -28,7 +28,7 @@ auto-launch = "0.5"
 
 # config + dialogs
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 dirs = "6"
 
 # release discovery + integrity-checked downloads

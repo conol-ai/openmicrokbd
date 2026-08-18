@@ -1,5 +1,6 @@
 #!/bin/sh
 
+# Managed by OpenMicro Settings. Remove this line before editing; marked files may be replaced on update.
 # Copy to ~/.deepcode/openmicro-notify.sh, make it executable, and set the
 # `notify` key in ~/.deepcode/settings.json to that absolute path.
 OPENMICRO_BIN="/Applications/OpenMicro.app/Contents/MacOS/OpenMicro"

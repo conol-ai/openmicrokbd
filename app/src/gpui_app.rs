@@ -21,6 +21,9 @@ use gpui_component::tooltip::Tooltip;
 use gpui_component::{Root, StyledExt, TitleBar};
 
 use crate::actions;
+use crate::agent_integrations::{
+    self, InstallDisposition, InstallState, IntegrationKind, IntegrationReport,
+};
 use crate::behaviors::{self, InstalledApp};
 use crate::config::{LedPattern, self, Action, ControlBehavior, InputConfig, JoystickMode, LanguageSetting, MacroStep,
     MacroStepEntry, MediaOp, RotatorPressPreset, RotatorRotationPreset, SlotKind, ThemeSetting,
@@ -718,6 +721,8 @@ pub struct OpenMicro {
     macro_draft: Vec<MacroStepEntry>,
     macro_edit_index: Option<usize>,
     installed_apps: Vec<InstalledApp>,
+    agent_integrations: Vec<IntegrationReport>,
+    agent_integration_feedback: Option<(String, BadgeTone)>,
     icon_library: IconLibrary,
     icon_query: String,
     icon_page: usize,
@@ -770,6 +775,8 @@ impl OpenMicro {
             macro_draft: Vec::new(),
             macro_edit_index: None,
             installed_apps: behaviors::installed_apps(),
+            agent_integrations: Vec::new(),
+            agent_integration_feedback: None,
             icon_library: IconLibrary::Lucide,
             icon_query: String::new(),
             icon_page: 0,
@@ -939,11 +946,12 @@ impl OpenMicro {
         for effect in effects {
             match effect {
                 HostEffect::ShowWindow => show_main_window(cx),
-                HostEffect::OpenSettings if self.sheet == Sheet::None => {
+                HostEffect::OpenSettings => {
+                    self.agent_integration_feedback = None;
+                    self.refresh_agent_integrations();
                     self.sheet = Sheet::Settings;
                     show_main_window(cx);
                 }
-                HostEffect::OpenSettings => show_main_window(cx),
                 HostEffect::Quit => {
                     let _ = config::save(&self.host.config);
                     cx.quit();
@@ -1444,6 +1452,7 @@ impl OpenMicro {
             .unwrap_or(0);
         self.host.config.language = LANGUAGES[wrapped_index(current, LANGUAGES.len(), delta)];
         i18n::set_lang(resolve_language(self.host.config.language));
+        self.agent_integration_feedback = None;
         self.commit(false, cx);
         self.label_input.update(cx, |input, cx| {
             input.set_placeholder(tr("keycap_label_placeholder"), window, cx)
@@ -1614,6 +1623,201 @@ impl OpenMicro {
         );
         self.host.refresh_activity_led();
         self.commit(false, cx);
+    }
+
+    fn refresh_agent_integrations(&mut self) {
+        self.agent_integrations = agent_integrations::scan_system_all();
+    }
+
+    fn integration_note(kind: IntegrationKind) -> &'static str {
+        match kind {
+            IntegrationKind::Codex => tr("agent_codex_integration_note"),
+            IntegrationKind::ClaudeCode => tr("agent_claude_code_integration_note"),
+            IntegrationKind::OpenCode => tr("agent_opencode_integration_note"),
+            IntegrationKind::DeepCode => tr("agent_deep_code_integration_note"),
+        }
+    }
+
+    fn integration_state_label(state: InstallState) -> (&'static str, BadgeTone) {
+        match state {
+            InstallState::NotInstalled => (tr("integration_not_installed"), BadgeTone::Neutral),
+            InstallState::Installed => (tr("integration_installed"), BadgeTone::Success),
+            InstallState::NeedsUpdate => (tr("integration_needs_update"), BadgeTone::Warning),
+            InstallState::Conflict => (tr("integration_conflict"), BadgeTone::Danger),
+            InstallState::Unavailable => (tr("integration_unavailable"), BadgeTone::Neutral),
+        }
+    }
+
+    fn install_agent_integration(
+        &mut self,
+        kind: IntegrationKind,
+        cx: &mut Context<Self>,
+    ) {
+        let name = kind.display_name();
+        match agent_integrations::install_system(kind) {
+            Ok(receipt) => {
+                let outcome = match receipt.disposition {
+                    InstallDisposition::AlreadyInstalled => tr("integration_already_installed"),
+                    InstallDisposition::Installed => tr("integration_install_success"),
+                    InstallDisposition::Updated => tr("integration_update_success"),
+                };
+                let backup_detail = if receipt.backups.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " · {}: {}",
+                        tr("integration_backups"),
+                        receipt
+                            .backups
+                            .iter()
+                            .map(|path| path.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                self.agent_integration_feedback = Some((
+                    format!(
+                        "{outcome}: {name} · {} · {}{backup_detail}",
+                        Self::integration_note(kind),
+                        tr("integration_restart_agent")
+                    ),
+                    BadgeTone::Success,
+                ));
+            }
+            Err(error) => {
+                self.agent_integration_feedback = Some((
+                    format!("{}: {name} — {error}", tr("integration_install_failed")),
+                    BadgeTone::Danger,
+                ));
+            }
+        }
+        self.refresh_agent_integrations();
+        cx.notify();
+    }
+
+    fn render_agent_integrations(&self, cx: &mut Context<Self>) -> Div {
+        let mut integrations = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(
+                div()
+                    .font_family("Monaco")
+                    .text_size(px(11.))
+                    .font_semibold()
+                    .text_color(pixel::accent_highlight_color())
+                    .child(tr("agent_integrations")),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(pixel::muted_text_color())
+                    .child(tr("agent_integrations_note")),
+            );
+
+        if self.agent_integrations.iter().all(|report| {
+            report.state == InstallState::Unavailable
+        }) {
+            if let Some(detail) = self
+                .agent_integrations
+                .first()
+                .and_then(|report| report.detail.clone())
+            {
+                return integrations.child(controls::status_rail(
+                    tr("integration_unavailable"),
+                    detail,
+                    BadgeTone::Warning,
+                ));
+            }
+        }
+
+        for (index, report) in self.agent_integrations.iter().enumerate() {
+            let kind = report.kind;
+            let (state_label, state_tone) = Self::integration_state_label(report.state);
+            let target = if report.target.as_os_str().is_empty() {
+                "—".to_string()
+            } else {
+                report.target.display().to_string()
+            };
+            let target_tooltip = SharedString::from(target.clone());
+            let mut actions = div()
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(pixel::badge(state_label, state_tone));
+            match report.state {
+                InstallState::NotInstalled => {
+                    actions = actions.child(
+                        tiny_button(tr("integration_install"))
+                            .id(("install-agent-integration", index))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.install_agent_integration(kind, cx)
+                            })),
+                    );
+                }
+                InstallState::NeedsUpdate => {
+                    actions = actions.child(
+                        tiny_button(tr("integration_reinstall"))
+                            .id(("update-agent-integration", index))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.install_agent_integration(kind, cx)
+                            })),
+                    );
+                }
+                InstallState::Installed
+                | InstallState::Conflict
+                | InstallState::Unavailable => {}
+            }
+
+            let row = div()
+                .w_full()
+                .min_h(px(40.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .bg(pixel::canvas_color())
+                .rounded(px(2.))
+                .child(
+                    div()
+                        .id(("agent-integration-target", index))
+                        .flex_1()
+                        .min_w(px(0.))
+                        .truncate()
+                        .font_family("Monaco")
+                        .text_size(px(10.))
+                        .text_color(pixel::dim_text_color())
+                        .child(target)
+                        .tooltip(move |_, cx| {
+                            cx.new(|_| Tooltip::new(target_tooltip.clone())).into()
+                        }),
+                )
+                .child(actions);
+            let mut control = div().w_full().flex().flex_col().gap(px(4.)).child(row);
+            if let Some(detail) = report.detail.clone() {
+                control = control.child(controls::status_rail(
+                    state_label,
+                    detail,
+                    state_tone,
+                ));
+            }
+            integrations = integrations.child(inspector_field(
+                kind.display_name(),
+                Self::integration_note(kind),
+                control,
+            ));
+        }
+
+        if let Some((message, tone)) = self.agent_integration_feedback.clone() {
+            integrations = integrations.child(controls::status_rail(
+                tr("agent_integrations"),
+                message,
+                tone,
+            ));
+        }
+        integrations
     }
 
     fn open_key_picker(&mut self, target: KeyTarget, cx: &mut Context<Self>) {
@@ -2112,6 +2316,8 @@ impl OpenMicro {
                     )
                     .child(chrome_icon_button("settings").id("open-settings").on_click(
                         cx.listener(|this, _, _, cx| {
+                            this.agent_integration_feedback = None;
+                            this.refresh_agent_integrations();
                             this.sheet = Sheet::Settings;
                             cx.notify();
                         }),
@@ -2122,8 +2328,8 @@ impl OpenMicro {
     fn render_banners(&self, cx: &mut Context<Self>) -> Div {
         let mut banners = div().w_full().flex().flex_col();
         if let Some(catalog) = &self.host.release {
-            let app_available =
-                catalog.app.version != release::APP_VERSION && !self.host.app_banner_dismissed;
+            let app_available = release::is_newer(&catalog.app.version, release::APP_VERSION)
+                && !self.host.app_banner_dismissed;
             if app_available {
                 let detail = if self.host.app_downloading {
                     format!(
@@ -2181,8 +2387,8 @@ impl OpenMicro {
                         )),
                 );
             } else if let Some((installed, _)) = self.host.last_conn.as_ref() {
-                let firmware_available =
-                    installed != &catalog.firmware.version && !self.host.firmware_banner_dismissed;
+                let firmware_available = release::is_newer(&catalog.firmware.version, installed)
+                    && !self.host.firmware_banner_dismissed;
                 if firmware_available {
                     let detail = format!(
                         "Firmware {} available // installed {}",
@@ -3393,6 +3599,9 @@ impl OpenMicro {
                             }),
                         ),
                     ))
+                    .child(pixel::divider())
+                    .child(self.render_agent_integrations(cx))
+                    .child(pixel::divider())
                     .child(
                         tiny_button(tr("firmware"))
                             .id("settings-firmware")
