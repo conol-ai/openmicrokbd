@@ -50,16 +50,34 @@ STAGE="$OUTPUT_DIR/macos-$ARCH"
 APP_BUNDLE="$STAGE/OpenMicro.app"
 CONTENTS="$APP_BUNDLE/Contents"
 RESOURCES="$CONTENTS/Resources"
+FRAMEWORKS="$CONTENTS/Frameworks"
 DMG_ROOT="$STAGE/dmg-root"
 DMG="$OUTPUT_DIR/OpenMicro-$APP_VERSION-macos-$ARCH.dmg"
+SPARKLE_ROOT="${OPENMICRO_SPARKLE_ROOT:-$REPO_ROOT/app/target/sparkle/2.9.6}"
+SPARKLE_PUBLIC_KEY_FILE="$REPO_ROOT/app/macos/sparkle-public-key.txt"
+SPARKLE_REPOSITORY="${GITHUB_REPOSITORY:-conol-ai/openmicrokbd}"
+SPARKLE_FEED_URL="https://github.com/$SPARKLE_REPOSITORY/releases/latest/download/appcast-$ARCH.xml"
 
 rm -rf "$STAGE"
-mkdir -p "$CONTENTS/MacOS" "$RESOURCES" "$DMG_ROOT"
+mkdir -p "$CONTENTS/MacOS" "$RESOURCES" "$FRAMEWORKS" "$DMG_ROOT"
+
+"$SCRIPT_DIR/fetch-sparkle.sh" "$SPARKLE_ROOT" >/dev/null
+SPARKLE_PUBLIC_ED_KEY="$(tr -d '\r\n' < "$SPARKLE_PUBLIC_KEY_FILE")"
+if [[ ! "$SPARKLE_PUBLIC_ED_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
+    echo "invalid Sparkle Ed25519 public key: $SPARKLE_PUBLIC_KEY_FILE" >&2
+    exit 1
+fi
+if [[ "${REQUIRE_SIGNING:-0}" == "1" ]]; then
+    AUTOMATIC_UPDATES="<true/>"
+else
+    AUTOMATIC_UPDATES="<false/>"
+fi
 
 (
     cd "$REPO_ROOT/app"
     MACOSX_DEPLOYMENT_TARGET=11.0 \
     OPENMICRO_FIRMWARE_VERSION="$FW_VERSION" \
+    OPENMICRO_SPARKLE_FRAMEWORK_DIR="$SPARKLE_ROOT" \
         cargo build \
             --release \
             --locked \
@@ -69,11 +87,17 @@ mkdir -p "$CONTENTS/MacOS" "$RESOURCES" "$DMG_ROOT"
 
 cp "$REPO_ROOT/app/target/$RUST_TARGET/release/openmicro-app" "$CONTENTS/MacOS/OpenMicro"
 chmod 755 "$CONTENTS/MacOS/OpenMicro"
+ditto "$SPARKLE_ROOT/Sparkle.framework" "$FRAMEWORKS/Sparkle.framework"
 mkdir -p "$RESOURCES/licenses"
 cp \
     "$REPO_ROOT/app/resources/simple-icons.LICENSE.md" \
     "$RESOURCES/licenses/SimpleIcons-LICENSE.md"
-sed "s/@APP_VERSION@/$APP_VERSION/g" \
+cp "$SPARKLE_ROOT/LICENSE" "$RESOURCES/licenses/Sparkle-LICENSE.txt"
+sed \
+    -e "s|@APP_VERSION@|$APP_VERSION|g" \
+    -e "s|@OPENMICRO_AUTOMATIC_UPDATES@|$AUTOMATIC_UPDATES|g" \
+    -e "s|@SPARKLE_FEED_URL@|$SPARKLE_FEED_URL|g" \
+    -e "s|@SPARKLE_PUBLIC_ED_KEY@|$SPARKLE_PUBLIC_ED_KEY|g" \
     "$REPO_ROOT/app/macos/Info.plist.in" > "$CONTENTS/Info.plist"
 printf 'APPL????' > "$CONTENTS/PkgInfo"
 
@@ -95,6 +119,11 @@ fi
 plutil -lint "$CONTENTS/Info.plist"
 file "$CONTENTS/MacOS/OpenMicro"
 test -f "$RESOURCES/licenses/SimpleIcons-LICENSE.md"
+test -f "$RESOURCES/licenses/Sparkle-LICENSE.txt"
+test -f "$FRAMEWORKS/Sparkle.framework/Versions/B/Sparkle"
+test -L "$FRAMEWORKS/Sparkle.framework/Versions/Current"
+otool -L "$CONTENTS/MacOS/OpenMicro" | grep -F \
+    "@rpath/Sparkle.framework/Versions/B/Sparkle"
 case "$ARCH" in
     aarch64) LIPO_ARCH="arm64" ;;
     x86_64) LIPO_ARCH="x86_64" ;;
@@ -102,6 +131,38 @@ esac
 lipo "$CONTENTS/MacOS/OpenMicro" -verify_arch "$LIPO_ARCH"
 
 if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
+    SPARKLE_FRAMEWORK="$FRAMEWORKS/Sparkle.framework"
+    codesign \
+        --force \
+        --options runtime \
+        --timestamp \
+        --sign "$MACOS_SIGN_IDENTITY" \
+        "$SPARKLE_FRAMEWORK/Versions/B/XPCServices/Installer.xpc"
+    codesign \
+        --force \
+        --options runtime \
+        --timestamp \
+        --preserve-metadata=entitlements \
+        --sign "$MACOS_SIGN_IDENTITY" \
+        "$SPARKLE_FRAMEWORK/Versions/B/XPCServices/Downloader.xpc"
+    codesign \
+        --force \
+        --options runtime \
+        --timestamp \
+        --sign "$MACOS_SIGN_IDENTITY" \
+        "$SPARKLE_FRAMEWORK/Versions/B/Autoupdate"
+    codesign \
+        --force \
+        --options runtime \
+        --timestamp \
+        --sign "$MACOS_SIGN_IDENTITY" \
+        "$SPARKLE_FRAMEWORK/Versions/B/Updater.app"
+    codesign \
+        --force \
+        --options runtime \
+        --timestamp \
+        --sign "$MACOS_SIGN_IDENTITY" \
+        "$SPARKLE_FRAMEWORK"
     codesign \
         --force \
         --options runtime \
@@ -116,6 +177,7 @@ else
     echo "MACOS_SIGN_IDENTITY is unset; packaging a locally ad-hoc-signed app" >&2
     codesign --force --sign - "$APP_BUNDLE"
 fi
+codesign --verify --deep --strict --verbose=2 "$FRAMEWORKS/Sparkle.framework"
 codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 
 ditto "$APP_BUNDLE" "$DMG_ROOT/OpenMicro.app"

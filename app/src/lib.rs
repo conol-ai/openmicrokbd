@@ -13,6 +13,7 @@ pub mod i18n;
 pub mod intercept;
 pub mod keycodes;
 pub mod lucide;
+pub mod macos_updater;
 pub mod menubar;
 pub mod pixel;
 pub mod release;

@@ -343,6 +343,8 @@ jobs:
           test -f "$EMBEDDED_FIRMWARE"
           test -f "$EMBEDDED_MANIFEST"
           test -f "$RESOURCES/licenses/SimpleIcons-LICENSE.md"
+          test -f "$RESOURCES/licenses/Sparkle-LICENSE.txt"
+          test -f "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle"
           plutil -lint "$APP_BUNDLE/Contents/Info.plist"
           if [[ "$(
             plutil -extract CFBundleShortVersionString raw \
@@ -351,6 +353,21 @@ jobs:
             echo "app bundle version does not match the release tag" >&2
             exit 1
           fi
+          EXPECTED_FEED="https://github.com/$GITHUB_REPOSITORY/releases/latest/download/appcast-$ARCH.xml"
+          if [[ "$(plutil -extract SUFeedURL raw "$APP_BUNDLE/Contents/Info.plist")" != "$EXPECTED_FEED" ]]; then
+            echo "app bundle has the wrong Sparkle feed" >&2
+            exit 1
+          fi
+          if [[ "$(plutil -extract SUPublicEDKey raw "$APP_BUNDLE/Contents/Info.plist")" != "$(tr -d '\r\n' < app/macos/sparkle-public-key.txt)" ]]; then
+            echo "app bundle has the wrong Sparkle public key" >&2
+            exit 1
+          fi
+          for key in OpenMicroAutomaticUpdates SURequireSignedFeed SUVerifyUpdateBeforeExtraction; do
+            if [[ "$(plutil -extract "$key" raw "$APP_BUNDLE/Contents/Info.plist")" != "true" ]]; then
+              echo "app bundle must enable $key" >&2
+              exit 1
+            fi
+          done
           jq -e \
             --arg version "$FIRMWARE_VERSION" \
             '.version == $version and
@@ -361,6 +378,8 @@ jobs:
             echo "unexpected Mach-O architectures: $(lipo -archs "$EXECUTABLE")" >&2
             exit 1
           fi
+          otool -L "$EXECUTABLE" | grep -F \
+            "@rpath/Sparkle.framework/Versions/B/Sparkle"
 
           EMBEDDED_SHA="$(shasum -a 256 "$EMBEDDED_FIRMWARE" | awk '{print $1}')"
           MANIFEST_SHA="$(jq -er '.sha256' "$EMBEDDED_MANIFEST")"
@@ -479,8 +498,92 @@ jobs:
           test -f "$MOUNT_POINT/OpenMicro.app/Contents/Resources/firmware/openmicro-fw.bin"
           test -f "$MOUNT_POINT/OpenMicro.app/Contents/Resources/firmware/manifest.json"
           test -f "$MOUNT_POINT/OpenMicro.app/Contents/Resources/licenses/SimpleIcons-LICENSE.md"
+          test -f "$MOUNT_POINT/OpenMicro.app/Contents/Resources/licenses/Sparkle-LICENSE.txt"
           cleanup_mount
           trap - EXIT
+
+      - name: Generate and verify the Sparkle appcast
+        env:
+          ARCH: ${{ matrix.arch }}
+          APP_VERSION: ${{ needs.validate.outputs.app_version }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SPARKLE_ED25519_PRIVATE_KEY" ]]; then
+            echo "required release secret SPARKLE_ED25519_PRIVATE_KEY is not configured" >&2
+            exit 1
+          fi
+
+          SPARKLE_ROOT="$GITHUB_WORKSPACE/app/target/sparkle/2.9.6"
+          PRIVATE_KEY="$RUNNER_TEMP/openmicro-sparkle-ed25519"
+          UPDATES_DIR="$RUNNER_TEMP/openmicro-sparkle-updates-$ARCH"
+          DMG_NAME="OpenMicro-$APP_VERSION-macos-$ARCH.dmg"
+          DMG="$GITHUB_WORKSPACE/dist/macos/$DMG_NAME"
+          APPCAST="$GITHUB_WORKSPACE/dist/macos/appcast-$ARCH.xml"
+          ASSET_BASE="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          RELEASE_URL="https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+
+          test -x "$SPARKLE_ROOT/bin/generate_appcast"
+          test -x "$SPARKLE_ROOT/bin/sign_update"
+          test -f "$DMG"
+          umask 077
+          printf '%s' "$SPARKLE_ED25519_PRIVATE_KEY" > "$PRIVATE_KEY"
+          chmod 600 "$PRIVATE_KEY"
+          {
+            echo "SPARKLE_PRIVATE_KEY_FILE=$PRIVATE_KEY"
+          } >> "$GITHUB_ENV"
+
+          EXPECTED_PUBLIC_KEY="$(tr -d '\r\n' < app/macos/sparkle-public-key.txt)"
+          ACTUAL_PUBLIC_KEY="$(swift scripts/sparkle-public-key.swift "$PRIVATE_KEY")"
+          if [[ "$ACTUAL_PUBLIC_KEY" != "$EXPECTED_PUBLIC_KEY" ]]; then
+            echo "Sparkle private key does not match the public key embedded in OpenMicro" >&2
+            exit 1
+          fi
+
+          mkdir -p "$UPDATES_DIR"
+          cp "$DMG" "$UPDATES_DIR/$DMG_NAME"
+          "$SPARKLE_ROOT/bin/generate_appcast" \
+            --ed-key-file "$PRIVATE_KEY" \
+            --download-url-prefix "$ASSET_BASE/" \
+            --link "$RELEASE_URL" \
+            --maximum-deltas 0 \
+            -o "$APPCAST" \
+            "$UPDATES_DIR"
+
+          xmllint --noout "$APPCAST"
+          grep -F "<sparkle:version>$APP_VERSION</sparkle:version>" "$APPCAST"
+          grep -F "$ASSET_BASE/$DMG_NAME" "$APPCAST"
+          grep -F "<sparkle:minimumSystemVersion>11.0.0</sparkle:minimumSystemVersion>" "$APPCAST"
+          if [[ "$ARCH" == "aarch64" ]]; then
+            grep -F "<sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>" "$APPCAST"
+          elif grep -q "sparkle:hardwareRequirements" "$APPCAST"; then
+            echo "Intel appcast unexpectedly has a hardware requirement" >&2
+            exit 1
+          fi
+
+          SIGNATURE="$(
+            sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p' "$APPCAST" |
+              head -n 1
+          )"
+          APPCAST_LENGTH="$(
+            sed -n 's/.*length="\([0-9]*\)".*/\1/p' "$APPCAST" |
+              head -n 1
+          )"
+          DMG_LENGTH="$(stat -f '%z' "$DMG")"
+          if [[ -z "$SIGNATURE" || "$APPCAST_LENGTH" != "$DMG_LENGTH" ]]; then
+            echo "Sparkle appcast signature metadata is incomplete" >&2
+            exit 1
+          fi
+          "$SPARKLE_ROOT/bin/sign_update" \
+            --verify \
+            --ed-key-file "$PRIVATE_KEY" \
+            "$DMG" \
+            "$SIGNATURE"
+          "$SPARKLE_ROOT/bin/sign_update" \
+            --verify \
+            --ed-key-file "$PRIVATE_KEY" \
+            "$APPCAST"
 
       - name: Remove signing credentials
         if: always()
@@ -490,13 +593,16 @@ jobs:
             >/dev/null 2>&1 || true
           rm -f \
             "$RUNNER_TEMP/openmicro-developer-id.p12" \
-            "${NOTARY_PRIVATE_KEY:-$RUNNER_TEMP/not-configured-private-key}"
+            "${NOTARY_PRIVATE_KEY:-$RUNNER_TEMP/not-configured-private-key}" \
+            "${SPARKLE_PRIVATE_KEY_FILE:-$RUNNER_TEMP/not-configured-sparkle-key}"
 
       - name: Upload notarized DMG
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-macos-${{ matrix.arch }}
-          path: dist/macos/OpenMicro-${{ needs.validate.outputs.app_version }}-macos-${{ matrix.arch }}.dmg
+          path: |
+            dist/macos/OpenMicro-${{ needs.validate.outputs.app_version }}-macos-${{ matrix.arch }}.dmg
+            dist/macos/appcast-${{ matrix.arch }}.xml
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -534,11 +640,21 @@ jobs:
           set -euo pipefail
           ARM_DMG="OpenMicro-$APP_VERSION-macos-aarch64.dmg"
           INTEL_DMG="OpenMicro-$APP_VERSION-macos-x86_64.dmg"
+          ARM_APPCAST="appcast-aarch64.xml"
+          INTEL_APPCAST="appcast-x86_64.xml"
           FIRMWARE_BIN="openmicro-fw-$FIRMWARE_VERSION.bin"
           FIRMWARE_ELF="openmicro-fw-$FIRMWARE_VERSION.elf"
           FIRMWARE_HEX="openmicro-fw-$FIRMWARE_VERSION.hex"
 
-          for asset in "$ARM_DMG" "$INTEL_DMG" "$FIRMWARE_BIN" "$FIRMWARE_ELF" "$FIRMWARE_HEX"; do
+          for asset in \
+            "$ARM_DMG" \
+            "$INTEL_DMG" \
+            "$ARM_APPCAST" \
+            "$INTEL_APPCAST" \
+            "$FIRMWARE_BIN" \
+            "$FIRMWARE_ELF" \
+            "$FIRMWARE_HEX"
+          do
             if [[ ! -f "dist/$asset" ]]; then
               echo "missing release asset: $asset" >&2
               exit 1
@@ -613,6 +729,8 @@ jobs:
             sha256sum \
               "$ARM_DMG" \
               "$INTEL_DMG" \
+              "$ARM_APPCAST" \
+              "$INTEL_APPCAST" \
               "$FIRMWARE_BIN" \
               "$FIRMWARE_ELF" \
               "$FIRMWARE_HEX" \

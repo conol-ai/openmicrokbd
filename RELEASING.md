@@ -4,6 +4,7 @@ The release workflow publishes both parts of the product from one GitHub
 Release:
 
 - notarized macOS DMGs for Apple Silicon and Intel;
+- signed Sparkle appcasts for Apple Silicon and Intel;
 - the production STM32F072 firmware as `.bin`, debug `.elf`, and factory
   programming `.hex` (same bytes as the `.bin` with the 0x08000000 load
   address embedded, for SWD/gang programmers at manufacturing);
@@ -11,8 +12,9 @@ Release:
 - `SHA256SUMS` and GitHub artifact attestations.
 
 The host app checks the stable manifest at startup and every six hours. A newer
-host version produces a download prompt; the app verifies and opens the correct
-DMG, and the user replaces OpenMicro in Applications. A newer device version
+host version produces an update prompt; a Developer ID release delegates the
+signed download, atomic install, and relaunch to Sparkle. Source/ad-hoc builds
+offer the old verified-DMG manual fallback instead. A newer device version
 produces a firmware prompt; the app uses the verified firmware bundled in the
 app when it matches, or downloads and verifies the release asset before
 flashing.
@@ -28,6 +30,7 @@ Add these Actions secrets:
 | `APPLE_API_KEY_ID` | App Store Connect API key ID |
 | `APPLE_API_ISSUER_ID` | App Store Connect API issuer ID |
 | `APPLE_API_PRIVATE_KEY_P8_BASE64` | Base64-encoded `AuthKey_<KEY_ID>.p8` |
+| `SPARKLE_ED25519_PRIVATE_KEY` | Base64-encoded 32-byte Ed25519 seed matching `app/macos/sparkle-public-key.txt` |
 
 Keychain Access exports a `.p12` with whatever password you type, including an
 empty one — but the workflow treats an empty secret as "not configured" and
@@ -58,10 +61,19 @@ xcrun notarytool history --key AuthKey_<KEY_ID>.p8 \
   --key-id <APPLE_API_KEY_ID> --issuer <APPLE_API_ISSUER_ID>
 ```
 
-Create a GitHub environment named `release`, store or expose the five secrets
+Create a GitHub environment named `release`, store or expose all six secrets
 there, and add any desired reviewer/deployment-branch protections. The workflow
 fails closed if any signing or notarization secret is missing; it will never
 publish an ad-hoc-signed release. Restrict who may create `v*` tags as well.
+
+Sparkle's update-signing identity is independent of the Apple certificate.
+Keep the private seed backed up like any release credential; never commit it or
+pass it on a command line. The public key is intentionally committed. CI
+derives the public key from the protected secret and refuses to publish if it
+does not match the key embedded in the app. For an intentional key rotation,
+use the pinned Sparkle distribution's `bin/generate_keys`, update both the
+protected secret and `app/macos/sparkle-public-key.txt`, then follow Sparkle's
+key-rotation guidance before shipping.
 
 Repository Actions must be allowed to create releases and attestations. The
 workflow itself grants only the job-specific `contents: write`, `id-token:
@@ -115,9 +127,13 @@ OPENMICRO_MACOS_ARCH=x86_64 \
   scripts/package-macos.sh dist dist/openmicro-fw-<firmware-version>.bin
 ```
 
-Without `MACOS_SIGN_IDENTITY`, the local script deliberately packages an
-ad-hoc-signed test app. CI sets `REQUIRE_SIGNING=1`, signs with Developer ID,
-submits the final DMG to Apple, staples the ticket, and validates it.
+The packaging script downloads Sparkle 2.9.6 from its official release,
+verifies the pinned SHA-256, and embeds the framework while preserving its
+symlinks. Without `MACOS_SIGN_IDENTITY`, the local script deliberately packages
+an ad-hoc-signed test app with self-installation disabled. CI sets
+`REQUIRE_SIGNING=1`, signs Sparkle's nested helpers and the app from the inside
+out with Developer ID, submits the final DMG to Apple, staples the ticket, and
+validates it.
 
 Useful local checks:
 
@@ -125,6 +141,7 @@ Useful local checks:
 cargo test --manifest-path app/Cargo.toml --locked --lib
 hdiutil verify dist/OpenMicro-<app-version>-macos-<arch>.dmg
 codesign --verify --deep --strict dist/macos-<arch>/OpenMicro.app
+otool -L dist/macos-<arch>/OpenMicro.app/Contents/MacOS/OpenMicro
 ```
 
 ## Publish
@@ -137,15 +154,21 @@ git push origin v<app-version>
 ```
 
 Only a pushed `vX.Y.Z` tag can publish. CI builds and verifies every artifact
-first, then creates a draft, uploads the complete set, and makes it public only
-after the upload succeeds. If signing, notarization, packaging, checksums, or
-manifest generation fails, no new public release appears and installed apps
-continue seeing the last successful stable release.
+first, signs each final notarized DMG with Sparkle's Ed25519 key, generates and
+verifies one signed appcast per architecture, then creates a draft, uploads the
+complete set, and makes it public only after the upload succeeds. If signing,
+notarization, packaging, appcast generation, checksums, or manifest generation
+fails, no new public release appears and installed apps continue seeing the
+last successful stable release.
 
 After publication, verify both DMG downloads on the GitHub Release page and:
 
 ```text
 https://github.com/conol-ai/openmicrokbd/releases/latest/download/release-manifest.json
+https://github.com/conol-ai/openmicrokbd/releases/latest/download/appcast-aarch64.xml
+https://github.com/conol-ai/openmicrokbd/releases/latest/download/appcast-x86_64.xml
 ```
 
 Then launch the previous public app version and confirm both update prompts.
+The first release containing Sparkle is the bootstrap: older apps reach it via
+the manual DMG path; later releases install and relaunch entirely in-app.

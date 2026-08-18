@@ -37,6 +37,7 @@ use crate::gpui_controls::{self as controls, CellVisual};
 use crate::host_state::{HostEffect, HostState};
 use crate::i18n::{self, tr};
 use crate::keycodes;
+use crate::macos_updater::{MacOsUpdater, UpdateCheck};
 use crate::pixel::{self, BadgeTone};
 use crate::release::{self, DownloadKind};
 use crate::status::ActivityStatus;
@@ -86,6 +87,71 @@ enum RecordTarget {
     None,
     Action,
     MacroStep(usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AppUpdateDetailState {
+    Error,
+    ManualDownloading,
+    ManualReady,
+    SparkleActive,
+    Available,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AppUpdateButtonState {
+    StartSparkle,
+    SparkleBusy,
+    DownloadDmg,
+    DownloadingDmg,
+    OpenDmg,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AppUpdateControls {
+    detail: AppUpdateDetailState,
+    sparkle: Option<AppUpdateButtonState>,
+    manual: Option<AppUpdateButtonState>,
+    dismissible: bool,
+}
+
+fn app_update_controls(
+    sparkle_available: bool,
+    sparkle_active: bool,
+    manual_downloading: bool,
+    manual_ready: bool,
+    has_error: bool,
+) -> AppUpdateControls {
+    let detail = if has_error {
+        AppUpdateDetailState::Error
+    } else if sparkle_available && sparkle_active {
+        AppUpdateDetailState::SparkleActive
+    } else if !sparkle_available && manual_downloading {
+        AppUpdateDetailState::ManualDownloading
+    } else if !sparkle_available && manual_ready {
+        AppUpdateDetailState::ManualReady
+    } else {
+        AppUpdateDetailState::Available
+    };
+    let sparkle = sparkle_available.then_some(if sparkle_active {
+        AppUpdateButtonState::SparkleBusy
+    } else {
+        AppUpdateButtonState::StartSparkle
+    });
+    let manual = (!sparkle_available).then_some(if manual_downloading {
+        AppUpdateButtonState::DownloadingDmg
+    } else if manual_ready {
+        AppUpdateButtonState::OpenDmg
+    } else {
+        AppUpdateButtonState::DownloadDmg
+    });
+
+    AppUpdateControls {
+        detail,
+        sparkle,
+        manual,
+        dismissible: !sparkle_active && !manual_downloading,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -723,6 +789,8 @@ pub struct OpenMicro {
     installed_apps: Vec<InstalledApp>,
     agent_integrations: Vec<IntegrationReport>,
     agent_integration_feedback: Option<(String, BadgeTone)>,
+    app_updater: MacOsUpdater,
+    app_updater_active: bool,
     icon_library: IconLibrary,
     icon_query: String,
     icon_page: usize,
@@ -777,6 +845,8 @@ impl OpenMicro {
             installed_apps: behaviors::installed_apps(),
             agent_integrations: Vec::new(),
             agent_integration_feedback: None,
+            app_updater: MacOsUpdater::new(),
+            app_updater_active: false,
             icon_library: IconLibrary::Lucide,
             icon_query: String::new(),
             icon_page: 0,
@@ -942,6 +1012,74 @@ impl OpenMicro {
         .detach();
     }
 
+    fn begin_sparkle_update(&mut self, cx: &mut Context<Self>) {
+        if self.app_updater_active {
+            return;
+        }
+        self.host.app_update_error = None;
+        match self.app_updater.check_for_updates() {
+            Ok(UpdateCheck::Started | UpdateCheck::Busy) => {
+                self.app_updater_active = true;
+                self.watch_sparkle_update(cx);
+            }
+            Err(error) => self.host.app_update_error = Some(error.to_string()),
+        }
+        cx.notify();
+    }
+
+    fn watch_sparkle_update(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |weak, cx| loop {
+            Timer::after(Duration::from_millis(500)).await;
+            match weak.update(cx, |this, cx| {
+                let finished = !this.app_updater.session_in_progress();
+                if finished {
+                    this.app_updater_active = false;
+                    cx.notify();
+                }
+                finished
+            }) {
+                Ok(true) | Err(_) => break,
+                Ok(false) => {}
+            }
+        })
+        .detach();
+    }
+
+    fn begin_manual_app_download(&mut self, cx: &mut Context<Self>) {
+        if self.host.app_downloading {
+            return;
+        }
+        let Some(catalog) = self.host.release.as_ref() else {
+            return;
+        };
+        let Some(asset) = catalog.app_asset().cloned() else {
+            self.host.app_update_error =
+                Some("no update is available for this platform".into());
+            cx.notify();
+            return;
+        };
+        let version = catalog.app.version.clone();
+        self.host.app_update_error = None;
+        self.host.app_downloading = true;
+        self.host.app_download_progress = 0.0;
+        release::spawn_download(DownloadKind::App, version, asset);
+        cx.notify();
+    }
+
+    fn open_manual_app_download(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.host.app_download.as_ref() else {
+            return;
+        };
+        self.host.app_update_error = None;
+        if let Err(error) = open::that(path) {
+            self.host.app_update_error = Some(format!(
+                "cannot open {}: {error}",
+                path.display()
+            ));
+        }
+        cx.notify();
+    }
+
     fn apply_host_effects(&mut self, effects: Vec<HostEffect>, cx: &mut Context<Self>) {
         for effect in effects {
             match effect {
@@ -955,12 +1093,6 @@ impl OpenMicro {
                 HostEffect::Quit => {
                     let _ = config::save(&self.host.config);
                     cx.quit();
-                }
-                HostEffect::OpenPath(path) => {
-                    if let Err(error) = open::that(&path) {
-                        self.host.release_error =
-                            Some(format!("cannot open {}: {error}", path.display()));
-                    }
                 }
                 HostEffect::ReleaseCellAfter { cell, delay } => {
                     cx.spawn(async move |weak, cx| {
@@ -2331,15 +2463,98 @@ impl OpenMicro {
             let app_available = release::is_newer(&catalog.app.version, release::APP_VERSION)
                 && !self.host.app_banner_dismissed;
             if app_available {
-                let detail = if self.host.app_downloading {
-                    format!(
-                        "OpenMicro {} // downloading {}%",
+                let automatic = self.app_updater.uses_signed_updates();
+                let controls = app_update_controls(
+                    automatic,
+                    self.app_updater_active,
+                    self.host.app_downloading,
+                    self.host.app_download.is_some(),
+                    self.host.app_update_error.is_some(),
+                );
+                let progress =
+                    (self.host.app_download_progress * 100.0).round() as u32;
+                let detail = match controls.detail {
+                    AppUpdateDetailState::Error => format!(
+                        "{} · {}",
+                        tr("app_update_failed"),
+                        self.host.app_update_error.as_deref().unwrap_or_default()
+                    ),
+                    AppUpdateDetailState::ManualDownloading => format!(
+                        "OpenMicro {} · {} {}%",
                         catalog.app.version,
-                        (self.host.app_download_progress * 100.0).round() as u32
-                    )
-                } else {
-                    format!("OpenMicro {} is ready", catalog.app.version)
+                        tr("app_update_downloading_dmg"),
+                        progress
+                    ),
+                    AppUpdateDetailState::ManualReady => format!(
+                        "OpenMicro {} · {}",
+                        catalog.app.version,
+                        tr("app_update_ready")
+                    ),
+                    AppUpdateDetailState::SparkleActive => format!(
+                        "OpenMicro {} · {}",
+                        catalog.app.version,
+                        tr("app_update_in_progress")
+                    ),
+                    AppUpdateDetailState::Available => format!(
+                        "OpenMicro {} · {}",
+                        catalog.app.version,
+                        tr("app_update_available")
+                    ),
                 };
+
+                let mut actions = div()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap(px(6.));
+                if let Some(sparkle) = controls.sparkle {
+                    actions = actions.child(match sparkle {
+                        AppUpdateButtonState::StartSparkle => tiny_button(tr("app_update_action"))
+                            .id("start-app-self-update")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.begin_sparkle_update(cx)
+                            }))
+                            .into_any_element(),
+                        AppUpdateButtonState::SparkleBusy => {
+                            paging_button(tr("app_update_in_progress"), false).into_any_element()
+                        }
+                        _ => unreachable!("invalid Sparkle update control"),
+                    });
+                }
+                if let Some(manual) = controls.manual {
+                    actions = actions.child(match manual {
+                        AppUpdateButtonState::DownloadDmg => {
+                            tiny_button(tr("app_update_download_dmg"))
+                                .id("download-app-update")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.begin_manual_app_download(cx)
+                                }))
+                                .into_any_element()
+                        }
+                        AppUpdateButtonState::DownloadingDmg => paging_button(
+                            format!("{} {}%", tr("app_update_downloading_dmg"), progress),
+                            false,
+                        )
+                        .into_any_element(),
+                        AppUpdateButtonState::OpenDmg => tiny_button(tr("app_update_open_dmg"))
+                            .id("open-app-update")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_manual_app_download(cx)
+                            }))
+                            .into_any_element(),
+                        _ => unreachable!("invalid manual update control"),
+                    });
+                }
+                if controls.dismissible {
+                    actions = actions.child(
+                        tiny_button(tr("later"))
+                            .id("dismiss-app-update")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.host.app_banner_dismissed = true;
+                                cx.notify();
+                            })),
+                    );
+                }
                 banners = banners.child(
                     div()
                         .min_h(px(44.))
@@ -2350,41 +2565,17 @@ impl OpenMicro {
                         .bg(pixel::raised_color())
                         .border_b_1()
                         .border_color(pixel::accent_color())
-                        .child(pixel::badge("APP UPDATE", BadgeTone::Accent))
+                        .child(pixel::badge(tr("app_update_badge"), BadgeTone::Accent))
                         .child(
                             div()
                                 .flex_1()
+                                .min_w(px(0.))
+                                .truncate()
                                 .text_size(px(13.))
                                 .text_color(pixel::text_color())
                                 .child(detail),
                         )
-                        .child(
-                            tiny_button(tr("update_now"))
-                                .id("download-app-update")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    let Some(catalog) = this.host.release.as_ref() else {
-                                        return;
-                                    };
-                                    if let Some(path) = this.host.app_download.as_ref() {
-                                        let _ = open::that(path);
-                                    } else if !this.host.app_downloading {
-                                        let Some(asset) = catalog.app_asset().cloned() else {
-                                            return;
-                                        };
-                                        let version = catalog.app.version.clone();
-                                        this.host.app_downloading = true;
-                                        this.host.app_download_progress = 0.0;
-                                        release::spawn_download(DownloadKind::App, version, asset);
-                                    }
-                                    cx.notify();
-                                })),
-                        )
-                        .child(tiny_button(tr("later")).id("dismiss-app-update").on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.host.app_banner_dismissed = true;
-                                cx.notify();
-                            }),
-                        )),
+                        .child(actions),
                 );
             } else if let Some((installed, _)) = self.host.last_conn.as_ref() {
                 let firmware_available = release::is_newer(&catalog.firmware.version, installed)
@@ -4902,6 +5093,55 @@ mod tests {
         assert_eq!(
             resolve_theme(ThemeSetting::Dark, WindowAppearance::VibrantLight),
             pixel::ColorScheme::Dark
+        );
+    }
+
+    #[test]
+    fn app_update_controls_keep_sparkle_and_manual_fallback_independent() {
+        assert_eq!(
+            app_update_controls(false, false, false, false, false),
+            AppUpdateControls {
+                detail: AppUpdateDetailState::Available,
+                sparkle: None,
+                manual: Some(AppUpdateButtonState::DownloadDmg),
+                dismissible: true,
+            }
+        );
+        assert_eq!(
+            app_update_controls(true, false, false, false, false),
+            AppUpdateControls {
+                detail: AppUpdateDetailState::Available,
+                sparkle: Some(AppUpdateButtonState::StartSparkle),
+                manual: None,
+                dismissible: true,
+            }
+        );
+        assert_eq!(
+            app_update_controls(true, true, false, false, false),
+            AppUpdateControls {
+                detail: AppUpdateDetailState::SparkleActive,
+                sparkle: Some(AppUpdateButtonState::SparkleBusy),
+                manual: None,
+                dismissible: false,
+            }
+        );
+        assert_eq!(
+            app_update_controls(false, false, true, false, false),
+            AppUpdateControls {
+                detail: AppUpdateDetailState::ManualDownloading,
+                sparkle: None,
+                manual: Some(AppUpdateButtonState::DownloadingDmg),
+                dismissible: false,
+            }
+        );
+        assert_eq!(
+            app_update_controls(true, false, false, true, true),
+            AppUpdateControls {
+                detail: AppUpdateDetailState::Error,
+                sparkle: Some(AppUpdateButtonState::StartSparkle),
+                manual: None,
+                dismissible: true,
+            }
         );
     }
 

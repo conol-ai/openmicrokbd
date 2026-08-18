@@ -1,9 +1,10 @@
 [package]
 name = "openmicro-app"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 license = "MIT"
 description = "OpenMicro companion app: profiles, key actions, firmware updates (GPUI)"
+build = "build.rs"
 
 [dependencies]
 sys-locale = "0.3"
@@ -34,6 +35,9 @@ dirs = "6"
 # release discovery + integrity-checked downloads
 ureq = { version = "=2.12.1", default-features = false, features = ["tls"] }
 sha2 = "0.10"
+
+[build-dependencies]
+cc = "1"
 
 [profile.release]
 opt-level = 2

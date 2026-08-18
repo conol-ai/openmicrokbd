@@ -197,10 +197,14 @@ never touch.
 ## App updates
 
 Release builds check `release-manifest.json` at startup and every six hours.
-When a newer host version exists, the banner downloads the DMG for the running
-Mac architecture, verifies its declared size and SHA-256, and opens it so the
-user can replace OpenMicro in Applications. See [`../RELEASING.md`](../RELEASING.md)
-for packaging, Developer ID signing, notarization, and publishing.
+When a newer host version exists, the banner opens Sparkle's native update
+flow. Sparkle downloads the correct architecture-specific DMG, verifies its
+Ed25519 update signature and Developer ID signature, installs it atomically,
+and relaunches OpenMicro. Source and ad-hoc builds deliberately disable
+self-installation; their banner retains the explicit size/SHA-256-verified DMG
+download and Open DMG fallback. See [`../RELEASING.md`](../RELEASING.md) for
+the pinned Sparkle framework, appcast signing, Developer ID signing,
+notarization, and publishing.
 
 ## Platform notes
 

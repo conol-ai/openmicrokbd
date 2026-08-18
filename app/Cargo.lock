@@ -4485,10 +4485,11 @@ dependencies = [
 
 [[package]]
 name = "openmicro-app"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-channel 2.5.0",
  "auto-launch",
+ "cc",
  "dirs 6.0.0",
  "enigo",
  "global-hotkey",

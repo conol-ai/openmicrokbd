@@ -50,8 +50,6 @@ pub enum HostEffect {
     ShowWindow,
     OpenSettings,
     Quit,
-    /// Ask the OS to open a downloaded installer or other path.
-    OpenPath(PathBuf),
     /// Clear a momentary device-map flash after `delay`.
     ReleaseCellAfter {
         cell: usize,
@@ -96,6 +94,7 @@ pub struct HostState {
     pub app_downloading: bool,
     pub app_download_progress: f64,
     pub app_download: Option<PathBuf>,
+    pub app_update_error: Option<String>,
     pub firmware_downloading: bool,
     pub firmware_download_progress: f64,
     pub install_after_download: bool,
@@ -174,6 +173,7 @@ impl HostState {
             app_downloading: false,
             app_download_progress: 0.0,
             app_download: None,
+            app_update_error: None,
             firmware_downloading: false,
             firmware_download_progress: 0.0,
             install_after_download: false,
@@ -306,7 +306,7 @@ impl HostState {
         match event {
             AppEvent::Device(message) => self.handle_device(message, &mut effects),
             AppEvent::Update(message) => self.handle_update(message),
-            AppEvent::Release(message) => self.handle_release(message, &mut effects),
+            AppEvent::Release(message) => self.handle_release(message),
             AppEvent::Hotkey(message) => self.handle_hotkey(message.hotkey_id, &mut effects),
             AppEvent::Menubar(message) => self.handle_menubar(message, &mut effects),
             AppEvent::OpenSettings => push_open_settings(&mut effects),
@@ -522,7 +522,7 @@ impl HostState {
         self.push_log(format!("failed: {error}"));
     }
 
-    fn handle_release(&mut self, message: ReleaseMsg, effects: &mut Vec<HostEffect>) {
+    fn handle_release(&mut self, message: ReleaseMsg) {
         match message {
             ReleaseMsg::Catalog(catalog) => {
                 let app_changed = self
@@ -541,6 +541,7 @@ impl HostState {
                     self.app_downloading = false;
                     self.app_download_progress = 0.0;
                     self.app_download = None;
+                    self.app_update_error = None;
                 }
                 if firmware_changed {
                     self.firmware_banner_dismissed = false;
@@ -590,8 +591,12 @@ impl HostState {
                     DownloadKind::App => {
                         self.app_downloading = false;
                         self.app_download_progress = 1.0;
-                        self.app_download = Some(path.clone());
-                        effects.push(HostEffect::OpenPath(path));
+                        self.app_update_error = None;
+                        // Keep the verified image ready for a deliberate user
+                        // action. Release bundles use Sparkle instead; this is
+                        // the source/ad-hoc build fallback and must not surprise
+                        // the user by opening a disk image in the background.
+                        self.app_download = Some(path);
                     }
                     DownloadKind::Firmware => {
                         self.firmware_downloading = false;
@@ -612,10 +617,13 @@ impl HostState {
                 if !self.is_current_download(kind, &version) {
                     return;
                 }
-                self.release_error = Some(error.clone());
                 match kind {
-                    DownloadKind::App => self.app_downloading = false,
+                    DownloadKind::App => {
+                        self.app_downloading = false;
+                        self.app_update_error = Some(error);
+                    }
                     DownloadKind::Firmware => {
+                        self.release_error = Some(error.clone());
                         self.firmware_downloading = false;
                         self.install_after_download = false;
                         self.update_error = Some(error.clone());
@@ -1073,7 +1081,33 @@ mod tests {
             path: path.clone(),
         }));
         assert_eq!(host.app_download, Some(path.clone()));
-        assert_eq!(effects, vec![HostEffect::OpenPath(path)]);
+        assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn app_download_errors_are_scoped_and_only_reset_for_a_new_app_release() {
+        let mut host = state();
+        host.handle_event(AppEvent::Release(ReleaseMsg::Catalog(catalog(
+            "1.2.3", "4.5.6",
+        ))));
+        host.handle_event(AppEvent::Release(ReleaseMsg::DownloadFailed {
+            kind: DownloadKind::App,
+            version: "1.2.3".into(),
+            error: "network unavailable".into(),
+        }));
+
+        assert_eq!(host.app_update_error.as_deref(), Some("network unavailable"));
+        assert!(host.release_error.is_none());
+
+        host.handle_event(AppEvent::Release(ReleaseMsg::Catalog(catalog(
+            "1.2.3", "4.5.7",
+        ))));
+        assert_eq!(host.app_update_error.as_deref(), Some("network unavailable"));
+
+        host.handle_event(AppEvent::Release(ReleaseMsg::Catalog(catalog(
+            "1.2.4", "4.5.7",
+        ))));
+        assert!(host.app_update_error.is_none());
     }
 
     #[test]
