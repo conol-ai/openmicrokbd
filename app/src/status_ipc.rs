@@ -2,8 +2,9 @@
 //!
 //! The OpenMicro process owns the HID handle, so hook clients must not open
 //! the pad directly.  A per-user Unix socket lets a short-lived helper (the
-//! same app binary invoked with `codex-hook`) hand a small, allow-listed event
-//! to the resident app instead.
+//! same app binary invoked with `agent-hook`) hand a small, allow-listed event
+//! to the resident app instead. Agent-specific payloads are reduced to the
+//! shared `ActivityEvent` protocol before they cross the socket.
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -17,13 +18,13 @@ use crate::status::ActivityStatus;
 const MAX_IPC_MESSAGE_BYTES: usize = 4096;
 // Hook payloads include the full prompt or latest assistant message for some
 // events. Keep the local socket protocol small, but allow bounded lifecycle
-// input large enough for normal Codex turns.
-const MAX_HOOK_INPUT_BYTES: usize = 1024 * 1024;
+// input large enough for normal agent turns.
+const MAX_HOOK_INPUT_BYTES: usize = 16 * 1024 * 1024;
 const SOCKET_DIR: &str = "OpenMicro";
 const SOCKET_FILE: &str = "activity.sock";
 
-/// Event reduced by `HostState`.  Session and turn identifiers keep several
-/// concurrent Codex threads from overwriting one another accidentally.
+/// Event reduced by `HostState`. Session and turn identifiers keep several
+/// concurrent agent threads from overwriting one another accidentally.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActivityEvent {
     pub session_id: String,
@@ -45,13 +46,42 @@ struct IpcMessage {
 }
 
 #[derive(Deserialize)]
-struct CodexHookInput {
+struct LifecycleHookInput {
     #[serde(default)]
     hook_event_name: String,
     #[serde(default)]
     session_id: Option<String>,
     #[serde(default)]
     turn_id: Option<String>,
+    #[serde(default)]
+    prompt_id: Option<String>,
+    #[serde(default)]
+    notification_type: Option<String>,
+    #[serde(default)]
+    tool_name: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AgentClient {
+    Codex,
+    ClaudeCode,
+}
+
+impl AgentClient {
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "codex" => Some(Self::Codex),
+            "claude" | "claude-code" | "claude_code" => Some(Self::ClaudeCode),
+            _ => None,
+        }
+    }
+
+    const fn namespace(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::ClaudeCode => "claude-code",
+        }
+    }
 }
 
 /// Stable per-user endpoint shared by the resident app and hook helper.
@@ -149,8 +179,8 @@ fn decode_message(message: IpcMessage) -> Option<ActivityEvent> {
     })
 }
 
-fn status_for_hook(event_name: &str) -> Option<ActivityStatus> {
-    match event_name {
+fn status_for_hook(client: AgentClient, input: &LifecycleHookInput) -> Option<ActivityStatus> {
+    match input.hook_event_name.as_str() {
         "UserPromptSubmit" => Some(ActivityStatus::Working),
         "PermissionRequest" => Some(ActivityStatus::Attention),
         // Once an approved tool finishes, leave the approval colour and show
@@ -158,6 +188,31 @@ fn status_for_hook(event_name: &str) -> Option<ActivityStatus> {
         "PostToolUse" => Some(ActivityStatus::Working),
         "Stop" => Some(ActivityStatus::Success),
         "SessionEnd" => Some(ActivityStatus::Idle),
+        "PostToolUseFailure" | "PermissionDenied" | "PostToolBatch" | "ElicitationResult"
+            if client == AgentClient::ClaudeCode =>
+        {
+            Some(ActivityStatus::Working)
+        }
+        "StopFailure" if client == AgentClient::ClaudeCode => Some(ActivityStatus::Error),
+        "PreToolUse"
+            if client == AgentClient::ClaudeCode
+                && input
+                    .tool_name
+                    .as_deref()
+                    .is_some_and(|tool| matches!(tool, "AskUserQuestion" | "Elicitation")) =>
+        {
+            Some(ActivityStatus::Attention)
+        }
+        "Elicitation" if client == AgentClient::ClaudeCode => Some(ActivityStatus::Attention),
+        "Notification" if client == AgentClient::ClaudeCode => {
+            match input.notification_type.as_deref() {
+                Some("permission_prompt" | "elicitation_dialog") => Some(ActivityStatus::Attention),
+                // Claude's Stop hook does not run on a user interrupt. The
+                // delayed idle notification provides a bounded fallback.
+                Some("idle_prompt") => Some(ActivityStatus::Idle),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -203,8 +258,15 @@ pub fn run_cli_if_requested() -> bool {
     let _program = args.next();
     let mode = args.next();
     match mode.as_deref() {
+        Some("agent-hook") => {
+            std::process::exit(run_agent_hook(args.next().as_deref()));
+        }
+        // Keep the command shipped by the original Codex-only PR working.
         Some("codex-hook") => {
-            std::process::exit(run_codex_hook());
+            std::process::exit(run_agent_hook(Some("codex")));
+        }
+        Some("claude-hook") | Some("claude-code-hook") => {
+            std::process::exit(run_agent_hook(Some("claude-code")));
         }
         Some("status") => {
             let status = args.next();
@@ -214,34 +276,53 @@ pub fn run_cli_if_requested() -> bool {
     }
 }
 
-fn run_codex_hook() -> i32 {
+fn run_agent_hook(client_name: Option<&str>) -> i32 {
+    let Some(client) = client_name.and_then(AgentClient::from_name) else {
+        eprintln!("usage: openmicro-app agent-hook <codex|claude-code>");
+        return 2;
+    };
     let mut bytes = Vec::new();
-    if std::io::stdin()
+    let readable = std::io::stdin()
         .take((MAX_HOOK_INPUT_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
-        .is_err()
-        || bytes.len() > MAX_HOOK_INPUT_BYTES
-    {
-        return 0;
+        .is_ok()
+        && bytes.len() <= MAX_HOOK_INPUT_BYTES;
+    if readable {
+        if let Some(event) = decode_agent_hook(client, &bytes) {
+            let _ = send_event(&event);
+        }
     }
-    let Some(event) = decode_codex_hook(&bytes) else {
-        return 0;
-    };
-    let _ = send_event(&event);
+    // Codex Stop hooks require structured stdout on a successful synchronous
+    // command. An empty object is also valid for the other lifecycle events
+    // and carries no steering decision.
+    if client == AgentClient::Codex {
+        println!("{{}}");
+    }
     0
 }
 
-fn decode_codex_hook(bytes: &[u8]) -> Option<ActivityEvent> {
-    let input = serde_json::from_slice::<CodexHookInput>(bytes).ok()?;
-    let status = status_for_hook(&input.hook_event_name)?;
-    Some(ActivityEvent {
-        session_id: input
-            .session_id
+fn decode_agent_hook(client: AgentClient, bytes: &[u8]) -> Option<ActivityEvent> {
+    let input = serde_json::from_slice::<LifecycleHookInput>(bytes).ok()?;
+    let status = status_for_hook(client, &input)?;
+    let begins_turn = input.hook_event_name == "UserPromptSubmit";
+    let raw_session_id = input
+        .session_id
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| "default".into());
+    let turn_id = match client {
+        AgentClient::Codex => input.turn_id.filter(|id| !id.trim().is_empty()),
+        AgentClient::ClaudeCode => input
+            .prompt_id
             .filter(|id| !id.trim().is_empty())
-            .unwrap_or_else(|| "default".into()),
-        turn_id: input.turn_id.filter(|id| !id.trim().is_empty()),
+            .or_else(|| input.turn_id.filter(|id| !id.trim().is_empty())),
+    };
+    Some(ActivityEvent {
+        // Agent namespaces prevent unrelated clients with similar session ids
+        // from clearing or superseding each other's light state.
+        session_id: format!("{}:{raw_session_id}", client.namespace()),
+        turn_id,
         status,
-        begins_turn: input.hook_event_name == "UserPromptSubmit",
+        begins_turn,
     })
 }
 
@@ -269,23 +350,93 @@ fn run_manual_status(status: Option<&str>, session_id: Option<String>) -> i32 {
 mod tests {
     use super::*;
 
+    fn hook_input(event_name: &str) -> LifecycleHookInput {
+        LifecycleHookInput {
+            hook_event_name: event_name.into(),
+            session_id: None,
+            turn_id: None,
+            prompt_id: None,
+            notification_type: None,
+            tool_name: None,
+        }
+    }
+
     #[test]
-    fn hook_events_map_to_transient_states() {
+    fn common_hook_events_map_to_transient_states() {
         assert_eq!(
-            status_for_hook("UserPromptSubmit"),
+            status_for_hook(AgentClient::Codex, &hook_input("UserPromptSubmit")),
             Some(ActivityStatus::Working)
         );
         assert_eq!(
-            status_for_hook("PermissionRequest"),
+            status_for_hook(AgentClient::ClaudeCode, &hook_input("PermissionRequest")),
             Some(ActivityStatus::Attention)
         );
         assert_eq!(
-            status_for_hook("PostToolUse"),
+            status_for_hook(AgentClient::Codex, &hook_input("PostToolUse")),
             Some(ActivityStatus::Working)
         );
-        assert_eq!(status_for_hook("Stop"), Some(ActivityStatus::Success));
-        assert_eq!(status_for_hook("SessionEnd"), Some(ActivityStatus::Idle));
-        assert_eq!(status_for_hook("PreToolUse"), None);
+        assert_eq!(
+            status_for_hook(AgentClient::ClaudeCode, &hook_input("Stop")),
+            Some(ActivityStatus::Success)
+        );
+        assert_eq!(
+            status_for_hook(AgentClient::Codex, &hook_input("SessionEnd")),
+            Some(ActivityStatus::Idle)
+        );
+        assert_eq!(
+            status_for_hook(AgentClient::Codex, &hook_input("PreToolUse")),
+            None
+        );
+    }
+
+    #[test]
+    fn claude_specific_completion_and_attention_events_are_supported() {
+        assert_eq!(
+            status_for_hook(AgentClient::ClaudeCode, &hook_input("StopFailure")),
+            Some(ActivityStatus::Error)
+        );
+        assert_eq!(
+            status_for_hook(AgentClient::Codex, &hook_input("StopFailure")),
+            None
+        );
+        // A failed tool is recoverable; Claude normally keeps working.
+        assert_eq!(
+            status_for_hook(AgentClient::ClaudeCode, &hook_input("PostToolUseFailure")),
+            Some(ActivityStatus::Working)
+        );
+
+        let mut notification = hook_input("Notification");
+        notification.notification_type = Some("permission_prompt".into());
+        assert_eq!(
+            status_for_hook(AgentClient::ClaudeCode, &notification),
+            Some(ActivityStatus::Attention)
+        );
+        notification.notification_type = Some("idle_prompt".into());
+        assert_eq!(
+            status_for_hook(AgentClient::ClaudeCode, &notification),
+            Some(ActivityStatus::Idle)
+        );
+
+        let mut pre_tool = hook_input("PreToolUse");
+        pre_tool.tool_name = Some("AskUserQuestion".into());
+        assert_eq!(
+            status_for_hook(AgentClient::ClaudeCode, &pre_tool),
+            Some(ActivityStatus::Attention)
+        );
+    }
+
+    #[test]
+    fn agent_client_names_accept_documented_shortcuts() {
+        assert_eq!(AgentClient::from_name("codex"), Some(AgentClient::Codex));
+        assert_eq!(
+            AgentClient::from_name("claude"),
+            Some(AgentClient::ClaudeCode)
+        );
+        assert_eq!(
+            AgentClient::from_name("claude-code"),
+            Some(AgentClient::ClaudeCode)
+        );
+        assert_eq!(AgentClient::from_name("unknown"), None);
     }
 
     #[test]
@@ -300,14 +451,56 @@ mod tests {
         assert!(bytes.len() > MAX_IPC_MESSAGE_BYTES);
         assert!(bytes.len() < MAX_HOOK_INPUT_BYTES);
         assert_eq!(
-            decode_codex_hook(&bytes),
+            decode_agent_hook(AgentClient::Codex, &bytes),
             Some(ActivityEvent {
-                session_id: "session".into(),
+                session_id: "codex:session".into(),
                 turn_id: Some("turn".into()),
                 status: ActivityStatus::Working,
                 begins_turn: true,
             })
         );
+    }
+
+    #[test]
+    fn claude_payloads_are_namespaced_and_normalize_prompt_ids() {
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "hook_event_name": "StopFailure",
+            "session_id": "session",
+            "prompt_id": "prompt",
+            "error": "API request failed",
+        }))
+        .expect("hook payload");
+        assert_eq!(
+            decode_agent_hook(AgentClient::ClaudeCode, &bytes),
+            Some(ActivityEvent {
+                session_id: "claude-code:session".into(),
+                turn_id: Some("prompt".into()),
+                status: ActivityStatus::Error,
+                begins_turn: false,
+            })
+        );
+    }
+
+    #[test]
+    fn equal_raw_session_ids_are_isolated_by_client() {
+        let codex = serde_json::to_vec(&serde_json::json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "same",
+            "turn_id": "turn",
+        }))
+        .expect("Codex hook payload");
+        let claude = serde_json::to_vec(&serde_json::json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "same",
+            "prompt_id": "prompt",
+        }))
+        .expect("Claude hook payload");
+
+        let codex = decode_agent_hook(AgentClient::Codex, &codex).expect("Codex event");
+        let claude = decode_agent_hook(AgentClient::ClaudeCode, &claude).expect("Claude event");
+        assert_eq!(codex.session_id, "codex:same");
+        assert_eq!(claude.session_id, "claude-code:same");
+        assert_ne!(codex.session_id, claude.session_id);
     }
 
     #[test]

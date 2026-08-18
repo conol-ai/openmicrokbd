@@ -1,0 +1,150 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
+            "args": ["agent-hook", "claude-code"],
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
+            "args": ["agent-hook", "claude-code"],
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
+            "args": ["agent-hook", "claude-code"],
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
+            "args": ["agent-hook", "claude-code"],
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
+            "args": ["agent-hook", "claude-code"],
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
+            "args": ["agent-hook", "claude-code"],
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "Elicitation": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
+            "args": ["agent-hook", "claude-code"],
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "ElicitationResult": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
+            "args": ["agent-hook", "claude-code"],
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "idle_prompt|permission_prompt|elicitation_dialog",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
+            "args": ["agent-hook", "claude-code"],
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
+            "args": ["agent-hook", "claude-code"],
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
+            "args": ["agent-hook", "claude-code"],
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
+            "args": ["agent-hook", "claude-code"],
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}

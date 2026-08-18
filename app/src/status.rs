@@ -4,7 +4,7 @@
 //! particular AI product.  Codex hooks are one producer; a future build
 //! watcher, CI client, or another agent can use the same state reducer.
 
-use crate::config::{CodexStatusColors, LedPattern};
+use crate::config::{ActivityStatusColors, LedPattern};
 
 /// A transient activity state.  `Idle` means that the user's configured LED
 /// patterns should be restored, not that the LEDs should be switched off.
@@ -32,13 +32,13 @@ impl ActivityStatus {
 
     /// Default colours retained for callers that do not have an app config.
     pub fn patterns(self) -> Option<(LedPattern, LedPattern)> {
-        self.patterns_with(&CodexStatusColors::default())
+        self.patterns_with(&ActivityStatusColors::default())
     }
 
     /// Resolve a transient status into the configured per-key colour and a
     /// dimmed ambient-ring colour. The configured brightness cap still
     /// applies in firmware.
-    pub fn patterns_with(self, colors: &CodexStatusColors) -> Option<(LedPattern, LedPattern)> {
+    pub fn patterns_with(self, colors: &ActivityStatusColors) -> Option<(LedPattern, LedPattern)> {
         match self {
             Self::Idle => None,
             status => {
@@ -77,7 +77,7 @@ mod tests {
 
     #[test]
     fn configured_status_colour_drives_key_and_dimmed_ambient() {
-        let mut colors = CodexStatusColors::default();
+        let mut colors = ActivityStatusColors::default();
         colors.set(
             ActivityStatus::Attention,
             LedPattern::Solid {

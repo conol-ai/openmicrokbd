@@ -686,18 +686,18 @@ impl LedPattern {
     }
 }
 
-/// Colours used by the local Codex activity integration. These are separate
-/// from the persisted idle backlight patterns: a running Codex turn can
+/// Colours used by local coding-agent activity integrations. These are
+/// separate from the persisted idle backlight patterns: an active agent can
 /// temporarily override the LEDs, then the configured idle patterns return.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
-pub struct CodexStatusColors {
+pub struct ActivityStatusColors {
     pub working: LedPattern,
     pub attention: LedPattern,
     pub success: LedPattern,
     pub error: LedPattern,
 }
 
-impl Default for CodexStatusColors {
+impl Default for ActivityStatusColors {
     fn default() -> Self {
         Self {
             working: LedPattern::Solid {
@@ -724,7 +724,7 @@ impl Default for CodexStatusColors {
     }
 }
 
-impl CodexStatusColors {
+impl ActivityStatusColors {
     pub fn get(self, status: crate::status::ActivityStatus) -> LedPattern {
         match status {
             crate::status::ActivityStatus::Working => self.working,
@@ -789,10 +789,10 @@ pub struct AppConfig {
     /// Idle pattern of the underglow ring.
     #[serde(default)]
     pub led_ambient_pattern: LedPattern,
-    /// Per-status colours for the local Codex activity indicator. Missing in
-    /// older config files, so serde fills the original defaults.
-    #[serde(default)]
-    pub codex_status_colors: CodexStatusColors,
+    /// Per-status colours for local coding-agent activity. The alias keeps
+    /// configs written by the original Codex-only integration compatible.
+    #[serde(default, alias = "codex_status_colors")]
+    pub activity_status_colors: ActivityStatusColors,
 }
 
 impl Default for AppConfig {
@@ -807,7 +807,7 @@ impl Default for AppConfig {
             theme: ThemeSetting::System,
             led_key_pattern: LedPattern::Rainbow,
             led_ambient_pattern: LedPattern::Rainbow,
-            codex_status_colors: CodexStatusColors::default(),
+            activity_status_colors: ActivityStatusColors::default(),
         }
     }
 }
@@ -1073,7 +1073,7 @@ fn migrate_legacy(legacy: LegacyConfig) -> AppConfig {
         theme: ThemeSetting::System,
         led_key_pattern: LedPattern::Rainbow,
         led_ambient_pattern: LedPattern::Rainbow,
-        codex_status_colors: CodexStatusColors::default(),
+        activity_status_colors: ActivityStatusColors::default(),
     }
 }
 
@@ -1690,7 +1690,7 @@ mod tests {
             theme: ThemeSetting::System,
             led_key_pattern: LedPattern::Rainbow,
             led_ambient_pattern: LedPattern::Rainbow,
-            codex_status_colors: CodexStatusColors::default(),
+            activity_status_colors: ActivityStatusColors::default(),
         };
         sanitize(&mut cfg);
         assert_eq!(cfg.active_profile, 0);
@@ -1780,7 +1780,7 @@ mod tests {
         let back = parse_any(&text).expect("new schema roundtrips");
         assert_eq!(back.profiles, cfg.profiles);
         assert_eq!(back.theme, cfg.theme);
-        assert_eq!(back.codex_status_colors, cfg.codex_status_colors);
+        assert_eq!(back.activity_status_colors, cfg.activity_status_colors);
 
         let mut into = AppConfig::default();
         let name = unique_name(&into.profiles, "Codex");
@@ -1797,9 +1797,38 @@ mod tests {
         let mut json = serde_json::to_value(AppConfig::default()).expect("serialize");
         json.as_object_mut()
             .expect("config object")
-            .remove("codex_status_colors");
+            .remove("activity_status_colors");
         let parsed: AppConfig = serde_json::from_value(json).expect("old current schema");
-        assert_eq!(parsed.codex_status_colors, CodexStatusColors::default());
+        assert_eq!(
+            parsed.activity_status_colors,
+            ActivityStatusColors::default()
+        );
+    }
+
+    #[test]
+    fn codex_only_status_colour_key_migrates_to_generic_name() {
+        let mut json = serde_json::to_value(AppConfig::default()).expect("serialize");
+        let object = json.as_object_mut().expect("config object");
+        let mut colors = object
+            .remove("activity_status_colors")
+            .expect("status colours");
+        colors["working"] = serde_json::json!({ "mode": "solid", "r": 17, "g": 34, "b": 51 });
+        object.insert("codex_status_colors".into(), colors);
+
+        let parsed: AppConfig = serde_json::from_value(json).expect("Codex-only config");
+        assert_eq!(
+            parsed.activity_status_colors.working,
+            LedPattern::Solid {
+                r: 17,
+                g: 34,
+                b: 51,
+            }
+        );
+
+        let serialized = serde_json::to_value(parsed).expect("serialize migrated config");
+        let object = serialized.as_object().expect("config object");
+        assert!(object.contains_key("activity_status_colors"));
+        assert!(!object.contains_key("codex_status_colors"));
     }
 
     #[test]

@@ -1,14 +1,13 @@
 {
-  "description": "OpenMicro transient activity lights for Codex",
+  "description": "OpenMicro coding-agent activity lights for Codex",
   "hooks": {
     "UserPromptSubmit": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro codex-hook",
-            "timeout": 2,
-            "async": true
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook codex",
+            "timeout": 2
           }
         ]
       }
@@ -18,9 +17,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro codex-hook",
-            "timeout": 2,
-            "async": true
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook codex",
+            "timeout": 2
           }
         ]
       }
@@ -30,9 +28,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro codex-hook",
-            "timeout": 2,
-            "async": true
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook codex",
+            "timeout": 2
           }
         ]
       }
@@ -42,9 +39,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro codex-hook",
-            "timeout": 2,
-            "async": true
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook codex",
+            "timeout": 2
           }
         ]
       }
@@ -54,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro codex-hook",
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook codex",
             "timeout": 2
           }
         ]

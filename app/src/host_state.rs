@@ -35,6 +35,7 @@ pub const MOMENTARY_RELEASE_DELAY: Duration = Duration::from_millis(250);
 
 const LOG_LIMIT: usize = 8;
 const TERMINAL_LED_TTL: Duration = Duration::from_secs(4);
+const ACTIVE_LED_TTL: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Clone, Debug)]
 struct SessionActivity {
@@ -56,8 +57,9 @@ pub enum HostEffect {
         cell: usize,
         delay: Duration,
     },
-    /// Clear a terminal activity colour after its short completion window.
-    RestoreActivityAfter {
+    /// Clear an activity colour after either its short completion window or
+    /// the failsafe timeout that prevents abandoned agent sessions sticking.
+    ExpireActivityAfter {
         session_id: String,
         epoch: u64,
         delay: Duration,
@@ -75,7 +77,7 @@ pub struct HostState {
     pub last_conn: Option<(String, String)>,
     pub pressed_cells: [bool; CELL_COUNT],
 
-    /// Runtime activity reported by local integrations such as Codex Hooks.
+    /// Runtime activity reported by local coding-agent integrations.
     /// It is deliberately separate from the persisted LED configuration.
     activities: HashMap<String, SessionActivity>,
     activity_epoch: u64,
@@ -410,9 +412,9 @@ impl HostState {
         };
 
         // A late status hook from an earlier turn must not replace the state
-        // of a newer turn in the same Codex session. UserPromptSubmit is the
-        // one event allowed to establish a different turn; hooks that omit
-        // turn_id remain compatible and are accepted.
+        // of a newer turn in the same agent session. UserPromptSubmit is the
+        // event used by supported hook clients to establish a different turn;
+        // clients that omit turn_id remain compatible and are accepted.
         if !event.begins_turn
             && event.turn_id.is_some()
             && self
@@ -439,25 +441,28 @@ impl HostState {
                         epoch,
                     },
                 );
-                if matches!(status, ActivityStatus::Success | ActivityStatus::Error) {
-                    effects.push(HostEffect::RestoreActivityAfter {
-                        session_id,
-                        epoch,
-                        delay: TERMINAL_LED_TTL,
-                    });
-                }
+                let delay = if matches!(status, ActivityStatus::Success | ActivityStatus::Error) {
+                    TERMINAL_LED_TTL
+                } else {
+                    ACTIVE_LED_TTL
+                };
+                effects.push(HostEffect::ExpireActivityAfter {
+                    session_id,
+                    epoch,
+                    delay,
+                });
             }
         }
         self.refresh_activity_led();
     }
 
-    /// Remove a terminal activity state if no newer event superseded it.
+    /// Remove an activity state if no newer event superseded it.
     /// Returns whether an LED refresh was needed.
-    pub fn restore_activity(&mut self, session_id: &str, epoch: u64) -> bool {
-        let should_remove = self.activities.get(session_id).is_some_and(|activity| {
-            activity.epoch == epoch
-                && matches!(activity.status, ActivityStatus::Success | ActivityStatus::Error)
-        });
+    pub fn expire_activity(&mut self, session_id: &str, epoch: u64) -> bool {
+        let should_remove = self
+            .activities
+            .get(session_id)
+            .is_some_and(|activity| activity.epoch == epoch);
         if should_remove {
             self.activities.remove(session_id);
             self.refresh_activity_led();
@@ -483,7 +488,7 @@ impl HostState {
         };
         let status = self.activity_status();
         let (key_pattern, ambient_pattern) = status
-            .patterns_with(&self.config.codex_status_colors)
+            .patterns_with(&self.config.activity_status_colors)
             .unwrap_or((self.config.led_key_pattern, self.config.led_ambient_pattern));
         tx.send(DeviceCmd::SetTransientLedPattern {
             key_pattern,
@@ -873,14 +878,19 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         host.device_tx = Some(tx);
 
-        assert!(host
-            .handle_event(AppEvent::Activity(ActivityEvent {
-                session_id: "session".into(),
-                turn_id: Some("turn-2".into()),
-                status: ActivityStatus::Working,
-                begins_turn: true,
-            }))
-            .is_empty());
+        let working_effects = host.handle_event(AppEvent::Activity(ActivityEvent {
+            session_id: "session".into(),
+            turn_id: Some("turn-2".into()),
+            status: ActivityStatus::Working,
+            begins_turn: true,
+        }));
+        assert!(matches!(
+            working_effects.as_slice(),
+            [HostEffect::ExpireActivityAfter {
+                delay: ACTIVE_LED_TTL,
+                ..
+            }]
+        ));
         assert_eq!(host.activity_status(), ActivityStatus::Working);
         match rx.try_recv().expect("working LED override") {
             DeviceCmd::SetTransientLedPattern { key_pattern, .. } => assert_eq!(
@@ -938,17 +948,15 @@ mod tests {
             begins_turn: false,
         }));
         let (session_id, epoch) = match effects.as_slice() {
-            [HostEffect::RestoreActivityAfter {
-                session_id,
-                epoch,
-                ..
+            [HostEffect::ExpireActivityAfter {
+                session_id, epoch, ..
             }] => (session_id.clone(), *epoch),
             other => panic!("unexpected effects: {other:?}"),
         };
         assert_eq!(host.activity_status(), ActivityStatus::Success);
         let _ = rx.try_recv().expect("success LED override");
 
-        assert!(host.restore_activity(&session_id, epoch));
+        assert!(host.expire_activity(&session_id, epoch));
         assert_eq!(host.activity_status(), ActivityStatus::Idle);
         match rx.try_recv().expect("idle pattern restore") {
             DeviceCmd::SetTransientLedPattern {
@@ -978,6 +986,63 @@ mod tests {
             begins_turn: false,
         }));
         assert_eq!(host.activity_status(), ActivityStatus::Attention);
+    }
+
+    #[test]
+    fn expiring_an_old_timer_does_not_clear_a_newer_agent_state() {
+        let mut host = state();
+        let first = host.handle_event(AppEvent::Activity(ActivityEvent {
+            session_id: "claude-code:session".into(),
+            turn_id: Some("prompt".into()),
+            status: ActivityStatus::Working,
+            begins_turn: true,
+        }));
+        let first_epoch = match first.as_slice() {
+            [HostEffect::ExpireActivityAfter { epoch, .. }] => *epoch,
+            other => panic!("unexpected effects: {other:?}"),
+        };
+
+        let second = host.handle_event(AppEvent::Activity(ActivityEvent {
+            session_id: "claude-code:session".into(),
+            turn_id: Some("prompt".into()),
+            status: ActivityStatus::Attention,
+            begins_turn: false,
+        }));
+        let second_epoch = match second.as_slice() {
+            [HostEffect::ExpireActivityAfter { epoch, .. }] => *epoch,
+            other => panic!("unexpected effects: {other:?}"),
+        };
+
+        assert!(!host.expire_activity("claude-code:session", first_epoch));
+        assert_eq!(host.activity_status(), ActivityStatus::Attention);
+        assert!(host.expire_activity("claude-code:session", second_epoch));
+        assert_eq!(host.activity_status(), ActivityStatus::Idle);
+    }
+
+    #[test]
+    fn one_client_going_idle_does_not_clear_another_client() {
+        let mut host = state();
+        host.handle_event(AppEvent::Activity(ActivityEvent {
+            session_id: "codex:same".into(),
+            turn_id: Some("codex-turn".into()),
+            status: ActivityStatus::Working,
+            begins_turn: true,
+        }));
+        host.handle_event(AppEvent::Activity(ActivityEvent {
+            session_id: "claude-code:same".into(),
+            turn_id: Some("claude-prompt".into()),
+            status: ActivityStatus::Attention,
+            begins_turn: true,
+        }));
+        assert_eq!(host.activity_status(), ActivityStatus::Attention);
+
+        host.handle_event(AppEvent::Activity(ActivityEvent {
+            session_id: "claude-code:same".into(),
+            turn_id: Some("claude-prompt".into()),
+            status: ActivityStatus::Idle,
+            begins_turn: false,
+        }));
+        assert_eq!(host.activity_status(), ActivityStatus::Working);
     }
 
     #[test]

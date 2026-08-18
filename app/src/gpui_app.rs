@@ -964,7 +964,7 @@ impl OpenMicro {
                     })
                     .detach();
                 }
-                HostEffect::RestoreActivityAfter {
+                HostEffect::ExpireActivityAfter {
                     session_id,
                     epoch,
                     delay,
@@ -972,7 +972,7 @@ impl OpenMicro {
                     cx.spawn(async move |weak, cx| {
                         Timer::after(delay).await;
                         let _ = weak.update(cx, |this, cx| {
-                            if this.host.restore_activity(&session_id, epoch) {
+                            if this.host.expire_activity(&session_id, epoch) {
                                 cx.notify();
                             }
                         });
@@ -1580,7 +1580,7 @@ impl OpenMicro {
         delta: isize,
         cx: &mut Context<Self>,
     ) {
-        let current = self.host.config.codex_status_colors.get(status);
+        let current = self.host.config.activity_status_colors.get(status);
         let current_index = PATTERN_PALETTE
             .iter()
             .position(|(_, r, g, b)| {
@@ -1608,7 +1608,7 @@ impl OpenMicro {
             });
         let next = wrapped_index(current_index, PATTERN_PALETTE.len(), delta);
         let (_, r, g, b) = PATTERN_PALETTE[next];
-        self.host.config.codex_status_colors.set(
+        self.host.config.activity_status_colors.set(
             status,
             LedPattern::Solid { r, g, b },
         );
@@ -3325,17 +3325,17 @@ impl OpenMicro {
                             .text_size(px(11.))
                             .font_semibold()
                             .text_color(pixel::accent_highlight_color())
-                            .child(tr("codex_status_colors")),
+                            .child(tr("agent_status_colors")),
                     )
                     .child(inspector_field(
-                        tr("codex_working_color"),
-                        tr("codex_working_color_note"),
+                        tr("agent_working_color"),
+                        tr("agent_working_color_note"),
                         controls::cycle_control(
                             Self::status_color_value(
-                                self.host.config.codex_status_colors.working,
+                                self.host.config.activity_status_colors.working,
                             ),
-                            ("settings-codex-working", 0usize).into(),
-                            ("settings-codex-working", 1usize).into(),
+                            ("settings-agent-working", 0usize).into(),
+                            ("settings-agent-working", 1usize).into(),
                             cx.listener(|this, _, _, cx| {
                                 this.cycle_status_color(ActivityStatus::Working, -1, cx)
                             }),
@@ -3345,14 +3345,14 @@ impl OpenMicro {
                         ),
                     ))
                     .child(inspector_field(
-                        tr("codex_attention_color"),
-                        tr("codex_attention_color_note"),
+                        tr("agent_attention_color"),
+                        tr("agent_attention_color_note"),
                         controls::cycle_control(
                             Self::status_color_value(
-                                self.host.config.codex_status_colors.attention,
+                                self.host.config.activity_status_colors.attention,
                             ),
-                            ("settings-codex-attention", 0usize).into(),
-                            ("settings-codex-attention", 1usize).into(),
+                            ("settings-agent-attention", 0usize).into(),
+                            ("settings-agent-attention", 1usize).into(),
                             cx.listener(|this, _, _, cx| {
                                 this.cycle_status_color(ActivityStatus::Attention, -1, cx)
                             }),
@@ -3362,14 +3362,14 @@ impl OpenMicro {
                         ),
                     ))
                     .child(inspector_field(
-                        tr("codex_success_color"),
-                        tr("codex_success_color_note"),
+                        tr("agent_success_color"),
+                        tr("agent_success_color_note"),
                         controls::cycle_control(
                             Self::status_color_value(
-                                self.host.config.codex_status_colors.success,
+                                self.host.config.activity_status_colors.success,
                             ),
-                            ("settings-codex-success", 0usize).into(),
-                            ("settings-codex-success", 1usize).into(),
+                            ("settings-agent-success", 0usize).into(),
+                            ("settings-agent-success", 1usize).into(),
                             cx.listener(|this, _, _, cx| {
                                 this.cycle_status_color(ActivityStatus::Success, -1, cx)
                             }),
@@ -3379,12 +3379,12 @@ impl OpenMicro {
                         ),
                     ))
                     .child(inspector_field(
-                        tr("codex_error_color"),
-                        tr("codex_error_color_note"),
+                        tr("agent_error_color"),
+                        tr("agent_error_color_note"),
                         controls::cycle_control(
-                            Self::status_color_value(self.host.config.codex_status_colors.error),
-                            ("settings-codex-error", 0usize).into(),
-                            ("settings-codex-error", 1usize).into(),
+                            Self::status_color_value(self.host.config.activity_status_colors.error),
+                            ("settings-agent-error", 0usize).into(),
+                            ("settings-agent-error", 1usize).into(),
                             cx.listener(|this, _, _, cx| {
                                 this.cycle_status_color(ActivityStatus::Error, -1, cx)
                             }),

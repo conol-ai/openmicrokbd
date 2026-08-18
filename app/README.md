@@ -85,36 +85,67 @@ icons from the full bundled Lucide set). The icon picker also includes the
 bundled Simple Icons catalog for monochrome brand marks. Brand names and logos
 remain trademarks of their respective owners.
 
-## Runtime activity light bridge
+## Coding-agent activity lights
 
-The companion app exposes a transient, non-persistent LED status bridge for
-agent clients. Start the app normally, then send a small JSON event to
-`openmicro-app codex-hook` from a Codex command hook. The helper maps
-`UserPromptSubmit` to blue (working), `PermissionRequest` to amber (waiting for
-approval), `PostToolUse` back to working after an approved tool finishes,
-`Stop` to green (completed), and `SessionEnd` back to the configured idle
-pattern. The bridge uses a per-user Unix socket and never calls `SAVE`, so
-status feedback cannot overwrite the profile's LED settings.
+The companion app exposes a transient, non-persistent status bridge for local
+coding agents. It reduces client-specific events to five shared states:
+`idle`, `working`, `attention`, `success`, and `error`. Working is blue,
+approval or another user decision is amber, completion is green, and failure
+is red by default. Several concurrent sessions are tracked independently;
+attention and errors remain visible above background work.
 
-To connect an installed macOS app, merge
-[`codex-hooks.example.json`](codex-hooks.example.json) into
-`~/.codex/hooks.json`. The example assumes the standard
-`/Applications/OpenMicro.app` install location; source builds must replace the
-command with their own absolute binary path. Codex requires non-managed command
-hooks to be reviewed and trusted before they run. Open `/hooks` after adding or
-changing the definition; see the official [Codex hooks
-documentation](https://learn.chatgpt.com/codex/hooks).
+The bridge uses a per-user Unix socket and never calls `SAVE`, so agent feedback
+cannot overwrite the profile's LED settings. Success and error display for four
+seconds, abandoned working/attention states have a 30-minute failsafe, and then
+the configured idle key and ambient patterns return. The activity bridge is
+currently available on macOS and Linux; Windows transport is not implemented.
 
-The same binary accepts `openmicro-app status <idle|working|attention|success|error>`
-for manual smoke tests and other local integrations. `error` is available to
-generic status clients; the current Codex lifecycle adapter does not infer a
-failure state from tool-specific output.
+| Client | Install | Main event mapping |
+| --- | --- | --- |
+| Codex | Merge [`codex-hooks.example.json`](codex-hooks.example.json) into `~/.codex/hooks.json`, then review it with `/hooks` | prompt → working, approval → attention, stop → success, session end → idle |
+| Claude Code | Merge [`claude-code-hooks.example.json`](claude-code-hooks.example.json) into `~/.claude/settings.json` | prompt/tool → working, permission/question/elicitation → attention, stop → success, API failure → error |
+| OpenCode | Copy [`opencode-openmicro.example.ts`](opencode-openmicro.example.ts) to `~/.config/opencode/plugins/openmicro.ts` or `.opencode/plugins/openmicro.ts` | busy/retry → working, permission/question → attention, idle → success, session error → error |
+| Deep Code | Copy [`deep-code-notify.example.sh`](deep-code-notify.example.sh) to `~/.deepcode/openmicro-notify.sh`, run `chmod +x` on it, and set `notify` to that absolute path in `~/.deepcode/settings.json` | completed turn → success, failed turn → error |
 
-The Settings sheet exposes four Codex status-colour controls (working,
-waiting for approval, completed, and error). Each control cycles through the
-named palette, shows its hex value, persists to the local JSON config, and
-refreshes an active transient status immediately; the idle key and ambient
-patterns remain independent.
+The examples assume the installed macOS binary at
+`/Applications/OpenMicro.app/Contents/MacOS/OpenMicro`; source builds must use
+their own absolute binary path. Hook commands are deliberately synchronous and
+short-lived in the Codex and Claude Code examples; the OpenCode plugin queues
+its fire-and-forget callbacks so a late helper cannot replace a newer state.
+See the official [Codex hooks](https://learn.chatgpt.com/codex/hooks), [Claude
+Code hooks](https://code.claude.com/docs/en/hooks), [OpenCode plugin
+documentation](https://opencode.ai/docs/plugins/), and [Deep Code notify
+documentation](https://github.com/lessweb/deepcode-cli/blob/main/docs/notify.md)
+for their surrounding config formats.
+
+DeepSeek is often the model/provider rather than the lifecycle client. When a
+DeepSeek model runs through Claude Code or OpenCode, that client's integration
+above works unchanged; [DeepSeek documents both
+setups](https://api-docs.deepseek.com/guides/coding_agents). Deep Code exposes
+only a completion notification, so its example can show green/red but cannot
+reliably report working or approval states. DeepSeek Harness is currently a
+separate developer-preview client and can integrate through the generic command
+below without changing the app.
+
+Start the OpenMicro GUI before testing—the helper sends to its local socket and
+agent hooks deliberately treat a missing resident app as a no-op. For manual
+smoke tests and other agents, the installed binary accepts:
+
+```text
+/Applications/OpenMicro.app/Contents/MacOS/OpenMicro status <idle|working|attention|success|error> [client:session]
+```
+
+Use a stable, client-prefixed session name so independent agents cannot clear
+one another. Built-in hook adapters use `agent-hook <codex|claude-code>` and
+read the client's JSON event on stdin; the original `codex-hook` spelling
+remains as a compatibility alias. If upgrading from the original Codex-only
+example, re-merge the current file or remove every `"async": true`; background
+hooks can otherwise arrive after a newer state.
+
+The Settings sheet exposes four coding-agent status-colour controls. Each
+control cycles through the named palette, shows its hex value, persists to the
+local JSON config, and refreshes an active transient status immediately; idle
+lighting remains independent.
 
 ## Firmware updates
 
