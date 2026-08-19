@@ -49,6 +49,17 @@ impl Menubar {
                 id: event.id.0.clone(),
             });
         }));
+
+        // tray-icon uses GTK on Linux, but GPUI does not initialize GTK for
+        // us. Creating the tray before this call panics inside muda's Menu.
+        // A session without a usable GTK display should still get the main
+        // app window, just without its optional tray presence.
+        #[cfg(target_os = "linux")]
+        if let Err(error) = gtk::init() {
+            eprintln!("system tray unavailable: GTK initialization failed: {error}");
+            return Menubar { tray: None };
+        }
+
         let tray = tray_icon().and_then(|icon| {
             TrayIconBuilder::new()
                 .with_icon(icon)

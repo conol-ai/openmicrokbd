@@ -4495,6 +4495,7 @@ dependencies = [
  "global-hotkey",
  "gpui",
  "gpui-component",
+ "gtk",
  "hidapi",
  "open",
  "rusb",

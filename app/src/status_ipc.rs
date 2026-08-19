@@ -49,15 +49,19 @@ struct IpcMessage {
 struct LifecycleHookInput {
     #[serde(default)]
     hook_event_name: String,
+    #[serde(default, rename = "hookEventName")]
+    grok_hook_event_name: String,
     #[serde(default)]
+    event: String,
+    #[serde(default, alias = "sessionId")]
     session_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "turnId")]
     turn_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "promptId")]
     prompt_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "notificationType")]
     notification_type: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "toolName")]
     tool_name: Option<String>,
 }
 
@@ -65,6 +69,8 @@ struct LifecycleHookInput {
 enum AgentClient {
     Codex,
     ClaudeCode,
+    Grok,
+    Octoscode,
 }
 
 impl AgentClient {
@@ -72,6 +78,8 @@ impl AgentClient {
         match name {
             "codex" => Some(Self::Codex),
             "claude" | "claude-code" | "claude_code" => Some(Self::ClaudeCode),
+            "grok" => Some(Self::Grok),
+            "octos" | "octoscode" => Some(Self::Octoscode),
             _ => None,
         }
     }
@@ -80,6 +88,8 @@ impl AgentClient {
         match self {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude-code",
+            Self::Grok => "grok",
+            Self::Octoscode => "octoscode",
         }
     }
 }
@@ -180,21 +190,29 @@ fn decode_message(message: IpcMessage) -> Option<ActivityEvent> {
 }
 
 fn status_for_hook(client: AgentClient, input: &LifecycleHookInput) -> Option<ActivityStatus> {
-    match input.hook_event_name.as_str() {
-        "UserPromptSubmit" => Some(ActivityStatus::Working),
-        "PermissionRequest" => Some(ActivityStatus::Attention),
+    let event = if !input.hook_event_name.is_empty() {
+        input.hook_event_name.as_str()
+    } else if !input.grok_hook_event_name.is_empty() {
+        input.grok_hook_event_name.as_str()
+    } else {
+        input.event.as_str()
+    };
+    let event = event.to_ascii_lowercase();
+    match event.as_str() {
+        "userpromptsubmit" | "user_prompt_submit" => Some(ActivityStatus::Working),
+        "permissionrequest" | "permission_request" => Some(ActivityStatus::Attention),
         // Once an approved tool finishes, leave the approval colour and show
         // that the turn is working again.
-        "PostToolUse" => Some(ActivityStatus::Working),
-        "Stop" => Some(ActivityStatus::Success),
-        "SessionEnd" => Some(ActivityStatus::Idle),
-        "PostToolUseFailure" | "PermissionDenied" | "PostToolBatch" | "ElicitationResult"
+        "posttooluse" | "post_tool_use" | "after_tool_call" => Some(ActivityStatus::Working),
+        "stop" | "on_turn_end" => Some(ActivityStatus::Success),
+        "sessionend" | "session_end" | "stopcancelled" | "stop_cancelled" => Some(ActivityStatus::Idle),
+        "posttoolusefailure" | "post_tool_use_failure" | "permissiondenied" | "permission_denied" | "posttoolbatch" | "post_tool_batch" | "elicitationresult" | "elicitation_result"
             if client == AgentClient::ClaudeCode =>
         {
             Some(ActivityStatus::Working)
         }
-        "StopFailure" if client == AgentClient::ClaudeCode => Some(ActivityStatus::Error),
-        "PreToolUse"
+        "stopfailure" | "stop_failure" if matches!(client, AgentClient::ClaudeCode | AgentClient::Grok) => Some(ActivityStatus::Error),
+        "pretooluse" | "pre_tool_use"
             if client == AgentClient::ClaudeCode
                 && input
                     .tool_name
@@ -203,8 +221,8 @@ fn status_for_hook(client: AgentClient, input: &LifecycleHookInput) -> Option<Ac
         {
             Some(ActivityStatus::Attention)
         }
-        "Elicitation" if client == AgentClient::ClaudeCode => Some(ActivityStatus::Attention),
-        "Notification" if client == AgentClient::ClaudeCode => {
+        "elicitation" if client == AgentClient::ClaudeCode => Some(ActivityStatus::Attention),
+        "notification" if matches!(client, AgentClient::ClaudeCode | AgentClient::Grok) => {
             match input.notification_type.as_deref() {
                 Some("permission_prompt" | "elicitation_dialog") => Some(ActivityStatus::Attention),
                 // Claude's Stop hook does not run on a user interrupt. The
@@ -278,7 +296,7 @@ pub fn run_cli_if_requested() -> bool {
 
 fn run_agent_hook(client_name: Option<&str>) -> i32 {
     let Some(client) = client_name.and_then(AgentClient::from_name) else {
-        eprintln!("usage: openmicro-app agent-hook <codex|claude-code>");
+        eprintln!("usage: openmicro-app agent-hook <codex|claude-code|grok|octoscode>");
         return 2;
     };
     let mut bytes = Vec::new();
@@ -303,8 +321,23 @@ fn run_agent_hook(client_name: Option<&str>) -> i32 {
 
 fn decode_agent_hook(client: AgentClient, bytes: &[u8]) -> Option<ActivityEvent> {
     let input = serde_json::from_slice::<LifecycleHookInput>(bytes).ok()?;
+    // Grok intentionally loads Claude-compatible hooks. Its native payload
+    // uses camelCase field names, so keep those events in the Grok namespace
+    // even when they arrived through a Claude hook command.
+    let client = if client == AgentClient::ClaudeCode && !input.grok_hook_event_name.is_empty() {
+        AgentClient::Grok
+    } else {
+        client
+    };
     let status = status_for_hook(client, &input)?;
-    let begins_turn = input.hook_event_name == "UserPromptSubmit";
+    let hook_event = if !input.hook_event_name.is_empty() {
+        input.hook_event_name.as_str()
+    } else if !input.grok_hook_event_name.is_empty() {
+        input.grok_hook_event_name.as_str()
+    } else {
+        input.event.as_str()
+    };
+    let begins_turn = matches!(hook_event, "UserPromptSubmit" | "user_prompt_submit");
     let raw_session_id = input
         .session_id
         .filter(|id| !id.trim().is_empty())
@@ -315,6 +348,11 @@ fn decode_agent_hook(client: AgentClient, bytes: &[u8]) -> Option<ActivityEvent>
             .prompt_id
             .filter(|id| !id.trim().is_empty())
             .or_else(|| input.turn_id.filter(|id| !id.trim().is_empty())),
+        AgentClient::Grok => input
+            .prompt_id
+            .filter(|id| !id.trim().is_empty())
+            .or_else(|| input.turn_id.filter(|id| !id.trim().is_empty())),
+        AgentClient::Octoscode => input.turn_id.filter(|id| !id.trim().is_empty()),
     };
     Some(ActivityEvent {
         // Agent namespaces prevent unrelated clients with similar session ids
@@ -353,6 +391,8 @@ mod tests {
     fn hook_input(event_name: &str) -> LifecycleHookInput {
         LifecycleHookInput {
             hook_event_name: event_name.into(),
+            grok_hook_event_name: String::new(),
+            event: String::new(),
             session_id: None,
             turn_id: None,
             prompt_id: None,
@@ -437,6 +477,42 @@ mod tests {
             Some(AgentClient::ClaudeCode)
         );
         assert_eq!(AgentClient::from_name("unknown"), None);
+        assert_eq!(AgentClient::from_name("grok"), Some(AgentClient::Grok));
+        assert_eq!(
+            AgentClient::from_name("octoscode"),
+            Some(AgentClient::Octoscode)
+        );
+    }
+
+    #[test]
+    fn grok_and_octos_payloads_map_to_independent_namespaces() {
+        let grok = br#"{"hookEventName":"user_prompt_submit","sessionId":"g","promptId":"p"}"#;
+        assert_eq!(
+            decode_agent_hook(AgentClient::Grok, grok),
+            Some(ActivityEvent {
+                session_id: "grok:g".into(),
+                turn_id: Some("p".into()),
+                status: ActivityStatus::Working,
+                begins_turn: true,
+            })
+        );
+        assert_eq!(
+            decode_agent_hook(AgentClient::ClaudeCode, grok)
+                .expect("Grok payload through Claude compatibility hook")
+                .session_id,
+            "grok:g"
+        );
+
+        let octos = br#"{"event":"on_turn_end","session_id":"o"}"#;
+        assert_eq!(
+            decode_agent_hook(AgentClient::Octoscode, octos),
+            Some(ActivityEvent {
+                session_id: "octoscode:o".into(),
+                turn_id: None,
+                status: ActivityStatus::Success,
+                begins_turn: false,
+            })
+        );
     }
 
     #[test]

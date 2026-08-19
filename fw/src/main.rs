@@ -170,6 +170,7 @@ const RAW_HID_DESC: &[u8] = &[
 //   [0x0D]                         -> [0x0D, kmode,kr,kg,kb, umode,ur,ug,ub]
 //                                     (per-chain pattern: 0 rainbow, 1 solid RGB)
 //   [0x0E, kmode,kr,kg,kb, umode,ur,ug,ub] -> [0x0E, 0x01] (RAM; SAVE persists)
+//   [0x0F, index, enabled, r,g,b] -> [0x0F, 0x01] (RAM-only per-key override)
 const CMD_VERSION: u8 = 0x01;
 const CMD_ENTER_DFU: u8 = 0x02;
 const CMD_GET_KEYMAP: u8 = 0x03;
@@ -184,10 +185,16 @@ const CMD_GET_LED: u8 = 0x0B;
 const CMD_SET_LED: u8 = 0x0C;
 const CMD_GET_LEDPATTERN: u8 = 0x0D;
 const CMD_SET_LEDPATTERN: u8 = 0x0E;
+const CMD_SET_KEY_LED_OVERRIDE: u8 = 0x0F;
 const ENTER_DFU_KEY: &[u8; 4] = b"DFU!";
 const SAVE_KEY: &[u8; 4] = b"SAVE";
 const RESET_KEY: &[u8; 4] = b"RST!";
 const EVENT_REPORT: u8 = 0x80;
+
+static KEY_LED_OVERRIDE_MASK: portable_atomic::AtomicU16 =
+    portable_atomic::AtomicU16::new(0);
+static KEY_LED_OVERRIDE_RGB: [portable_atomic::AtomicU32; 13] =
+    [const { portable_atomic::AtomicU32::new(0) }; 13];
 
 #[derive(Clone, Copy)]
 struct KeyboardTransition {
@@ -871,6 +878,31 @@ async fn main(spawner: Spawner) {
                             info!("app: led patterns -> key mode {=u8}, ug mode {=u8}", buf[1], buf[5]);
                             reply[1] = 0x01;
                         }
+                        CMD_SET_KEY_LED_OVERRIDE => {
+                            let index = buf[1] as usize;
+                            if index < 13 {
+                                let bit = 1u16 << index;
+                                if buf[2] != 0 {
+                                    let rgb = ((buf[3] as u32) << 16)
+                                        | ((buf[4] as u32) << 8)
+                                        | buf[5] as u32;
+                                    KEY_LED_OVERRIDE_RGB[index].store(
+                                        rgb,
+                                        core::sync::atomic::Ordering::Relaxed,
+                                    );
+                                    KEY_LED_OVERRIDE_MASK.fetch_or(
+                                        bit,
+                                        core::sync::atomic::Ordering::Relaxed,
+                                    );
+                                } else {
+                                    KEY_LED_OVERRIDE_MASK.fetch_and(
+                                        !bit,
+                                        core::sync::atomic::Ordering::Relaxed,
+                                    );
+                                }
+                                reply[1] = 0x01;
+                            }
+                        }
                         other => {
                             debug!("app: unknown cmd 0x{=u8:02x}", other);
                             continue;
@@ -1396,6 +1428,8 @@ async fn led_task(mut led_key: ws2812::LedPin<'static>, mut led_ug: ws2812::LedP
         let bright = keymap::led_brightness() as u32;
         let dim = |base: u32| ((base * bright * bright) / (255 * 255)) as u8;
         let (key_pat, ug_pat) = keymap::led_patterns();
+        let override_mask =
+            KEY_LED_OVERRIDE_MASK.load(core::sync::atomic::Ordering::Relaxed);
 
         let mut keys = [ws2812::Grb::default(); 13];
         for (i, px) in keys.iter_mut().enumerate() {
@@ -1405,6 +1439,15 @@ async fn led_task(mut led_key: ws2812::LedPin<'static>, mut led_ug: ws2812::LedP
             // A pressed key always pops white, whatever the idle pattern.
             *px = if state & (1 << i) != 0 {
                 ws2812::Grb::rgb(255, 255, 255).scaled(dim(24))
+            } else if override_mask & (1 << i) != 0 {
+                let rgb = KEY_LED_OVERRIDE_RGB[i]
+                    .load(core::sync::atomic::Ordering::Relaxed);
+                ws2812::Grb::rgb(
+                    ((rgb >> 16) & 0xff) as u8,
+                    ((rgb >> 8) & 0xff) as u8,
+                    (rgb & 0xff) as u8,
+                )
+                .scaled(dim(18))
             } else if key_pat.mode == keymap::LED_PATTERN_SOLID {
                 ws2812::Grb::rgb(key_pat.r, key_pat.g, key_pat.b).scaled(dim(6))
             } else {

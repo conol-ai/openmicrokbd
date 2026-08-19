@@ -36,6 +36,11 @@ dirs = "6"
 ureq = { version = "=2.12.1", default-features = false, features = ["tls"] }
 sha2 = "0.10"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# tray-icon's Linux backend uses GTK and requires the application to
+# initialize it before constructing a tray icon or menu.
+gtk = "0.18"
+
 [build-dependencies]
 cc = "1"
 
