@@ -161,6 +161,7 @@ any IN report starting `0x80` is an unsolicited input event, not a reply:
 | `[0x0C, brightness]` | Acks `[0x0C, 0x01]` — set brightness in RAM, applied within one LED frame (SAVE persists) |
 | `[0x0D]` | Replies `[0x0D, kmode,kr,kg,kb, umode,ur,ug,ub]` — per-chain LED pattern (0 rainbow, 1 solid RGB) |
 | `[0x0E, kmode,kr,kg,kb, umode,ur,ug,ub]` | Acks `[0x0E, 0x01]` — set patterns in RAM (SAVE persists) |
+| `[0x0F, index, enabled, r, g, b]` | Acks `[0x0F, 0x01]` — set or clear one key LED override in RAM (never persisted) |
 
 Event reports (`[0x80, src, a, b]`, best-effort, dropped when no host reads):
 src 0 = key (a = position 0–12, b = pressed), 1 = encoder rotate (a = 1 CW),

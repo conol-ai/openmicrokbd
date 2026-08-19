@@ -48,6 +48,7 @@ const CMD_GET_LED: u8 = 0x0B;
 const CMD_SET_LED: u8 = 0x0C;
 const CMD_GET_LEDPATTERN: u8 = 0x0D;
 const CMD_SET_LEDPATTERN: u8 = 0x0E;
+const CMD_SET_KEY_LED_OVERRIDE: u8 = 0x0F;
 
 /// First byte of an unsolicited device->host event report.
 const EVENT_MARK: u8 = 0x80;
@@ -155,6 +156,12 @@ pub enum DeviceCmd {
         key_pattern: LedPattern,
         ambient_pattern: LedPattern,
     },
+    /// Runtime-only override for one physical key LED. Firmware before 0.7
+    /// rejects this command; the worker probes once and then ignores updates.
+    SetKeyLedOverride {
+        index: u8,
+        color: Option<(u8, u8, u8)>,
+    },
     ReadKeymap,
     FactoryReset,
 }
@@ -255,7 +262,8 @@ fn handle_cmd_offline(api: &mut HidApi, cmd: DeviceCmd) {
         // A brightness preview with no pad is simply moot.
         DeviceCmd::ReadKeymap
         | DeviceCmd::SetLedBrightness { .. }
-        | DeviceCmd::SetTransientLedPattern { .. } => {}
+        | DeviceCmd::SetTransientLedPattern { .. }
+        | DeviceCmd::SetKeyLedOverride { .. } => {}
     }
 }
 
@@ -277,6 +285,7 @@ fn hello(dev: &HidDevice, serial: String) {
 /// the device going away. Returns when the session must end.
 fn session(api: &mut HidApi, rx: &mpsc::Receiver<DeviceCmd>, dev: &HidDevice) -> SessionEnd {
     let mut next_presence = Instant::now() + PRESENCE_PERIOD;
+    let mut key_led_override_supported = true;
     loop {
         // (a) Commands first so a sync isn't starved by a chatty event stream.
         loop {
@@ -347,6 +356,22 @@ fn session(api: &mut HidApi, rx: &mpsc::Receiver<DeviceCmd>, dev: &HidDevice) ->
                         &mut reply,
                         REPLY_TIMEOUT,
                     );
+                }
+                Ok(DeviceCmd::SetKeyLedOverride { index, color }) => {
+                    if key_led_override_supported && index < 13 {
+                        let (enabled, r, g, b) = color
+                            .map(|(r, g, b)| (1, r, g, b))
+                            .unwrap_or((0, 0, 0, 0));
+                        let mut reply = [0u8; 32];
+                        key_led_override_supported = command(
+                            dev,
+                            &[CMD_SET_KEY_LED_OVERRIDE, index, enabled, r, g, b],
+                            &mut reply,
+                            REPLY_TIMEOUT,
+                        )
+                        .and_then(|n| expect_ack(n, &reply, "SET_KEY_LED_OVERRIDE"))
+                        .is_ok();
+                    }
                 }
                 Ok(DeviceCmd::ReadKeymap) => match read_keymap(dev) {
                     Ok(keymap) => events::post(keymap.into_msg()),

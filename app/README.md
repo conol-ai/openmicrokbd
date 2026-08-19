@@ -100,6 +100,12 @@ seconds, abandoned working/attention states have a 30-minute failsafe, and then
 the configured idle key and ambient patterns return. The activity bridge is
 currently available on macOS and Linux; Windows transport is not implemented.
 
+With firmware 0.7.0 or newer, the four transparent keys on the second row show
+Claude Code, Codex, Grok, and Octoscode respectively. Concurrent sessions cycle
+in stable session order with a dark separator; more than four sessions also
+show a purple overflow frame. Older firmware falls back to the single global
+activity color across the key LEDs.
+
 The easiest setup is in **Settings → Agent integrations**. Each **Install**
 button adds the integration to that client's user-level configuration using the
 exact OpenMicro executable that is currently running. **Configured** means the
@@ -113,8 +119,10 @@ hook format.
 | Claude Code | `$CLAUDE_CONFIG_DIR/settings.json`, or `~/.claude/settings.json` | prompt/tool → working, permission/question/elicitation → attention, stop → success, API failure → error |
 | OpenCode | `$XDG_CONFIG_HOME/opencode/plugins/openmicro.ts`, or `~/.config/opencode/plugins/openmicro.ts` | busy/retry → working, permission/question → attention, idle → success, session error → error |
 | Deep Code | `~/.deepcode/settings.json` plus `~/.deepcode/openmicro-notify.sh` | completed turn → success, failed turn → error |
+| Grok | `~/.grok/hooks/openmicro.json` | prompt/tool → working, permission → attention, stop → success, API failure → error |
+| Octoscode / Octos | `~/.octos/profile-defaults.json` | prompt/LLM call → working, turn end → success |
 
-The installer parses Codex, Claude Code, and Deep Code JSON structurally. It
+The installer parses Codex, Claude Code, Grok, Octos, and Deep Code JSON structurally. It
 keeps unrelated settings and third-party hooks, removes only recognized
 OpenMicro entries, and creates a uniquely named private backup beside a file
 before changing it. OpenCode and Deep Code helper scripts carry an OpenMicro

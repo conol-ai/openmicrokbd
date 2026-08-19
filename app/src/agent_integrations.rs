@@ -25,6 +25,7 @@ const LEGACY_SHELL_MANAGED_MARKER: &str =
 const MAX_AGENT_CONFIG_BYTES: u64 = 4 * 1024 * 1024;
 const CODEX_TEMPLATE: &str = include_str!("../codex-hooks.example.json");
 const CLAUDE_TEMPLATE: &str = include_str!("../claude-code-hooks.example.json");
+const GROK_TEMPLATE: &str = include_str!("../grok-hooks.example.json");
 const OPENCODE_TEMPLATE: &str = include_str!("../opencode-openmicro.example.ts");
 const DEEP_CODE_TEMPLATE: &str = include_str!("../deep-code-notify.example.sh");
 
@@ -34,14 +35,18 @@ pub enum IntegrationKind {
     ClaudeCode,
     OpenCode,
     DeepCode,
+    Grok,
+    Octoscode,
 }
 
 impl IntegrationKind {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 6] = [
         Self::Codex,
         Self::ClaudeCode,
         Self::OpenCode,
         Self::DeepCode,
+        Self::Grok,
+        Self::Octoscode,
     ];
 
     pub const fn display_name(self) -> &'static str {
@@ -50,6 +55,8 @@ impl IntegrationKind {
             Self::ClaudeCode => "Claude Code",
             Self::OpenCode => "OpenCode",
             Self::DeepCode => "Deep Code",
+            Self::Grok => "Grok",
+            Self::Octoscode => "Octoscode",
         }
     }
 }
@@ -93,6 +100,8 @@ struct InstallLayout {
     opencode_plugin: PathBuf,
     deep_code_settings: PathBuf,
     deep_code_script: PathBuf,
+    grok_hooks: PathBuf,
+    octos_defaults: PathBuf,
 }
 
 impl InstallLayout {
@@ -131,6 +140,8 @@ impl InstallLayout {
             opencode_plugin: xdg_config.join("opencode/plugins/openmicro.ts"),
             deep_code_settings: home.join(".deepcode/settings.json"),
             deep_code_script: home.join(".deepcode/openmicro-notify.sh"),
+            grok_hooks: home.join(".grok/hooks/openmicro.json"),
+            octos_defaults: home.join(".octos/profile-defaults.json"),
         })
     }
 
@@ -140,6 +151,8 @@ impl InstallLayout {
             IntegrationKind::ClaudeCode => &self.claude_settings,
             IntegrationKind::OpenCode => &self.opencode_plugin,
             IntegrationKind::DeepCode => &self.deep_code_settings,
+            IntegrationKind::Grok => &self.grok_hooks,
+            IntegrationKind::Octoscode => &self.octos_defaults,
         }
     }
 
@@ -152,6 +165,8 @@ impl InstallLayout {
             opencode_plugin: home.join(".config/opencode/plugins/openmicro.ts"),
             deep_code_settings: home.join(".deepcode/settings.json"),
             deep_code_script: home.join(".deepcode/openmicro-notify.sh"),
+            grok_hooks: home.join(".grok/hooks/openmicro.json"),
+            octos_defaults: home.join(".octos/profile-defaults.json"),
         }
     }
 }
@@ -216,13 +231,14 @@ pub fn install_system(kind: IntegrationKind) -> Result<InstallReceipt, String> {
 
 fn inspect(layout: &InstallLayout, kind: IntegrationKind) -> IntegrationReport {
     let result = match kind {
-        IntegrationKind::Codex | IntegrationKind::ClaudeCode => inspect_json_hooks(layout, kind),
+        IntegrationKind::Codex | IntegrationKind::ClaudeCode | IntegrationKind::Grok => inspect_json_hooks(layout, kind),
         IntegrationKind::OpenCode => inspect_owned_template(
             &layout.opencode_plugin,
             &render_opencode_plugin(&layout.executable),
             "const OPENMICRO = ",
         ),
         IntegrationKind::DeepCode => inspect_deep_code(layout),
+        IntegrationKind::Octoscode => inspect_octoscode(layout),
     };
 
     match result {
@@ -260,11 +276,12 @@ fn install(layout: &InstallLayout, kind: IntegrationKind) -> Result<InstallRecei
     }
 
     match kind {
-        IntegrationKind::Codex | IntegrationKind::ClaudeCode => {
+        IntegrationKind::Codex | IntegrationKind::ClaudeCode | IntegrationKind::Grok => {
             install_json_hooks(layout, kind, report.state)
         }
         IntegrationKind::OpenCode => install_opencode(layout, report.state),
         IntegrationKind::DeepCode => install_deep_code(layout, report.state),
+        IntegrationKind::Octoscode => install_octoscode(layout, report.state),
     }
 }
 
@@ -766,6 +783,7 @@ fn desired_hooks(
     let template = match kind {
         IntegrationKind::Codex => CODEX_TEMPLATE,
         IntegrationKind::ClaudeCode => CLAUDE_TEMPLATE,
+        IntegrationKind::Grok => GROK_TEMPLATE,
         _ => return Err("this integration does not use JSON lifecycle hooks".into()),
     };
     let mut root: Value = serde_json::from_str(template)
@@ -796,7 +814,7 @@ fn desired_hooks(
                             Value::String(format!("{} agent-hook codex", shell_word(executable))),
                         );
                     }
-                    IntegrationKind::ClaudeCode => {
+                    IntegrationKind::ClaudeCode | IntegrationKind::Grok => {
                         object.insert("command".into(), Value::String(executable.into()));
                     }
                     _ => unreachable!(),
@@ -1061,23 +1079,31 @@ fn is_managed_hook(command: &Value, kind: IntegrationKind, executable: &Path) ->
             executable,
             &["agent-hook codex", "codex-hook"],
         ),
-        IntegrationKind::ClaudeCode => {
+        IntegrationKind::ClaudeCode | IntegrationKind::Grok => {
             let args_match = object
                 .get("args")
                 .and_then(Value::as_array)
                 .is_some_and(|args| {
                     args.len() == 2
                         && args[0].as_str() == Some("agent-hook")
-                        && args[1].as_str() == Some("claude-code")
+                        && args[1].as_str() == Some(match kind {
+                            IntegrationKind::ClaudeCode => "claude-code",
+                            IntegrationKind::Grok => "grok",
+                            _ => unreachable!(),
+                        })
                 });
             (args_match && is_managed_binary_path(command_text, executable))
                 || managed_shell_invocation(
                     command_text,
                     executable,
-                    &["agent-hook claude-code", "claude-hook", "claude-code-hook"],
+                    if kind == IntegrationKind::Grok {
+                        &["agent-hook grok"]
+                    } else {
+                        &["agent-hook claude-code", "claude-hook", "claude-code-hook"]
+                    },
                 )
         }
-        IntegrationKind::OpenCode | IntegrationKind::DeepCode => false,
+        IntegrationKind::OpenCode | IntegrationKind::DeepCode | IntegrationKind::Octoscode => false,
     }
 }
 
@@ -1100,7 +1126,7 @@ fn looks_like_openmicro_hook(command: &Value, kind: IntegrationKind, executable:
                         || arguments.starts_with("codex-hook"))
             })
         }
-        IntegrationKind::ClaudeCode => {
+        IntegrationKind::ClaudeCode | IntegrationKind::Grok => {
             let direct = is_managed_binary_path(command_text, executable)
                 && object
                     .get("args")
@@ -1108,17 +1134,17 @@ fn looks_like_openmicro_hook(command: &Value, kind: IntegrationKind, executable:
                     .and_then(|args| args.first())
                     .and_then(Value::as_str)
                     .is_some_and(|first| {
-                        matches!(first, "agent-hook" | "claude-hook" | "claude-code-hook")
+                            matches!(first, "agent-hook" | "claude-hook" | "claude-code-hook")
                     });
             direct
                 || decoded_shell_invocation(command_text).is_some_and(|(program, arguments)| {
                     is_managed_binary_path(&program, executable)
-                        && (arguments.starts_with("agent-hook claude")
+                        && (arguments.starts_with(if kind == IntegrationKind::Grok { "agent-hook grok" } else { "agent-hook claude" })
                             || arguments.starts_with("claude-hook")
                             || arguments.starts_with("claude-code-hook"))
                 })
         }
-        IntegrationKind::OpenCode | IntegrationKind::DeepCode => false,
+        IntegrationKind::OpenCode | IntegrationKind::DeepCode | IntegrationKind::Octoscode => false,
     }
 }
 
@@ -1411,6 +1437,99 @@ fn install_deep_code(
     })
 }
 
+fn desired_octoscode_hooks(executable: &Path) -> Result<Vec<Value>, String> {
+    let executable = path_text(executable)?;
+    Ok(["user_prompt_submit", "before_llm_call", "on_turn_end"]
+        .into_iter()
+        .map(|event| {
+            serde_json::json!({
+                "event": event,
+                "command": [executable, "agent-hook", "octoscode"],
+                "timeout_ms": 2000
+            })
+        })
+        .collect())
+}
+
+fn is_octoscode_hook(value: &Value, executable: &Path) -> bool {
+    let Some(command) = value.get("command").and_then(Value::as_array) else {
+        return false;
+    };
+    command.len() == 3
+        && command[0]
+            .as_str()
+            .is_some_and(|path| is_managed_binary_path(path, executable))
+        && command[1].as_str() == Some("agent-hook")
+        && command[2].as_str() == Some("octoscode")
+}
+
+fn merge_octoscode_hooks(
+    root: &mut Value,
+    executable: &Path,
+    desired: &[Value],
+) -> Result<bool, String> {
+    let object = root
+        .as_object_mut()
+        .ok_or_else(|| "Octos profile defaults must contain a JSON object".to_string())?;
+    let hooks = object
+        .entry("hooks")
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or_else(|| "the existing Octos hooks value must be an array".to_string())?;
+    let had_managed = hooks.iter().any(|hook| is_octoscode_hook(hook, executable));
+    hooks.retain(|hook| !is_octoscode_hook(hook, executable));
+    hooks.extend(desired.iter().cloned());
+    Ok(had_managed)
+}
+
+fn inspect_octoscode(layout: &InstallLayout) -> Result<InstallState, String> {
+    let snapshot = FileSnapshot::read(&layout.octos_defaults)?;
+    if snapshot.bytes.is_none() {
+        return Ok(InstallState::NotInstalled);
+    }
+    let root = parse_json_root(&snapshot)?;
+    let mut normalized = root.clone();
+    let had_managed = merge_octoscode_hooks(
+        &mut normalized,
+        &layout.executable,
+        &desired_octoscode_hooks(&layout.executable)?,
+    )?;
+    if normalized == root {
+        Ok(InstallState::Installed)
+    } else if had_managed {
+        Ok(InstallState::NeedsUpdate)
+    } else {
+        Ok(InstallState::NotInstalled)
+    }
+}
+
+fn install_octoscode(
+    layout: &InstallLayout,
+    prior_state: InstallState,
+) -> Result<InstallReceipt, String> {
+    let snapshot = FileSnapshot::read(&layout.octos_defaults)?;
+    let mut root = parse_json_root(&snapshot)?;
+    merge_octoscode_hooks(
+        &mut root,
+        &layout.executable,
+        &desired_octoscode_hooks(&layout.executable)?,
+    )?;
+    let mut contents = serde_json::to_vec_pretty(&root)
+        .map_err(|error| format!("cannot serialize Octos profile defaults: {error}"))?;
+    contents.push(b'\n');
+    let (changed_files, backups) = apply_writes(vec![PlannedWrite {
+        snapshot,
+        contents,
+        default_mode: 0o600,
+        required_mode: None,
+    }])?;
+    Ok(InstallReceipt {
+        disposition: disposition(prior_state, changed_files.is_empty()),
+        changed_files,
+        backups,
+    })
+}
+
 fn disposition(prior_state: InstallState, unchanged: bool) -> InstallDisposition {
     if unchanged {
         InstallDisposition::AlreadyInstalled
@@ -1535,6 +1654,52 @@ mod tests {
             .unwrap()
             .iter()
             .any(|group| group["hooks"][0]["command"] == "echo keep"));
+    }
+
+    #[test]
+    fn grok_install_uses_its_own_global_hook_file_and_namespace() {
+        let root = TestDir::new();
+        let layout = layout_in(&root);
+        let receipt = install(&layout, IntegrationKind::Grok).expect("install Grok hooks");
+        assert_eq!(receipt.disposition, InstallDisposition::Installed);
+        assert_eq!(
+            inspect(&layout, IntegrationKind::Grok).state,
+            InstallState::Installed
+        );
+        let installed = fs::read_to_string(&layout.grok_hooks).unwrap();
+        assert!(installed.contains("agent-hook"));
+        assert!(installed.contains("grok"));
+        assert!(installed.contains(path_text(&layout.executable).unwrap()));
+    }
+
+    #[test]
+    fn octoscode_install_preserves_existing_global_hooks() {
+        let root = TestDir::new();
+        let layout = layout_in(&root);
+        fs::create_dir_all(layout.octos_defaults.parent().unwrap()).unwrap();
+        fs::write(
+            &layout.octos_defaults,
+            br#"{"custom":true,"hooks":[{"event":"after_tool_call","command":["ruff","check"]}]}"#,
+        )
+        .unwrap();
+
+        install(&layout, IntegrationKind::Octoscode).expect("install Octoscode hooks");
+        assert_eq!(
+            inspect(&layout, IntegrationKind::Octoscode).state,
+            InstallState::Installed
+        );
+        let installed: Value =
+            serde_json::from_slice(&fs::read(&layout.octos_defaults).unwrap()).unwrap();
+        assert_eq!(installed["custom"], true);
+        let hooks = installed["hooks"].as_array().unwrap();
+        assert!(hooks.iter().any(|hook| hook["command"][0] == "ruff"));
+        assert_eq!(
+            hooks
+                .iter()
+                .filter(|hook| is_octoscode_hook(hook, &layout.executable))
+                .count(),
+            3
+        );
     }
 
     #[test]

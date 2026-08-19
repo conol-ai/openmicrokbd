@@ -973,6 +973,7 @@ impl OpenMicro {
         this.sync_inputs(window, cx);
         this.start_event_loop(cx);
         this.start_release_timer(cx);
+        this.start_agent_led_timer(cx);
         cx.on_app_quit(|this, _| {
             let _ = config::save(&this.host.config);
             async {}
@@ -1003,6 +1004,21 @@ impl OpenMicro {
                 break;
             }
             let _ = weak.update(cx, |_, _| {});
+        })
+        .detach();
+    }
+
+    fn start_agent_led_timer(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |weak, cx| loop {
+            Timer::after(Duration::from_millis(300)).await;
+            if weak.upgrade().is_none() {
+                break;
+            }
+            let _ = weak.update(cx, |this, _| {
+                if this.host.activity_status() != ActivityStatus::Idle {
+                    this.host.advance_activity_led_frame();
+                }
+            });
         })
         .detach();
     }
@@ -1762,6 +1778,8 @@ impl OpenMicro {
             IntegrationKind::ClaudeCode => tr("agent_claude_code_integration_note"),
             IntegrationKind::OpenCode => tr("agent_opencode_integration_note"),
             IntegrationKind::DeepCode => tr("agent_deep_code_integration_note"),
+            IntegrationKind::Grok => tr("agent_grok_integration_note"),
+            IntegrationKind::Octoscode => tr("agent_octoscode_integration_note"),
         }
     }
 
@@ -2860,6 +2878,18 @@ impl OpenMicro {
                     BadgeTone::Neutral
                 },
             ))
+            .child(
+                controls::toggle_face(tr("advanced"), self.advanced, true)
+                    .id("toggle-advanced-rotator")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.advanced = !this.advanced;
+                        cx.notify();
+                    })),
+            )
+            .when(self.advanced, |editor| {
+                let slot = self.host.selected_slot.unwrap_or(SLOT_ENC_CW);
+                editor.child(self.render_advanced_editor(slot, cx))
+            })
     }
 
     fn render_modifier_row(
@@ -5050,9 +5080,9 @@ pub fn run() {
                 ..Default::default()
             },
             |window, cx| {
-                window.on_window_should_close(cx, |_window, cx| {
+                window.on_window_should_close(cx, |_window, _cx| {
                     #[cfg(target_os = "macos")]
-                    cx.hide();
+                    _cx.hide();
                     #[cfg(not(target_os = "macos"))]
                     _window.minimize_window();
                     false

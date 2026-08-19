@@ -8,7 +8,7 @@
 //! start at wBlockNum 2 with target = addr_ptr + (n-2)*transfer_size.
 
 use rusb::{Device, DeviceHandle, GlobalContext};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const DFU_VID: u16 = 0x0483;
 const DFU_PID: u16 = 0xdf11;
@@ -22,8 +22,10 @@ const PAGE_SIZE: usize = 2048;
 const DFU_DNLOAD: u8 = 1;
 const DFU_GETSTATUS: u8 = 3;
 const DFU_CLRSTATUS: u8 = 4;
+const DFU_ABORT: u8 = 6;
 
 // DFU states (of interest).
+const STATE_DFU_IDLE: u8 = 2;
 const STATE_DFU_DNBUSY: u8 = 4;
 const STATE_DFU_ERROR: u8 = 10;
 
@@ -92,6 +94,36 @@ impl Dfu {
         Ok(())
     }
 
+    fn abort(&self) -> Result<(), String> {
+        self.handle
+            .write_control(0x21, DFU_ABORT, 0, 0, &[], TIMEOUT)
+            .map_err(|e| format!("ABORT: {e}"))?;
+        Ok(())
+    }
+
+    /// Recover an interrupted ROM-DFU transaction and verify that the next
+    /// DfuSe command may start. Both CLRSTATUS and ABORT are state-changing
+    /// requests; some STM32 ROM revisions do not accept DNLOAD immediately
+    /// afterwards until GETSTATUS has observed dfuIDLE.
+    fn ensure_idle(&self) -> Result<(), String> {
+        for _ in 0..4 {
+            let (status, _, state) = self.get_status()?;
+            if status == 0 && state == STATE_DFU_IDLE {
+                return Ok(());
+            }
+            if state == STATE_DFU_ERROR || status != 0 {
+                self.clear_status()?;
+            } else {
+                self.abort()?;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let (status, _, state) = self.get_status()?;
+        Err(format!(
+            "DFU did not return to idle (status {status}, state {state})"
+        ))
+    }
+
     fn dnload(&self, block: u16, data: &[u8]) -> Result<(), String> {
         self.handle
             .write_control(0x21, DFU_DNLOAD, block, 0, data, TIMEOUT)
@@ -102,6 +134,7 @@ impl Dfu {
     /// DNLOAD then poll GETSTATUS through dfuDNBUSY until the device settles.
     fn dnload_sync(&self, block: u16, data: &[u8], what: &str) -> Result<(), String> {
         self.dnload(block, data)?;
+        let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             let (status, poll_ms, state) = self.get_status()?;
             if state == STATE_DFU_ERROR || status != 0 {
@@ -113,7 +146,14 @@ impl Dfu {
             if state != STATE_DFU_DNBUSY {
                 return Ok(());
             }
-            std::thread::sleep(Duration::from_millis(poll_ms.max(1)));
+            if Instant::now() >= deadline {
+                let _ = self.abort();
+                return Err(format!("{what}: DFU busy timeout"));
+            }
+            // Broken bootloaders occasionally report an unreasonable 24-bit
+            // timeout. Poll at least once per second so cancellation/error
+            // handling cannot appear frozen indefinitely.
+            std::thread::sleep(Duration::from_millis(poll_ms.clamp(1, 1_000)));
         }
     }
 
@@ -174,12 +214,10 @@ pub fn flash(
     }
     let dfu = Dfu::open(device)?;
 
-    // A previous failed attempt can leave the state machine in dfuERROR.
-    if let Ok((status, _, state)) = dfu.get_status() {
-        if state == STATE_DFU_ERROR || status != 0 {
-            dfu.clear_status()?;
-        }
-    }
+    // A previous interrupted attempt can leave the state machine in
+    // dfuDNLOAD-IDLE (or another non-idle state). Normalize it and observe
+    // dfuIDLE before starting a fresh DfuSe command.
+    dfu.ensure_idle()?;
 
     let pages = image.len().div_ceil(PAGE_SIZE);
     for p in 0..pages {

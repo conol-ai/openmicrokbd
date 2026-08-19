@@ -344,6 +344,8 @@ pub const STRINGS: &[(&str, &str, &str, &str, &str)] = &[
     ("agent_claude_code_integration_note", "User lifecycle hooks · trusted workspaces only", "用户级生命周期钩子 · 仅在受信任工作区运行", "使用者層級生命週期掛鉤 · 僅在受信任的工作區執行", "ユーザーのライフサイクルフック · 信頼済みワークスペースのみ"),
     ("agent_opencode_integration_note", "User plugin for session and permission events", "用于会话和权限事件的用户插件", "用於工作階段與權限事件的使用者外掛程式", "セッションと権限イベント用のユーザープラグイン"),
     ("agent_deep_code_integration_note", "Completion notifier · green/red only · projects may override", "完成通知器 · 仅支持绿色/红色 · 项目设置可覆盖", "完成通知程式 · 僅支援綠色/紅色 · 專案設定可覆寫", "完了通知 · 緑/赤のみ · プロジェクト設定が優先される場合あり"),
+    ("agent_grok_integration_note", "Native lifecycle hooks · restart Grok after install", "原生生命周期钩子 · 安装后重启 Grok", "原生命週期掛鉤 · 安裝後重啟 Grok", "ネイティブライフサイクルフック · インストール後に Grok を再起動"),
+    ("agent_octoscode_integration_note", "Octos server hooks · working and completion states", "Octos 服务端钩子 · 支持运行和完成状态", "Octos 伺服器端掛鉤 · 支援執行和完成狀態", "Octos サーバーフック · 実行中と完了状態"),
     ("integration_not_installed", "Not installed", "未安装", "尚未安裝", "未インストール"),
     ("integration_installed", "Configured", "已配置", "已設定", "設定済み"),
     ("integration_needs_update", "Needs update", "需要更新", "需要更新", "更新が必要"),

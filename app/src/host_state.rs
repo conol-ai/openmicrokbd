@@ -12,7 +12,7 @@ use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use crate::actions;
-use crate::config::{self, Action, AppConfig, Profile, SLOT_COUNT};
+use crate::config::{self, Action, AppConfig, LedPattern, Profile, SLOT_COUNT};
 use crate::device::{DeviceCmd, DeviceMsg, PadEvent, UpdateMsg};
 use crate::events::AppEvent;
 use crate::intercept::Intercept;
@@ -36,6 +36,24 @@ pub const MOMENTARY_RELEASE_DELAY: Duration = Duration::from_millis(250);
 const LOG_LIMIT: usize = 8;
 const TERMINAL_LED_TTL: Duration = Duration::from_secs(4);
 const ACTIVE_LED_TTL: Duration = Duration::from_secs(30 * 60);
+const AGENT_LED_INDICES: [u8; 4] = [2, 3, 4, 5];
+const AGENT_NAMESPACES: [&str; 4] = ["claude-code:", "codex:", "grok:", "octoscode:"];
+
+fn pattern_rgb(pattern: LedPattern) -> (u8, u8, u8) {
+    match pattern {
+        LedPattern::Rainbow => (0, 96, 255),
+        LedPattern::White => (255, 255, 255),
+        LedPattern::Solid { r, g, b } => (r, g, b),
+    }
+}
+
+fn supports_agent_leds(version: &str) -> bool {
+    let mut parts = version.split('.').filter_map(|part| part.parse::<u32>().ok());
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(major), Some(minor), Some(_)) => major > 0 || minor >= 7,
+        _ => false,
+    }
+}
 
 #[derive(Clone, Debug)]
 struct SessionActivity {
@@ -79,6 +97,8 @@ pub struct HostState {
     /// It is deliberately separate from the persisted LED configuration.
     activities: HashMap<String, SessionActivity>,
     activity_epoch: u64,
+    activity_led_frame: usize,
+    agent_leds_dirty: bool,
 
     pub intercept: Option<Intercept>,
     pub menubar: Option<Menubar>,
@@ -161,6 +181,8 @@ impl HostState {
             pressed_cells: [false; CELL_COUNT],
             activities: HashMap::new(),
             activity_epoch: 0,
+            activity_led_frame: 0,
+            agent_leds_dirty: false,
             intercept: None,
             menubar: None,
             release: None,
@@ -220,7 +242,7 @@ impl HostState {
     /// Write the active profile and device-wide tuning to pad RAM + flash.
     /// Returns false if the service is unavailable or its command queue shut
     /// down before accepting the request.
-    pub fn sync_device(&self) -> bool {
+    pub fn sync_device(&mut self) -> bool {
         let Some(tx) = &self.device_tx else {
             return false;
         };
@@ -453,6 +475,7 @@ impl HostState {
                 });
             }
         }
+        self.activity_led_frame = 0;
         self.refresh_activity_led();
     }
 
@@ -482,19 +505,93 @@ impl HostState {
 
     /// Re-apply the current transient status after a status-colour setting
     /// changes. When idle this simply restores the configured idle patterns.
-    pub fn refresh_activity_led(&self) -> bool {
+    pub fn refresh_activity_led(&mut self) -> bool {
         let Some(tx) = &self.device_tx else {
             return false;
         };
         let status = self.activity_status();
-        let (key_pattern, ambient_pattern) = status
+        let (status_key_pattern, ambient_pattern) = status
             .patterns_with(&self.config.activity_status_colors)
             .unwrap_or((self.config.led_key_pattern, self.config.led_ambient_pattern));
-        tx.send(DeviceCmd::SetTransientLedPattern {
-            key_pattern,
+        let mapped_active = self
+            .last_conn
+            .as_ref()
+            .is_some_and(|(version, _)| supports_agent_leds(version))
+            && self.activities.keys().any(|id| {
+                AGENT_NAMESPACES
+                    .iter()
+                    .any(|prefix| id.starts_with(prefix))
+            });
+        let mut sent = tx.send(DeviceCmd::SetTransientLedPattern {
+            // Legacy/generic integrations keep the original whole-keyboard
+            // status behavior. The four mapped agents use dedicated keys.
+            key_pattern: if mapped_active {
+                self.config.led_key_pattern
+            } else {
+                status_key_pattern
+            },
             ambient_pattern,
         })
-        .is_ok()
+        .is_ok();
+        if mapped_active || self.agent_leds_dirty {
+            for (agent, index) in AGENT_LED_INDICES.into_iter().enumerate() {
+                let color = self.agent_led_color(agent).map(pattern_rgb);
+                sent &= tx
+                    .send(DeviceCmd::SetKeyLedOverride { index, color })
+                    .is_ok();
+            }
+        }
+        self.agent_leds_dirty = mapped_active;
+        sent
+    }
+
+    /// Advance the deterministic per-agent session carousel by one 300 ms
+    /// frame. A single session stays steady; multiple sessions are separated
+    /// by a short dark frame so repeated colours still reveal their count.
+    pub fn advance_activity_led_frame(&mut self) -> bool {
+        self.activity_led_frame = self.activity_led_frame.wrapping_add(1);
+        self.refresh_activity_led()
+    }
+
+    fn agent_led_color(&self, agent: usize) -> Option<LedPattern> {
+        let prefix = AGENT_NAMESPACES[agent];
+        let mut sessions: Vec<_> = self
+            .activities
+            .iter()
+            .filter(|(id, _)| id.starts_with(prefix))
+            .collect();
+        sessions.sort_by(|(left, _), (right, _)| left.cmp(right));
+        if sessions.is_empty() {
+            return None;
+        }
+        if sessions.len() == 1 {
+            return Some(self.config.activity_status_colors.get(sessions[0].1.status));
+        }
+
+        let overflow = sessions.len() > 4;
+        sessions.truncate(4);
+        let mut frames = Vec::new();
+        for (_, activity) in sessions {
+            let dwell = match activity.status {
+                ActivityStatus::Attention | ActivityStatus::Error => 3,
+                _ => 2,
+            };
+            frames.extend(std::iter::repeat_n(Some(activity.status), dwell));
+            frames.push(None);
+        }
+        if overflow {
+            frames.extend([None, None]); // replaced below with purple sentinel
+            let frame = self.activity_led_frame % frames.len();
+            if frame >= frames.len() - 2 {
+                return Some(LedPattern::Solid {
+                    r: 160,
+                    g: 64,
+                    b: 255,
+                });
+            }
+        }
+        frames[self.activity_led_frame % frames.len()]
+            .map(|status| self.config.activity_status_colors.get(status))
     }
 
     fn handle_update(&mut self, message: UpdateMsg) {
@@ -994,6 +1091,79 @@ mod tests {
             begins_turn: false,
         }));
         assert_eq!(host.activity_status(), ActivityStatus::Attention);
+    }
+
+    #[test]
+    fn four_agent_namespaces_drive_the_second_row_leds() {
+        let mut host = state();
+        let (tx, rx) = mpsc::channel();
+        host.device_tx = Some(tx);
+        host.last_conn = Some(("0.7.0".into(), "test".into()));
+        for (session_id, status) in [
+            ("claude-code:a", ActivityStatus::Attention),
+            ("codex:b", ActivityStatus::Working),
+            ("grok:c", ActivityStatus::Success),
+            ("octoscode:d", ActivityStatus::Error),
+        ] {
+            host.handle_event(AppEvent::Activity(ActivityEvent {
+                session_id: session_id.into(),
+                turn_id: None,
+                status,
+                begins_turn: true,
+            }));
+            while rx.try_recv().is_ok() {}
+        }
+
+        host.refresh_activity_led();
+        assert!(matches!(
+            rx.recv().unwrap(),
+            DeviceCmd::SetTransientLedPattern { .. }
+        ));
+        let expected = [
+            (2, Some((255, 150, 0))),
+            (3, Some((0, 96, 255))),
+            (4, Some((0, 210, 90))),
+            (5, Some((255, 30, 50))),
+        ];
+        for (index, color) in expected {
+            match rx.recv().unwrap() {
+                DeviceCmd::SetKeyLedOverride {
+                    index: actual,
+                    color: actual_color,
+                } => {
+                    assert_eq!(actual, index);
+                    assert_eq!(actual_color, color);
+                }
+                _ => panic!("unexpected agent LED command"),
+            }
+        }
+    }
+
+    #[test]
+    fn multiple_sessions_cycle_with_dark_separators() {
+        let mut host = state();
+        for (id, status) in [
+            ("codex:a", ActivityStatus::Working),
+            ("codex:b", ActivityStatus::Attention),
+        ] {
+            host.handle_event(AppEvent::Activity(ActivityEvent {
+                session_id: id.into(),
+                turn_id: None,
+                status,
+                begins_turn: true,
+            }));
+        }
+        let frames: Vec<_> = (0..7)
+            .map(|frame| {
+                host.activity_led_frame = frame;
+                host.agent_led_color(1)
+            })
+            .collect();
+        assert_eq!(frames[0], Some(host.config.activity_status_colors.working));
+        assert_eq!(frames[1], Some(host.config.activity_status_colors.working));
+        assert_eq!(frames[2], None);
+        assert_eq!(frames[3], Some(host.config.activity_status_colors.attention));
+        assert_eq!(frames[6], None);
     }
 
     #[test]
