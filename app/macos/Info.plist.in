@@ -8,6 +8,8 @@
     <string>OpenMicro</string>
     <key>CFBundleExecutable</key>
     <string>OpenMicro</string>
+    <key>CFBundleIconFile</key>
+    <string>OpenMicro</string>
     <key>CFBundleIdentifier</key>
     <string>org.openmicrokbd.OpenMicro</string>
     <key>CFBundleInfoDictionaryVersion</key>

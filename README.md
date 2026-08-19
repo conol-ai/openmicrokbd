@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="site/public/assets/wordmark-dark.png">
+  <img src="site/public/assets/wordmark-light.png" alt="openmicrokbd" width="560">
+</picture>
+
 # OpenMicroKbd
 
 An open-source hardware recreation of OpenAI's **Codex Micro** macropad — 13 low-profile keys, a rotary encoder, an analog joystick, a capacitive touch pad, and per-key + underglow RGB on a wired USB-C board built around an STM32F072.

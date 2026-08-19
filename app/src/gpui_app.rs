@@ -10,10 +10,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
-    div, point, prelude::*, px, relative, size, svg, AnyElement, App, Application, Bounds,
-    Context, Div, Entity, Hsla, InteractiveElement, IntoElement, KeyBinding, KeyDownEvent, Menu,
-    MenuItem, ParentElement, PathPromptOptions, Render, ScrollHandle, SharedString, Styled,
-    Subscription, Timer, Window, WindowAppearance, WindowBounds, WindowOptions,
+    div, img, point, prelude::*, px, relative, size, svg, AnyElement, App, Application, Bounds,
+    Context, Div, Entity, Hsla, Image, ImageFormat, InteractiveElement, IntoElement, KeyBinding,
+    KeyDownEvent, Menu, MenuItem, ParentElement, PathPromptOptions, Render, ScrollHandle,
+    SharedString, Styled, Subscription, Timer, Window, WindowAppearance, WindowBounds,
+    WindowOptions,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
@@ -753,25 +754,19 @@ fn chrome_icon_button(name: &str) -> Div {
         .child(icon_glyph(name))
 }
 
-fn logo_mark() -> Div {
-    let pip = |lit| {
-        div().w(px(5.)).h(px(5.)).bg(if lit {
-            pixel::accent_color()
-        } else {
-            pixel::border_highlight_color()
+fn logo_mark() -> impl IntoElement {
+    // The brand mark: the gradient µ keycap, embedded so the binary stays
+    // self-contained (no bundle-relative asset lookup on any platform).
+    static LOGO: std::sync::OnceLock<std::sync::Arc<Image>> = std::sync::OnceLock::new();
+    let logo = LOGO
+        .get_or_init(|| {
+            std::sync::Arc::new(Image::from_bytes(
+                ImageFormat::Png,
+                include_bytes!("../resources/logo-64.png").to_vec(),
+            ))
         })
-    };
-    div()
-        .w(px(20.))
-        .h(px(20.))
-        .p(px(3.))
-        .flex()
-        .flex_col()
-        .gap(px(2.))
-        .bg(pixel::accent_soft_color())
-        .rounded(px(2.))
-        .child(div().flex().gap(px(2.)).child(pip(false)).child(pip(false)))
-        .child(div().flex().gap(px(2.)).child(pip(false)).child(pip(true)))
+        .clone();
+    img(logo).w(px(20.)).h(px(20.))
 }
 
 pub struct OpenMicro {

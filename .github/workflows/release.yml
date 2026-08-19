@@ -342,6 +342,7 @@ jobs:
           test -x "$EXECUTABLE"
           test -f "$EMBEDDED_FIRMWARE"
           test -f "$EMBEDDED_MANIFEST"
+          test -f "$RESOURCES/OpenMicro.icns"
           test -f "$RESOURCES/licenses/SimpleIcons-LICENSE.md"
           test -f "$RESOURCES/licenses/Sparkle-LICENSE.txt"
           test -f "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle"
@@ -497,6 +498,7 @@ jobs:
           test -x "$MOUNT_POINT/OpenMicro.app/Contents/MacOS/OpenMicro"
           test -f "$MOUNT_POINT/OpenMicro.app/Contents/Resources/firmware/openmicro-fw.bin"
           test -f "$MOUNT_POINT/OpenMicro.app/Contents/Resources/firmware/manifest.json"
+          test -f "$MOUNT_POINT/OpenMicro.app/Contents/Resources/OpenMicro.icns"
           test -f "$MOUNT_POINT/OpenMicro.app/Contents/Resources/licenses/SimpleIcons-LICENSE.md"
           test -f "$MOUNT_POINT/OpenMicro.app/Contents/Resources/licenses/Sparkle-LICENSE.txt"
           cleanup_mount

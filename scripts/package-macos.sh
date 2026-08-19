@@ -87,6 +87,7 @@ fi
 
 cp "$REPO_ROOT/app/target/$RUST_TARGET/release/openmicro-app" "$CONTENTS/MacOS/OpenMicro"
 chmod 755 "$CONTENTS/MacOS/OpenMicro"
+cp "$REPO_ROOT/app/macos/OpenMicro.icns" "$RESOURCES/OpenMicro.icns"
 ditto "$SPARKLE_ROOT/Sparkle.framework" "$FRAMEWORKS/Sparkle.framework"
 mkdir -p "$RESOURCES/licenses"
 cp \

@@ -30,47 +30,13 @@ pub struct Menubar {
     tray: Option<TrayIcon>,
 }
 
-/// The tray glyph: the app mark in miniature — a dark rounded square with
-/// four key pips, one lit. Drawn in code so there is no asset to ship.
+/// The tray glyph: the brand mark — the gradient µ keycap from the icon kit,
+/// shipped as pre-decoded 32x32 RGBA so no image decoder is pulled in here.
 fn tray_icon() -> Option<Icon> {
-    const S: usize = 32;
-    let mut rgba = vec![0u8; S * S * 4];
-    let put = |rgba: &mut Vec<u8>, x: usize, y: usize, c: [u8; 4]| {
-        let o = (y * S + x) * 4;
-        rgba[o..o + 4].copy_from_slice(&c);
-    };
-    let plate = [30, 30, 34, 255];
-    let pip = [160, 160, 170, 255];
-    // The tray icon is static across platforms, so use the app's amber
-    // signature rather than a green pip that would falsely imply a live
-    // device connection while the pad is offline.
-    let lit = [242, 170, 76, 255];
-    for y in 0..S {
-        for x in 0..S {
-            // Rounded-square coverage test on the plate.
-            let (fx, fy) = (x as f32 - 15.5, y as f32 - 15.5);
-            let (ax, ay) = (fx.abs() - 9.5, fy.abs() - 9.5);
-            let d = (ax.max(0.0).powi(2) + ay.max(0.0).powi(2)).sqrt()
-                + ax.min(0.0).max(ay.min(0.0))
-                - 5.0;
-            if d < 0.0 {
-                put(&mut rgba, x, y, plate);
-            }
-        }
-    }
-    for (cx, cy, c) in [
-        (11usize, 11usize, pip),
-        (20, 11, pip),
-        (11, 20, pip),
-        (20, 20, lit),
-    ] {
-        for dy in 0..4 {
-            for dx in 0..4 {
-                put(&mut rgba, cx - 1 + dx, cy - 1 + dy, c);
-            }
-        }
-    }
-    Icon::from_rgba(rgba, S as u32, S as u32).ok()
+    const S: u32 = 32;
+    const RGBA: &[u8] = include_bytes!("../resources/tray-icon-32.rgba");
+    debug_assert_eq!(RGBA.len(), (S * S * 4) as usize);
+    Icon::from_rgba(RGBA.to_vec(), S, S).ok()
 }
 
 impl Menubar {

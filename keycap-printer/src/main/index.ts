@@ -1,5 +1,6 @@
-import { app, BrowserWindow, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, ipcMain, nativeImage, shell, type IpcMainInvokeEvent } from "electron";
 import { join } from "node:path";
+import appIcon from "../../resources/icon.png?asset";
 import { NativeLaserController } from "./laser-controller";
 import { isEngraveJobData, LASER_CHANNELS, type LaserEvent } from "../shared/laser";
 
@@ -93,6 +94,7 @@ function createWindow(): void {
     minHeight: 720,
     show: false,
     title: "Keycap Printer",
+    icon: appIcon,
     backgroundColor: "#f4f6f8",
     webPreferences: {
       contextIsolation: true,
@@ -131,6 +133,9 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  // BrowserWindow.icon covers Windows/Linux; macOS takes the dock icon here
+  // (the tool runs unpackaged, so there is no app bundle to supply one).
+  app.dock?.setIcon(nativeImage.createFromPath(appIcon));
   registerLaserIpc();
   createWindow();
   app.on("activate", () => {
