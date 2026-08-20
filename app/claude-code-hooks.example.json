@@ -5,8 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
-            "args": ["agent-hook", "claude-code"],
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook claude-code",
             "timeout": 2
           }
         ]
@@ -17,8 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
-            "args": ["agent-hook", "claude-code"],
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook claude-code",
             "timeout": 2
           }
         ]
@@ -30,8 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
-            "args": ["agent-hook", "claude-code"],
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook claude-code",
             "timeout": 2
           }
         ]
@@ -42,8 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
-            "args": ["agent-hook", "claude-code"],
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook claude-code",
             "timeout": 2
           }
         ]
@@ -54,8 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
-            "args": ["agent-hook", "claude-code"],
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook claude-code",
             "timeout": 2
           }
         ]
@@ -66,8 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
-            "args": ["agent-hook", "claude-code"],
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook claude-code",
             "timeout": 2
           }
         ]
@@ -78,8 +72,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
-            "args": ["agent-hook", "claude-code"],
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook claude-code",
             "timeout": 2
           }
         ]
@@ -90,8 +83,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
-            "args": ["agent-hook", "claude-code"],
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook claude-code",
             "timeout": 2
           }
         ]
@@ -103,8 +95,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
-            "args": ["agent-hook", "claude-code"],
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook claude-code",
             "timeout": 2
           }
         ]
@@ -115,8 +106,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
-            "args": ["agent-hook", "claude-code"],
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook claude-code",
             "timeout": 2
           }
         ]
@@ -127,8 +117,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
-            "args": ["agent-hook", "claude-code"],
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook claude-code",
             "timeout": 2
           }
         ]
@@ -139,8 +128,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro",
-            "args": ["agent-hook", "claude-code"],
+            "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook claude-code",
             "timeout": 2
           }
         ]

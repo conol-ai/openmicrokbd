@@ -814,8 +814,22 @@ fn desired_hooks(
                             Value::String(format!("{} agent-hook codex", shell_word(executable))),
                         );
                     }
-                    IntegrationKind::ClaudeCode | IntegrationKind::Grok => {
-                        object.insert("command".into(), Value::String(executable.into()));
+                    IntegrationKind::ClaudeCode => {
+                        object.insert(
+                            "command".into(),
+                            Value::String(format!(
+                                "{} agent-hook claude-code",
+                                shell_word(executable)
+                            )),
+                        );
+                        object.remove("args");
+                    }
+                    IntegrationKind::Grok => {
+                        object.insert(
+                            "command".into(),
+                            Value::String(format!("{} agent-hook grok", shell_word(executable))),
+                        );
+                        object.remove("args");
                     }
                     _ => unreachable!(),
                 }
@@ -1632,7 +1646,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_install_uses_exec_form_and_quotes_nothing_in_the_path_field() {
+    fn claude_install_uses_a_complete_shell_command() {
         let root = TestDir::new();
         let layout = layout_in(&root);
         fs::create_dir_all(layout.claude_settings.parent().unwrap()).unwrap();
@@ -1646,9 +1660,15 @@ mod tests {
         let installed: Value =
             serde_json::from_slice(&fs::read(&layout.claude_settings).unwrap()).unwrap();
         assert_eq!(installed["permissions"]["allow"][0], "Read");
-        let serialized = serde_json::to_string(&installed).unwrap();
-        assert!(serialized.contains(path_text(&layout.executable).unwrap()));
-        assert!(serialized.contains("claude-code"));
+        let command = &installed["hooks"]["UserPromptSubmit"][0]["hooks"][0];
+        assert_eq!(
+            command["command"],
+            format!(
+                "{} agent-hook claude-code",
+                shell_word(path_text(&layout.executable).unwrap())
+            )
+        );
+        assert!(command.get("args").is_none());
         assert!(installed["hooks"]["Stop"]
             .as_array()
             .unwrap()
@@ -1669,7 +1689,16 @@ mod tests {
         let installed = fs::read_to_string(&layout.grok_hooks).unwrap();
         assert!(installed.contains("agent-hook"));
         assert!(installed.contains("grok"));
-        assert!(installed.contains(path_text(&layout.executable).unwrap()));
+        let installed: Value = serde_json::from_str(&installed).unwrap();
+        let command = &installed["hooks"]["UserPromptSubmit"][0]["hooks"][0];
+        assert_eq!(
+            command["command"],
+            format!(
+                "{} agent-hook grok",
+                shell_word(path_text(&layout.executable).unwrap())
+            )
+        );
+        assert!(command.get("args").is_none());
     }
 
     #[test]

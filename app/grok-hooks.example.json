@@ -1,11 +1,11 @@
 {
   "hooks": {
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro", "args": ["agent-hook", "grok"], "timeout": 2 }] }],
-    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro", "args": ["agent-hook", "grok"], "timeout": 2 }] }],
-    "Notification": [{ "matcher": "idle_prompt|permission_prompt", "hooks": [{ "type": "command", "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro", "args": ["agent-hook", "grok"], "timeout": 2 }] }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro", "args": ["agent-hook", "grok"], "timeout": 2 }] }],
-    "StopFailure": [{ "hooks": [{ "type": "command", "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro", "args": ["agent-hook", "grok"], "timeout": 2 }] }],
-    "StopCancelled": [{ "hooks": [{ "type": "command", "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro", "args": ["agent-hook", "grok"], "timeout": 2 }] }],
-    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro", "args": ["agent-hook", "grok"], "timeout": 2 }] }]
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook grok", "timeout": 2 }] }],
+    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook grok", "timeout": 2 }] }],
+    "Notification": [{ "matcher": "idle_prompt|permission_prompt", "hooks": [{ "type": "command", "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook grok", "timeout": 2 }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook grok", "timeout": 2 }] }],
+    "StopFailure": [{ "hooks": [{ "type": "command", "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook grok", "timeout": 2 }] }],
+    "StopCancelled": [{ "hooks": [{ "type": "command", "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook grok", "timeout": 2 }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro agent-hook grok", "timeout": 2 }] }]
   }
 }
