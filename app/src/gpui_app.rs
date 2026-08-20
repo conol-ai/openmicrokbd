@@ -12,7 +12,7 @@ use std::time::Duration;
 use gpui::{
     div, img, point, prelude::*, px, relative, size, svg, AnyElement, App, Application, Bounds,
     Context, Div, Entity, Hsla, Image, ImageFormat, InteractiveElement, IntoElement, KeyBinding,
-    KeyDownEvent, Menu, MenuItem, ParentElement, PathPromptOptions, Render, ScrollHandle,
+    KeyDownEvent, Menu, MenuItem, MouseButton, ParentElement, PathPromptOptions, Render, ScrollHandle,
     SharedString, Styled, Subscription, Timer, Window, WindowAppearance, WindowBounds,
     WindowOptions,
 };
@@ -2372,7 +2372,7 @@ impl OpenMicro {
         cx.notify();
     }
 
-    fn render_header(&self, cx: &mut Context<Self>) -> TitleBar {
+    fn render_header(&self, cx: &mut Context<Self>) -> AnyElement {
         let profile = self.host.active_profile().name.clone();
         let (connection, connection_color) = if self.host.connected {
             (tr("connected"), pixel::success_color())
@@ -2380,12 +2380,7 @@ impl OpenMicro {
             (tr("editing_offline"), pixel::dim_text_color())
         };
 
-        TitleBar::new()
-            .pr(px(10.))
-            .bg(pixel::panel_color())
-            .border_color(pixel::border_color())
-            .child(
-                div()
+        let content = div()
                     .w_full()
                     .h_full()
                     .flex()
@@ -2466,8 +2461,43 @@ impl OpenMicro {
                             this.sheet = Sheet::Settings;
                             cx.notify();
                         }),
-                    )),
-            )
+                    ))
+                    .when(cfg!(target_os = "linux"), |header| {
+                        header.child(
+                            tiny_button(tr("hide_dashboard"))
+                                .id("hide-dashboard")
+                                .h(px(26.))
+                                .text_color(pixel::text_color())
+                                .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                                    window.prevent_default();
+                                    cx.stop_propagation();
+                                })
+                                .on_click(|_, window, cx| {
+                                    cx.stop_propagation();
+                                    #[cfg(target_os = "linux")]
+                                    hide_linux_window(window);
+                                }),
+                        )
+                    });
+
+        #[cfg(target_os = "linux")]
+        return div()
+            .h(px(34.))
+            .flex_shrink_0()
+            .pr(px(10.))
+            .bg(pixel::panel_color())
+            .border_b_1()
+            .border_color(pixel::border_color())
+            .child(content)
+            .into_any_element();
+
+        #[cfg(not(target_os = "linux"))]
+        TitleBar::new()
+            .pr(px(10.))
+            .bg(pixel::panel_color())
+            .border_color(pixel::border_color())
+            .child(content)
+            .into_any_element()
     }
 
     fn render_banners(&self, cx: &mut Context<Self>) -> Div {
@@ -5047,8 +5077,63 @@ impl Render for OpenMicro {
 fn show_main_window(cx: &mut App) {
     cx.activate(true);
     if let Some(handle) = cx.windows().into_iter().next() {
-        let _ = handle.update(cx, |_, window, _| window.activate_window());
+        let _ = handle.update(cx, |_, window, _| {
+            #[cfg(target_os = "linux")]
+            show_linux_window();
+            window.activate_window();
+        });
     }
+}
+
+#[cfg(target_os = "linux")]
+fn hyprland_eval(code: String) -> bool {
+    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none() {
+        eprintln!("openmicro window: Hyprland environment is unavailable");
+        return false;
+    }
+    match std::process::Command::new("hyprctl")
+        .args(["eval", &code])
+        .output()
+    {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let succeeded = output.status.success() && stdout.trim() == "ok";
+            if !succeeded {
+                eprintln!(
+                    "openmicro window: hyprctl status={} stdout={:?} stderr={:?}",
+                    output.status,
+                    stdout.trim(),
+                    stderr.trim()
+                );
+            }
+            succeeded
+        }
+        Err(error) => {
+            eprintln!("openmicro window: failed to execute hyprctl: {error}");
+            false
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn hide_linux_window(window: &mut Window) {
+    let code = format!(
+        "hl.dispatch(hl.dsp.window.move({{ workspace = \"special:openmicro\", window = \"pid:{}\", follow = false }}))",
+        std::process::id()
+    );
+    if !hyprland_eval(code) {
+        window.minimize_window();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn show_linux_window() {
+    let code = format!(
+        "local w=\"pid:{}\"; hl.dispatch(hl.dsp.window.move({{ workspace = hl.get_active_workspace(), window = w }})); hl.dispatch(hl.dsp.focus({{ window = w }}))",
+        std::process::id()
+    );
+    let _ = hyprland_eval(code);
 }
 
 pub fn run() {
@@ -5083,16 +5168,28 @@ pub fn run() {
                 window.on_window_should_close(cx, |_window, _cx| {
                     #[cfg(target_os = "macos")]
                     _cx.hide();
-                    #[cfg(not(target_os = "macos"))]
+                    #[cfg(target_os = "linux")]
+                    hide_linux_window(_window);
+                    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                     _window.minimize_window();
                     false
                 });
+                // Linux compositors ignore a minimize request made before the
+                // surface is mapped. Waiting for the first rendered frame
+                // makes tray-only startup reliable under Hyprland/Wayland.
+                #[cfg(target_os = "linux")]
+                window.on_next_frame(|window, _| hide_linux_window(window));
+                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                window.on_next_frame(|window, _| window.minimize_window());
                 let view = cx.new(|cx| OpenMicro::new(window, cx));
                 cx.new(|cx| Root::new(view, window, cx))
             },
         )
         .expect("failed to open the OpenMicro window");
-        cx.activate(true);
+        // OpenMicro is a resident companion. Start unobtrusively in the tray;
+        // the Dashboard menu item (or an app-specific action) restores it.
+        #[cfg(target_os = "macos")]
+        cx.hide();
     });
 }
 
