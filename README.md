@@ -62,6 +62,9 @@ Rebuilding a PCB from `hw/*/src/` requires the CoHDL compiler, which is being pr
 Signed releases build both Intel and Apple Silicon DMGs plus firmware through
 GitHub Actions. See [`RELEASING.md`](RELEASING.md) for versioning, Apple
 signing/notarization secrets, the required device smoke test, and the tag flow.
+Linux packaging, USB permissions, and the STM32F072 ROM-DFU host-controller
+workaround are tracked in
+[`docs/linux-firmware-updates.md`](docs/linux-firmware-updates.md).
 
 ## Production files
 
