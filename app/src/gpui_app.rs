@@ -5074,6 +5074,10 @@ impl Render for OpenMicro {
     }
 }
 
+fn should_hide_dashboard_on_start(show_menubar: bool, menubar_available: bool) -> bool {
+    show_menubar && menubar_available
+}
+
 fn show_main_window(cx: &mut App) {
     cx.activate(true);
     if let Some(handle) = cx.windows().into_iter().next() {
@@ -5156,6 +5160,7 @@ pub fn run() {
         )]);
 
         let bounds = Bounds::centered(None, size(px(820.), px(500.)), cx);
+        let mut hide_dashboard_on_start = false;
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -5174,22 +5179,39 @@ pub fn run() {
                     _window.minimize_window();
                     false
                 });
-                // Linux compositors ignore a minimize request made before the
-                // surface is mapped. Waiting for the first rendered frame
-                // makes tray-only startup reliable under Hyprland/Wayland.
-                #[cfg(target_os = "linux")]
-                window.on_next_frame(|window, _| hide_linux_window(window));
-                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-                window.on_next_frame(|window, _| window.minimize_window());
                 let view = cx.new(|cx| OpenMicro::new(window, cx));
+                hide_dashboard_on_start = {
+                    let state = &view.read(cx).host;
+                    should_hide_dashboard_on_start(
+                        state.config.show_menubar,
+                        state
+                            .menubar
+                            .as_ref()
+                            .is_some_and(|menubar| menubar.available()),
+                    )
+                };
+                if hide_dashboard_on_start {
+                    // Linux compositors ignore a minimize request made before
+                    // the surface is mapped. Waiting for the first rendered
+                    // frame makes tray-only startup reliable under
+                    // Hyprland/Wayland.
+                    #[cfg(target_os = "linux")]
+                    window.on_next_frame(|window, _| hide_linux_window(window));
+                    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                    window.on_next_frame(|window, _| window.minimize_window());
+                }
                 cx.new(|cx| Root::new(view, window, cx))
             },
         )
         .expect("failed to open the OpenMicro window");
-        // OpenMicro is a resident companion. Start unobtrusively in the tray;
-        // the Dashboard menu item (or an app-specific action) restores it.
-        #[cfg(target_os = "macos")]
-        cx.hide();
+        // Tray-only startup is safe only when the configured tray was created.
+        // Otherwise keep the dashboard visible so the app stays recoverable.
+        if hide_dashboard_on_start {
+            #[cfg(target_os = "macos")]
+            cx.hide();
+        } else {
+            cx.activate(true);
+        }
     });
 }
 
@@ -5197,6 +5219,14 @@ pub fn run() {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn startup_hides_dashboard_only_for_an_enabled_available_menubar() {
+        assert!(!should_hide_dashboard_on_start(false, false));
+        assert!(!should_hide_dashboard_on_start(false, true));
+        assert!(!should_hide_dashboard_on_start(true, false));
+        assert!(should_hide_dashboard_on_start(true, true));
+    }
 
     #[test]
     fn theme_resolution_tracks_system_or_honors_a_pinned_choice() {
