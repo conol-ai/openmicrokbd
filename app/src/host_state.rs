@@ -143,6 +143,14 @@ impl HostState {
         {
             let mut state = Self::detached(config::load());
             state.persist_to_disk = true;
+            // A profile written by an older build can sit on a trigger this
+            // build no longer allows -- the macOS brightness keys F14/F15,
+            // say, which fire their action *and* move the screen brightness.
+            // Re-home those before the hotkey layer or the pad sees the
+            // profile, and write the corrected config straight back.
+            if state.rehome_stale_triggers() {
+                let _ = config::save(&state.config);
+            }
 
             crate::status_ipc::spawn_listener();
 
@@ -213,6 +221,25 @@ impl HostState {
 
     pub fn active_profile_mut(&mut self) -> &mut Profile {
         &mut self.config.profiles[self.config.active_profile]
+    }
+
+    /// Re-run the hidden-trigger allocator over every profile. Returns true
+    /// if any binding moved, so startup knows whether the config needs
+    /// rewriting; the allocator is idempotent, so a healthy config is a
+    /// no-op and leaves the file alone.
+    pub fn rehome_stale_triggers(&mut self) -> bool {
+        let mut moved = false;
+        for profile in &mut self.config.profiles {
+
+            let before: Vec<_> = profile.inputs.iter().map(|input| input.emitted).collect();
+            crate::behaviors::normalize_hidden_triggers(profile);
+            moved |= profile
+                .inputs
+                .iter()
+                .zip(&before)
+                .any(|(input, was)| input.emitted != *was);
+        }
+        moved
     }
 
     /// Save configuration and re-derive platform integrations from the

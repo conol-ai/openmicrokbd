@@ -699,11 +699,6 @@ pub const MACOS_PRESETS: &[MacOsPreset] = &[
         "Open or close Spotlight.",
     ),
     macos(
-        MacOsControl::Dictation,
-        "Dictation",
-        "Start or stop macOS Dictation.",
-    ),
-    macos(
         MacOsControl::Globe,
         "Globe / Fn",
         "Use the native Globe key for input switching and Globe shortcuts.",
@@ -809,6 +804,8 @@ pub fn apply_macos(input: &mut InputConfig, slot_index: usize, command: MacOsCon
         // The documented macOS default. Users can remap Spotlight in System
         // Settings, just like any other keyboard shortcut.
         MacOsControl::Search => (keyboard_slot(0x08, 0x2C), Action::None),
+        // Kept only so profiles saved before Dictation was withdrawn still
+        // load. macOS never dispatches this usage, so the slot is inert.
         MacOsControl::Dictation => (consumer_slot(0x00D8), Action::None),
         // Apple's accessory keyboard specification assigns the native Globe
         // key to Consumer-page AC Keyboard Layout Select (0x029D).
@@ -912,18 +909,33 @@ fn is_host_assisted(input: &InputConfig) -> bool {
     )
 }
 
+/// Keyboard usages a host-assisted trigger may use: F13 and F16-F20.
+///
+/// F14/F15 (0x69/0x6A) are deliberately absent. macOS acts on those two as
+/// the display-brightness keys down in the HID layer, *below* the hotkey
+/// registry, so grabbing one in intercept.rs does not stop the screen from
+/// dimming: the bound action fires and the brightness moves too. Six codes
+/// across the sixteen modifier banks still cover every slot several times.
+const TRIGGER_CODES: [u16; 6] = [0x68, 0x6B, 0x6C, 0x6D, 0x6E, 0x6F];
+
+/// Modifier banks for host-assisted triggers, in allocation order: bare
+/// first, then the combinations a user is least likely to type by hand.
+const MOD_BANKS: [u8; 16] = [
+    0x00, 0x02, 0x03, 0x01, 0x04, 0x08, 0x06, 0x0A, 0x0C, 0x05, 0x09, 0x07, 0x0B, 0x0D, 0x0E, 0x0F,
+];
+
 fn hidden_trigger(slot: Slot) -> bool {
-    slot.kind == SlotKind::Keyboard && (0x68..=0x6F).contains(&slot.code) && slot.mods & 0xF0 == 0
+    slot.kind == SlotKind::Keyboard
+        && TRIGGER_CODES.contains(&slot.code)
+        && slot.mods & 0xF0 == 0
 }
 
 fn hidden_trigger_candidates() -> impl Iterator<Item = Slot> {
-    const MOD_BANKS: [u8; 16] = [
-        0x00, 0x02, 0x03, 0x01, 0x04, 0x08, 0x06, 0x0A, 0x0C, 0x05, 0x09, 0x07, 0x0B, 0x0D, 0x0E,
-        0x0F,
-    ];
-    MOD_BANKS
-        .into_iter()
-        .flat_map(|mods| (0x68..=0x6F).map(move |code| keyboard_slot(mods, code)))
+    MOD_BANKS.into_iter().flat_map(|mods| {
+        TRIGGER_CODES
+            .into_iter()
+            .map(move |code| keyboard_slot(mods, code))
+    })
 }
 
 fn keyboard_slot(mods: u8, key: u16) -> Slot {
@@ -942,13 +954,14 @@ fn consumer_slot(code: u16) -> Slot {
     }
 }
 
-/// A unique, non-printing chord for host-assisted behavior. There are eight
-/// F13–F20 keys in each modifier bank, enough to cover all 24 input slots.
+/// A unique, non-printing chord for host-assisted behavior, drawn from
+/// `TRIGGER_CODES` x `MOD_BANKS` so every one of the 24 input slots gets
+/// a distinct chord the OS will not act on by itself.
 fn host_trigger(slot_index: usize) -> Slot {
-    const BANK_MODS: [u8; 3] = [0x00, 0x02, 0x03];
+    let bank = (slot_index / TRIGGER_CODES.len()).min(MOD_BANKS.len() - 1);
     keyboard_slot(
-        BANK_MODS[(slot_index / 8).min(2)],
-        0x68 + (slot_index % 8) as u16,
+        MOD_BANKS[bank],
+        TRIGGER_CODES[slot_index % TRIGGER_CODES.len()],
     )
 }
 
@@ -1246,6 +1259,66 @@ mod tests {
             })
         );
         assert!(behavior_is_consistent(&input, 4));
+    }
+
+    #[test]
+    fn host_triggers_avoid_the_macos_brightness_keys() {
+        // F14/F15 reach the OS as brightness down/up on macOS even when the
+        // hotkey layer grabs them, so no host-assisted binding may land there.
+        for slot_index in 0..crate::config::SLOT_COUNT {
+            let slot = host_trigger(slot_index);
+            assert!(
+                slot.code != 0x69 && slot.code != 0x6A,
+                "slot {slot_index} allocated brightness key 0x{:02X}",
+                slot.code
+            );
+            assert!(
+                hidden_trigger(slot),
+                "slot {slot_index} is not a valid trigger"
+            );
+        }
+        assert!(hidden_trigger_candidates().all(|s| s.code != 0x69 && s.code != 0x6A));
+        // A profile already sitting on F14/F15 must no longer count as valid,
+        // so normalize_hidden_triggers re-homes it.
+        assert!(!hidden_trigger(keyboard_slot(0x00, 0x69)));
+        assert!(!hidden_trigger(keyboard_slot(0x02, 0x6A)));
+    }
+
+    #[test]
+    fn host_triggers_are_distinct_across_every_slot() {
+        let mut seen = HashSet::new();
+        for slot_index in 0..crate::config::SLOT_COUNT {
+            let slot = host_trigger(slot_index);
+            assert!(
+                seen.insert((slot.mods, slot.code)),
+                "slot {slot_index} reuses another slot's trigger"
+            );
+        }
+    }
+
+    #[test]
+    fn an_f14_app_binding_is_rehomed_off_the_brightness_key() {
+        let mut profile = default_codex_profile();
+        apply_app(
+            &mut profile.inputs[1],
+            1,
+            "/Applications/Conol.app".to_string(),
+        );
+        // A profile saved by an older build put slot 1 on plain F14.
+        profile.inputs[1].emitted = keyboard_slot(0x00, 0x69);
+
+        normalize_hidden_triggers(&mut profile);
+
+        let moved = profile.inputs[1].emitted;
+        assert_ne!(moved, keyboard_slot(0x00, 0x69));
+        assert!(hidden_trigger(moved));
+        assert_eq!(
+            profile.inputs[1].action,
+            Action::Open {
+                target: "/Applications/Conol.app".to_string()
+            }
+        );
+        assert!(behavior_is_consistent(&profile.inputs[1], 1));
     }
 
     #[test]
