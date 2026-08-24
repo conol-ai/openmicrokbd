@@ -372,6 +372,7 @@ pub const STRINGS: &[(&str, &str, &str, &str, &str)] = &[
     ("pat_pink", "Pink", "粉色", "粉色", "ピンク"),
     ("mb_open", "Dashboard", "仪表板", "儀表板", "ダッシュボード"),
     ("mb_quit", "Quit OpenMicro", "退出 OpenMicro", "結束 OpenMicro", "OpenMicro を終了"),
+    ("mb_check_updates", "Check for Updates…", "检查更新…", "檢查更新…", "アップデートを確認…"),
     ("choose_icon", "Choose icon…", "选择图标…", "選擇圖示…", "アイコンを選択…"),
     ("short_label", "Short label", "短标签", "短標籤", "短いラベル"),
     ("language_eyebrow", "LANGUAGE", "语言", "語言", "言語"),

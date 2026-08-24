@@ -45,7 +45,7 @@ use crate::status::ActivityStatus;
 
 // Quit is a real GPUI action (not just a tray menu id) so macOS gives it the
 // standard Cmd+Q route: app menu item + global key binding, wired in run().
-gpui::actions!(openmicro, [Quit]);
+gpui::actions!(openmicro, [Quit, CheckForUpdates]);
 
 const CELL_ENCODER: usize = 13;
 const CELL_JOYSTICK: usize = 14;
@@ -1021,6 +1021,19 @@ impl OpenMicro {
             });
         })
         .detach();
+    }
+
+    /// The app-menu "Check for Updates…" action. Refreshes the release
+    /// catalog so the banner reflects the newest version (even if it was
+    /// dismissed), and on signed builds also opens Sparkle's own check UI,
+    /// which reports "you're up to date" itself.
+    fn check_for_updates_from_menu(&mut self, cx: &mut Context<Self>) {
+        self.host.app_banner_dismissed = false;
+        release::spawn_catalog_check();
+        if self.app_updater.can_check_for_updates() {
+            self.begin_sparkle_update(cx);
+        }
+        cx.notify();
     }
 
     fn begin_sparkle_update(&mut self, cx: &mut Context<Self>) {
@@ -5150,10 +5163,17 @@ pub fn run() {
         // runs the on_app_quit hook, which saves the config like the tray's
         // Quit does.
         cx.on_action(|_: &Quit, cx| cx.quit());
+        let main_view: std::rc::Rc<std::cell::RefCell<Option<Entity<OpenMicro>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let main_view_for_action = main_view.clone();
         cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
         cx.set_menus(vec![Menu {
             name: "OpenMicro".into(),
-            items: vec![MenuItem::action(tr("mb_quit"), Quit)],
+            items: vec![
+                MenuItem::action(tr("mb_check_updates"), CheckForUpdates),
+                MenuItem::separator(),
+                MenuItem::action(tr("mb_quit"), Quit),
+            ],
         }]);
         let _ = cx.text_system().add_fonts(vec![Cow::Borrowed(
             &include_bytes!("../resources/lucide.ttf")[..],
@@ -5200,10 +5220,19 @@ pub fn run() {
                     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                     window.on_next_frame(|window, _| window.minimize_window());
                 }
+                *main_view.borrow_mut() = Some(view.clone());
                 cx.new(|cx| Root::new(view, window, cx))
             },
         )
         .expect("failed to open the OpenMicro window");
+        // The menu action is app-global: the window may be hidden when it
+        // fires, so surface it first and then drive the update check.
+        cx.on_action(move |_: &CheckForUpdates, cx| {
+            show_main_window(cx);
+            if let Some(view) = main_view_for_action.borrow().clone() {
+                view.update(cx, |this, cx| this.check_for_updates_from_menu(cx));
+            }
+        });
         // Tray-only startup is safe only when the configured tray was created.
         // Otherwise keep the dashboard visible so the app stays recoverable.
         if hide_dashboard_on_start {
