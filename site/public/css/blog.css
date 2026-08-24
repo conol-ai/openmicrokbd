@@ -122,6 +122,14 @@ html[data-theme="night"] .post-body h2 { text-shadow: 2px 2px 0 rgba(0,0,0,.5); 
 
 /* pull quotes: sun-edged pixel banner */
 .post-body blockquote { margin: 0 0 1.4em; }
+.post-update {
+  margin: 0 0 1.6em; padding: 16px 20px;
+  background: var(--panel-2); color: var(--ink-soft);
+  border-left: 6px solid var(--good);
+  box-shadow: 0 0 0 var(--px) var(--panel-edge-2), var(--px) var(--px) 0 0 rgba(0,0,0,.14);
+  transition: background-color var(--t-theme) var(--ease), box-shadow var(--t-theme) var(--ease);
+}
+.post-update strong { color: var(--ink); }
 blockquote.pullquote {
   background: var(--panel);
   border-left: 6px solid var(--sun);

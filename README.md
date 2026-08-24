@@ -11,15 +11,15 @@ An open-source hardware recreation of OpenAI's **Codex Micro** macropad — 13 l
 
 *The finished board — read the [launch post](https://openmicrokbd.org/blog/openmicrokbd-launch/) for the full story.*
 
-**The PCB is written, not drawn.** The entire schematic is source code in **CoHDL**, a new AI-native hardware description language (see below). The compiler type-checks the design — units, pin-connection obligations, power integrity — and emits the netlist, BOM, footprints and layout constraints you can inspect under [`hw/v1/out/`](hw/v1/out/).
+**The PCB is written, not drawn.** The entire schematic is source code in [**CoHDL**](https://cohdl.org), an open-source, AI-native hardware description language. The compiler type-checks the design — units, pin-connection obligations, power integrity — and emits the netlist, BOM, footprints and layout constraints you can inspect under [`hw/v1/out/`](hw/v1/out/).
 
 🌐 **https://openmicrokbd.org** · License: [MIT](LICENSE)
 
 ## Designed in CoHDL
 
-This board was designed in **CoHDL**, a hardware description language newly developed by [Tony Huang](https://github.com/conol-ai) that makes schematic (PCB) design AI-native: a board is a program — typed, checked, and compiled. In CoHDL, the design in [`hw/v1/src/`](hw/v1/src/) *is* the schematic; the compiler is the oracle that grades it.
+This board was designed in [**CoHDL**](https://cohdl.org), an open-source hardware description language that makes schematic (PCB) design AI-native: a board is a program — typed, checked, and compiled. In CoHDL, the design in [`hw/v1/src/`](hw/v1/src/) *is* the schematic; the compiler is the oracle that grades it.
 
-**The CoHDL language and compiler will be open sourced soon.** Until then, this repository ships the complete compiler outputs under `hw/*/out/`, so the design is fully inspectable and the firmware and app are buildable today.
+**CoHDL is open source.** Visit [cohdl.org](https://cohdl.org) to explore the language, or browse and contribute to the [compiler and libraries on GitHub](https://github.com/conol-ai/cohdl). This repository also checks in the complete compiler outputs under `hw/*/out/`, so the generated hardware design remains directly inspectable.
 
 ## What's inside
 
@@ -57,7 +57,7 @@ scripts/package-macos.sh dist dist/openmicro-fw-<firmware-version>.bin
 cd app && cargo run --release --locked
 ```
 
-Rebuilding a PCB from `hw/*/src/` requires the CoHDL compiler, which is being prepared for open source — the generated netlist/BOM/footprints are checked in under `hw/*/out/` in the meantime.
+The open-source [CoHDL compiler](https://github.com/conol-ai/cohdl) and its documentation are available at [cohdl.org](https://cohdl.org). Generated netlists, BOMs, footprints, and layout constraints remain checked in under `hw/*/out/` for inspection and use without rerunning the toolchain.
 
 Signed releases build both Intel and Apple Silicon DMGs plus firmware through
 GitHub Actions. See [`RELEASING.md`](RELEASING.md) for versioning, Apple

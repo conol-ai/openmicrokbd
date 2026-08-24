@@ -4,20 +4,20 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>OpenMicroKbd — The open-source keyboard built around your needs.</title>
-<meta name="description" content="OpenMicroKbd is a fully open macro pad: 13 keys, a knob, a joystick, a touch pad — open hardware, open firmware, open software. Under $40 in parts. The schematic is source code. A blueprint anyone can replicate." />
+<meta name="description" content="OpenMicroKbd is a fully open macro pad: 13 keys, a knob, a joystick, a touch pad — open hardware, firmware, and software. Under $40 in parts. The schematic is source code in open-source CoHDL." />
 <link rel="canonical" href="https://openmicrokbd.org/" />
 
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="OpenMicroKbd" />
 <meta property="og:title" content="OpenMicroKbd — The open-source keyboard built around your needs." />
-<meta property="og:description" content="A fully open macro pad: 13 keys, a knob, a joystick, a touch pad. Open hardware, open firmware, open software — under $40 in parts." />
+<meta property="og:description" content="A fully open macro pad: 13 keys, a knob, a joystick, a touch pad. Its schematic is code in open-source CoHDL — under $40 in parts." />
 <meta property="og:url" content="https://openmicrokbd.org/" />
 <meta property="og:image" content="https://openmicrokbd.org/assets/og.jpg" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="OpenMicroKbd — The open-source keyboard built around your needs." />
-<meta name="twitter:description" content="A fully open macro pad: 13 keys, a knob, a joystick, a touch pad. Open hardware, open firmware, open software — under $40 in parts." />
+<meta name="twitter:description" content="A fully open macro pad whose schematic is code in open-source CoHDL. Under $40 in parts. A blueprint anyone can replicate." />
 <meta name="twitter:image" content="https://openmicrokbd.org/assets/og.jpg" />
 
 <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f2e2bd" />
@@ -44,8 +44,16 @@
   "url": "https://openmicrokbd.org/",
   "codeRepository": "https://github.com/conol-ai/openmicrokbd",
   "license": "https://opensource.org/license/mit/",
-  "programmingLanguage": ["Rust", "CoHDL"],
-  "description": "An open-source macro pad: 13 keys, rotary encoder, analog joystick, capacitive touch pad, per-key + underglow RGB. Open hardware, open firmware, open software."
+  "programmingLanguage": [
+    "Rust",
+    {
+      "@type": "ComputerLanguage",
+      "name": "CoHDL",
+      "url": "https://cohdl.org/",
+      "sameAs": "https://github.com/conol-ai/cohdl"
+    }
+  ],
+  "description": "An open-source macro pad: 13 keys, rotary encoder, analog joystick, capacitive touch pad, per-key + underglow RGB. Its schematic is source code in open-source CoHDL."
 }
 </script>
 
@@ -598,7 +606,7 @@
     <header class="section-head reveal">
       <p class="section-kicker">CHAPTER V</p>
       <h2 class="section-title">THE BLUEPRINT</h2>
-      <p class="section-lede">Not a product you wait for — a repository you clone. The schematic is source code and the compiler checks it. Gerbers, firmware, config app: all of it, in the open.</p>
+      <p class="section-lede">Not a product you wait for — a repository you clone. The schematic is source code in open-source CoHDL, and the compiler checks it. Gerbers, firmware, config app: all of it, in the open.</p>
     </header>
 
     <div class="inv reveal">
@@ -657,9 +665,10 @@
       </ul>
       <div class="inv__foot">
         <p>A blueprint anyone can replicate — compile it, solder it, flash it, fork it. Under $40 in parts, and no permission required.</p>
+        <p class="inv__cohdl"><strong>CoHDL is open source.</strong> The language and compiler behind this schematic are public at <a href="https://cohdl.org/" target="_blank" rel="noopener">cohdl.org</a>, with source on <a href="https://github.com/conol-ai/cohdl" target="_blank" rel="noopener">GitHub</a>.</p>
         <div class="inv__ctas">
           <a class="btn btn--primary btn--big" href="https://github.com/conol-ai/openmicrokbd" target="_blank" rel="noopener">★ Get the Blueprint on GitHub</a>
-          <a class="btn btn--big" href="https://github.com/conol-ai/openmicrokbd/releases/latest" target="_blank" rel="noopener">▼ Download the App</a>
+          <a class="btn btn--ghost btn--big" href="https://github.com/conol-ai/openmicrokbd/releases/latest" target="_blank" rel="noopener">▼ Download the App</a>
         </div>
         <p class="inv__note">The config app ships as a notarized macOS disk image — Apple Silicon and Intel — with every release, next to the firmware binaries. Windows and Linux build from source out of <code class="inv__code">app/</code>.</p>
       </div>
@@ -782,6 +791,7 @@
         <a href="https://github.com/conol-ai/openmicrokbd/tree/main/fw" target="_blank" rel="noopener">fw/</a>
         <a href="https://github.com/conol-ai/openmicrokbd/tree/main/app" target="_blank" rel="noopener">app/</a>
         <a href="https://github.com/conol-ai/openmicrokbd#readme" target="_blank" rel="noopener">README.md</a>
+        <a href="https://cohdl.org/" target="_blank" rel="noopener">CoHDL</a>
         <a href="/blog/">blog</a>
       </nav>
       <p class="footer__fine">MIT licensed · under $40 in parts · no permission required</p>

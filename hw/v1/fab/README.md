@@ -63,15 +63,15 @@ kicad-cli pcb export gerbers -o fab/gerbers/ \
   pcb/openmicro.kicad_pcb
 kicad-cli pcb export drill -o fab/gerbers/ --excellon-separate-th pcb/openmicro.kicad_pcb
 
-# BOM (CoHDL compiler) and CPL (smt_pos.py, run with KiCad's bundled python)
-cohdl build .                     # -> out/openmicro-bom.csv
+# BOM (CoHDL compiler, run from hw/v1/) and CPL (smt_pos.py, run with KiCad's bundled python)
+cohdl build                       # -> out/openmicro-bom.csv
 smt_pos.py pcb/openmicro.kicad_pcb out/openmicro-smt.csv
 smt_pos.py --all pcb/openmicro.kicad_pcb fab/openmicro-pos-all.csv
 ```
 
 The BOM comes from the CoHDL source (`src/`); the CPL and gerbers from the
-routed board. `smt_pos.py` currently lives in the CoHDL repository
-(`tools/smt_pos.py`) pending the compiler's open-source release.
+routed board. The open-source CoHDL repository includes
+[`tools/smt_pos.py`](https://github.com/conol-ai/cohdl/blob/main/tools/smt_pos.py).
 
 ## Firmware programming
 

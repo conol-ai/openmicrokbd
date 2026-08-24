@@ -4,19 +4,20 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>OpenMicroKbd: an open-source build of OpenAI's $230 Codex Micro macropad · OpenMicroKbd</title>
-<meta name="description" content="An MIT-licensed, wired USB-C macropad that recreates the Codex Micro's control surface for about $37 in parts — open schematic written in CoHDL, Rust + Embassy firmware, a GPUI companion app, and a fab-ready manufacturing package." />
+<meta name="description" content="An MIT-licensed, wired USB-C macropad that recreates the Codex Micro's control surface for about $37 in parts — an open schematic written in open-source CoHDL, Rust + Embassy firmware, a GPUI companion app, and a fab-ready manufacturing package." />
 <link rel="canonical" href="https://openmicrokbd.org/blog/openmicrokbd-launch/" />
 
 <meta property="og:type" content="article" />
 <meta property="og:site_name" content="OpenMicroKbd" />
 <meta property="og:title" content="OpenMicroKbd: an open-source build of OpenAI's $230 Codex Micro macropad" />
-<meta property="og:description" content="Thirteen keys, a knob, a stick, a touch pad — about $37 in parts, every layer open. The PCB is written, not drawn." />
+<meta property="og:description" content="Thirteen keys, a knob, a stick, a touch pad — about $37 in parts, every layer open, including CoHDL. The PCB is written, not drawn." />
 <meta property="og:url" content="https://openmicrokbd.org/blog/openmicrokbd-launch/" />
 <meta property="og:image" content="https://openmicrokbd.org/assets/og.jpg" />
 <meta property="article:published_time" content="2026-08-10" />
+<meta property="article:modified_time" content="2026-08-24" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="OpenMicroKbd: an open-source build of OpenAI's $230 Codex Micro macropad" />
-<meta name="twitter:description" content="Thirteen keys, a knob, a stick, a touch pad — about $37 in parts, every layer open. The PCB is written, not drawn." />
+<meta name="twitter:description" content="Thirteen keys, a knob, a stick, a touch pad — about $37 in parts, every layer open, including CoHDL. The PCB is written, not drawn." />
 <meta name="twitter:image" content="https://openmicrokbd.org/assets/og.jpg" />
 
 <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f2e2bd" />
@@ -123,6 +124,8 @@
   <figcaption>The finished board: 13 keys, a knob, an analog joystick, a capacitive touch pad, and a white 3D-printed case.</figcaption>
 </figure>
 
+<aside class="post-update" role="note"><strong>Update · August 24, 2026:</strong> CoHDL is now open source. Visit <a href="https://cohdl.org/" rel="noopener">cohdl.org</a> and browse the source on <a href="https://github.com/conol-ai/cohdl" rel="noopener">GitHub</a>.</aside>
+
 <p>In July 2026, OpenAI shipped its first branded hardware: the <strong>Codex Micro</strong>, a <strong>$230</strong> macropad built with Work Louder. Thirteen keys, a dial, a joystick, a touch sensor, RGB lighting, Bluetooth, and a CNC aluminium and polycarbonate case.</p>
 
 <p><strong>OpenMicroKbd</strong> is an open-source board that recreates that control layout. MIT licensed, wired USB-C, and <strong>about $37 in parts and assembly</strong> for one board. The schematic, firmware, companion app, routed board, and the full manufacturing package are all published — you can send the Gerbers to a fab today.</p>
@@ -164,7 +167,7 @@
 
 <p>So the goal here was a board with the same physical vocabulary and none of that boundary: <strong>open schematic, open firmware, open host app, and a manufacturing package anyone can send to a fab</strong>.</p>
 
-<p>There was a second motive, and it is the reason this particular board exists rather than some easier one. I have been building <strong>CoHDL</strong>, a hardware description language for PCBs, and I needed to prove it on something real with awkward requirements: a key matrix, a rotary encoder, an analog joystick, a capacitive touch pad, two LED chains, and a USB power budget to respect. Small enough to finish. Complicated enough to be a fair test.</p>
+<p>There was a second motive, and it is the reason this particular board exists rather than some easier one. I have been building <strong><a href="https://cohdl.org/" rel="noopener">CoHDL</a></strong>, a hardware description language for PCBs, and I needed to prove it on something real with awkward requirements: a key matrix, a rotary encoder, an analog joystick, a capacitive touch pad, two LED chains, and a USB power budget to respect. Small enough to finish. Complicated enough to be a fair test.</p>
 
 <p>A complete device here has four layers — <strong>PCB, enclosure, firmware, host application</strong> — and the sections below follow that boundary.</p>
 
@@ -328,7 +331,7 @@ net V3V3 [3.3V]: ldo.VOUT, mcu.VDD, mcu.VDDA, mcu.VBAT, mcu.VDDIO2, joy.X_END_B,
 
 <p><code>[3.3V]</code> is a <strong>unit annotation</strong>. <code>#[intent(...)]</code> makes design intent <em>a checkable attribute rather than an unverified comment</em>. The compiler checks units, pin-connection obligations, and power-integrity rules, then writes netlist, BOM, footprint, and constraint artifacts under <code>hw/v1/out/</code>. It also generates the firmware pin map from the hardware source.</p>
 
-<p>Two honest boundaries. <strong>CoHDL produced the schematic and its generated outputs; Quilter.ai did the physical layout</strong> — the routing is not written. And <strong>the compiler is not public yet</strong>, which matters: source hardware is most useful when someone else can run the whole toolchain. For now CoHDL is a demonstrated but unreproducible part of this project.</p>
+<p>Two honest boundaries. <strong>CoHDL produced the schematic and its generated outputs; Quilter.ai did the physical layout</strong> — the routing is not written. The compiler was private when this article was first published, but <strong>CoHDL is now open source</strong>. Explore the project at <a href="https://cohdl.org/" rel="noopener">cohdl.org</a> or browse the source at <a href="https://github.com/conol-ai/cohdl" rel="noopener">github.com/conol-ai/cohdl</a>.</p>
 
 <h2 id="part-two-the-enclosure">Part two: the enclosure</h2>
 
@@ -509,7 +512,6 @@ net V3V3 [3.3V]: ldo.VOUT, mcu.VDD, mcu.VDDA, mcu.VBAT, mcu.VDDIO2, joy.X_END_B,
 <li><strong>Printed case, not machined</strong> — the enclosure is FDM plastic rather than CNC aluminium and polycarbonate, though the source is yours to change.</li>
 <li><strong>Rust and Embassy instead of QMK/ZMK</strong> — a small async firmware with direct control over USB, updating, keymap persistence, and peripherals, in exchange for the tooling ecosystem those projects have built. It is not VIA-compatible; keymap editing goes through this project's own app.</li>
 <li><strong>No Codex integration</strong> — no ChatGPT desktop bridge and no agent-status choreography. The vendor HID interface is open and documented in the firmware source for anyone who wants to build one.</li>
-<li><strong>The CoHDL compiler is not public yet</strong> — you can read the schematic source and every generated artifact, but you cannot yet regenerate them yourself.</li>
 </ul>
 
 <p>The commercial product arrives assembled, enclosed, tested, and supported. This project asks you to supply assembly and time, in exchange for <em>a board you can modify</em>.</p>
@@ -518,7 +520,7 @@ net V3V3 [3.3V]: ldo.VOUT, mcu.VDD, mcu.VDDA, mcu.VBAT, mcu.VDDIO2, joy.X_END_B,
 
 <p>The repository is <a href="https://github.com/conol-ai/openmicrokbd" rel="noopener">github.com/conol-ai/openmicrokbd</a>:</p>
 <ul>
-<li>CoHDL schematic source — <code>hw/v1/src/</code></li>
+<li><a href="https://cohdl.org/" rel="noopener">CoHDL</a> schematic source — <code>hw/v1/src/</code></li>
 <li>Generated netlist, BOM, footprints, constraints — <code>hw/v1/out/</code></li>
 <li>The routed board — <code>hw/v1/pcb/openmicro.kicad_pcb</code>, opens in KiCad 10+</li>
 <li><strong>Fab-ready manufacturing package</strong> — <code>hw/v1/fab/</code></li>
@@ -546,9 +548,9 @@ cd app &amp;&amp; cargo run --release --locked
 
 <p>Thanks to <strong>Quilter.ai</strong> for the physical layout, and to the readers who challenged the original product's closed feedback path. The useful criticism was never that a macropad is silly. It was that <strong>a general-purpose input device should stay general-purpose</strong>.</p>
 
-<p>One last thing, for anyone who scrolled past the code. That schematic was never drawn in an editor — it was <strong>written, type-checked, and compiled</strong>. The language is called <strong>CoHDL</strong>, and it is the part of this project I am most interested in. Its compiler is not public yet, so the generated files in <code>hw/v1/out/</code> are the only evidence I can offer today. It gets its own write-up when it opens.</p>
+<p>One last thing, for anyone who scrolled past the code. That schematic was never drawn in an editor — it was <strong>written, type-checked, and compiled</strong>. The language is called <strong><a href="https://cohdl.org/" rel="noopener">CoHDL</a></strong>, and it is the part of this project I am most interested in. <strong>CoHDL is now open source</strong>; browse the compiler and libraries at <a href="https://github.com/conol-ai/cohdl" rel="noopener">github.com/conol-ai/cohdl</a>. The generated files in <code>hw/v1/out/</code> remain a concrete record of what it produced for this board.</p>
 
-<p>Until then the keyboard is the argument. <strong>The PCB is written, not drawn</strong> — and you can read every line of it today.</p>
+<p>The keyboard made the argument; now the language is open too. <strong>The PCB is written, not drawn</strong> — and you can read every line of both today.</p>
 
 </article>
 
@@ -568,6 +570,7 @@ cd app &amp;&amp; cargo run --release --locked
       <a href="/blog/">Blog</a>
       <a href="https://github.com/conol-ai/openmicrokbd/releases/latest" rel="noopener">Download</a>
       <a href="https://github.com/conol-ai/openmicrokbd" rel="noopener">GitHub</a>
+      <a href="https://cohdl.org/" rel="noopener">CoHDL</a>
       <a href="/blog/feed.xml">Feed</a>
     </nav>
   </div>
