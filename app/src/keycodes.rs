@@ -235,6 +235,7 @@ pub static CONSUMER_USAGES: &[(u16, &'static str)] = &[
     (0x70, "Brightness Down"),
     (0x029D, "Globe / Fn"),
     (0x019E, "Lock Screen"),
+    (0x00D8, "Dictation"),
 ];
 
 /// Full definition for a keyboard-page usage (linear scan: the table is
@@ -293,6 +294,7 @@ fn consumer_short_name(usage: u16) -> Option<&'static str> {
         0x70 => "Bright -",
         0x029D => "Globe",
         0x019E => "Lock",
+        0x00D8 => "Dictate",
         _ => return None,
     })
 }
@@ -423,6 +425,7 @@ mod tests {
         assert_eq!(consumer_name(0xB0), Some("Play"));
         assert_eq!(consumer_name(0x029D), Some("Globe / Fn"));
         assert_eq!(consumer_name(0x019E), Some("Lock Screen"));
+        assert_eq!(consumer_name(0x00D8), Some("Dictation"));
         assert_eq!(
             slot_label(&Slot {
                 kind: SlotKind::Consumer,
@@ -444,6 +447,19 @@ mod tests {
         let f21 = keyboard_def(0x70).unwrap();
         assert_eq!(f21.macos_vk, None);
         assert_eq!(f21.hotkey, Some(Code::F21));
+    }
+
+    #[test]
+    fn every_consumer_usage_has_a_keycap_label() {
+        // These two tables are edited by hand and have drifted before:
+        // Dictation sat in the picker with no short name, so the keycap chip
+        // rendered the raw usage instead of a word.
+        for (usage, name) in CONSUMER_USAGES {
+            assert!(
+                consumer_short_name(*usage).is_some(),
+                "consumer usage 0x{usage:02X} ({name}) has no keycap label"
+            );
+        }
     }
 
     #[test]
