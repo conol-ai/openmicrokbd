@@ -344,6 +344,8 @@ net V3V3 [3.3V]: ldo.VOUT, mcu.VDD, mcu.VDDA, mcu.VBAT, mcu.VDDIO2, joy.X_END_B,
   <figcaption>The board mounts at the four corners, with a side opening for USB-C.</figcaption>
 </figure>
 
+<p>If you would rather not open a CAD file at all, the case is also published as a ready-to-print profile on <strong><a href="https://makerworld.com/en/models/3163016-openmicrokbd#profileId-3599737" rel="noopener">MakerWorld</a></strong> (and on <a href="https://makerworld.com.cn/zh/models/2838721-openmicrokbd-kai-yuan-jian-pan" rel="noopener">MakerWorld 中国</a> for anyone printing from the mainland). The profile carries the case, the knob and the joystick cap, with the soldering jig and the packaging thrown in — 0.4&nbsp;mm nozzle, 0.2&nbsp;mm layers, PLA or PETG, and <strong>no supports</strong>.</p>
+
 <p>The enclosure is also the layer most worth remixing, and the easiest to change safely. Tilt, feet, material, encoder height, and USB-cable clearance can all vary without touching the electronics. If you design a variant, publish the editable source beside the printable output, and <strong>leave the SWD socket accessible</strong> — it is the recovery path if a firmware update goes wrong.</p>
 
 <h2 id="part-three-firmware-and-its-failure-modes">Part three: firmware and its failure modes</h2>
@@ -524,7 +526,7 @@ net V3V3 [3.3V]: ldo.VOUT, mcu.VDD, mcu.VDDA, mcu.VBAT, mcu.VDDIO2, joy.X_END_B,
 <li>Generated netlist, BOM, footprints, constraints — <code>hw/v1/out/</code></li>
 <li>The routed board — <code>hw/v1/pcb/openmicro.kicad_pcb</code>, opens in KiCad 10+</li>
 <li><strong>Fab-ready manufacturing package</strong> — <code>hw/v1/fab/</code></li>
-<li>Printable enclosure, knob, joystick cap, packaging, soldering jig, and the board outline DXF — <code>hw/v1/mechanical/</code></li>
+<li>Printable enclosure, knob, joystick cap, packaging, soldering jig, and the board outline DXF — <code>hw/v1/mechanical/</code>, or straight off <a href="https://makerworld.com/en/models/3163016-openmicrokbd#profileId-3599737" rel="noopener">MakerWorld</a> (<a href="https://makerworld.com.cn/zh/models/2838721-openmicrokbd-kai-yuan-jian-pan" rel="noopener">中国站</a>)</li>
 <li>Datasheets for every active, connector, and electromechanical part — <code>hw/v1/docs/</code></li>
 <li>Firmware — <code>fw/</code></li>
 <li>Companion app — <code>app/</code></li>

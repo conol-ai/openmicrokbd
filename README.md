@@ -13,7 +13,7 @@ An open-source hardware recreation of OpenAI's **Codex Micro** macropad — 13 l
 
 **The PCB is written, not drawn.** The entire schematic is source code in [**CoHDL**](https://cohdl.org), an open-source, AI-native hardware description language. The compiler type-checks the design — units, pin-connection obligations, power integrity — and emits the netlist, BOM, footprints and layout constraints you can inspect under [`hw/v1/out/`](hw/v1/out/).
 
-🌐 **https://openmicrokbd.org** · License: [MIT](LICENSE)
+🌐 **https://openmicrokbd.org** · 🖨️ **[Printable case on MakerWorld](https://makerworld.com/en/models/3163016-openmicrokbd#profileId-3599737)** ([中国站](https://makerworld.com.cn/zh/models/2838721-openmicrokbd-kai-yuan-jian-pan)) · License: [MIT](LICENSE)
 
 ## Designed in CoHDL
 
@@ -31,7 +31,7 @@ Questions about CoHDL, the hardware source, or building a board of your own? [Jo
 | [`hw/v1/out/`](hw/v1/out/) | Checked-in compiler output: KiCad netlist (`openmicro.net`), BOM (`openmicro-bom.csv`), SMT placement (`openmicro-smt.csv`), `.kicad_mod` footprints, layout constraints (`openmicro-layout.json`) |
 | [`hw/v1/pcb/`](hw/v1/pcb/) | The routed board — `openmicro.kicad_pcb` + KiCad project (design rules) |
 | [`hw/v1/fab/`](hw/v1/fab/) | Manufacturing package: Gerber/drill zip, assembly BOM, SMT placement CSV — see [`hw/v1/fab/README.md`](hw/v1/fab/README.md) |
-| [`hw/v1/mechanical/`](hw/v1/mechanical/) | Board outline (DXF) plus the printable enclosure parts — case, rotary knob, joystick cap, shipping tray and a solder-assembly jig, as editable Fusion 360 `.f3d` and ready-to-slice `.3mf` |
+| [`hw/v1/mechanical/`](hw/v1/mechanical/) | Board outline (DXF) plus the printable enclosure parts — case, rotary knob, joystick cap, shipping tray and a solder-assembly jig, as editable Fusion 360 `.f3d` and ready-to-slice `.3mf`. Also published as a print profile on [MakerWorld](https://makerworld.com/en/models/3163016-openmicrokbd#profileId-3599737) ([中国站](https://makerworld.com.cn/zh/models/2838721-openmicrokbd-kai-yuan-jian-pan)) |
 | [`hw/v1/docs/`](hw/v1/docs/) | Manufacturer datasheets for every active, connector, and electromechanical part in the BOM, with sourcing/verification notes — see [`hw/v1/docs/README.md`](hw/v1/docs/README.md) |
 | [`hw/v2/`](hw/v2/) | **Hardware v2, in development** — wireless successor on the SiFli SF32LB52 (BLE, battery-powered): CoHDL source + compiler outputs, not yet routed. See [`hw/v2/README.md`](hw/v2/README.md) |
 | [`fw/`](fw/) | Firmware — Rust + [embassy](https://embassy.dev) on STM32F072CB: key matrix, twin WS2812 chains, USB HID + vendor interface, DFU reboot. See [`fw/README.md`](fw/README.md) |
@@ -71,6 +71,17 @@ workaround are tracked in
 ## Production files
 
 The final routed v1 board lives in [`hw/v1/pcb/`](hw/v1/pcb/) (`openmicro.kicad_pcb`, opens in KiCad 9+). The manufacturing package — Gerber/drill zip, assembly BOM, and SMT pick-and-place CSV, ready to upload to a fab such as JLCPCB — is in [`hw/v1/fab/`](hw/v1/fab/), with DRC status and ordering notes in [`hw/v1/fab/README.md`](hw/v1/fab/README.md).
+
+## Printing the case
+
+The enclosure is published as a ready-to-print model on MakerWorld, alongside the editable Fusion sources in [`hw/v1/mechanical/`](hw/v1/mechanical/):
+
+- **[MakerWorld — OpenMicroKbd](https://makerworld.com/en/models/3163016-openmicrokbd#profileId-3599737)**
+- **[MakerWorld 中国 — OpenMicroKbd 开源键盘](https://makerworld.com.cn/zh/models/2838721-openmicrokbd-kai-yuan-jian-pan)**
+
+The print covers the case, the rotary knob and the joystick cap, plus the solder-assembly jig and the shipping package as a bonus from the same project. Recommended settings: 0.4 mm nozzle, 0.2 mm layer height, 3 walls, 15–20% infill, PLA or PETG (PETG for a daily driver), **no supports required**.
+
+Beyond the print you will need an assembled PCB, Choc V2-compatible keycaps, M2×4 female-female brass standoffs, M2×5 screws, and a USB-C cable.
 
 ## License
 

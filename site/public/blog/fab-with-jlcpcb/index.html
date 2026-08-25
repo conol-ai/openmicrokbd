@@ -286,7 +286,7 @@
 
 <p>Three things stand between a delivered board and a working macropad.</p>
 
-<p><strong>Solder the through-hole parts.</strong> Thirteen switches, the encoder, the joystick. <code>hw/v1/mechanical/</code> includes a printable solder-assembly jig that holds the switches square to the board while you tack them — print it before the boards land, not after.</p>
+<p><strong>Solder the through-hole parts.</strong> Thirteen switches, the encoder, the joystick. <code>hw/v1/mechanical/</code> includes a printable solder-assembly jig that holds the switches square to the board while you tack them — print it before the boards land, not after. It ships in the same <strong><a href="https://makerworld.com/en/models/3163016-openmicrokbd#profileId-3599737" rel="noopener">MakerWorld profile</a></strong> as the case, the knob and the joystick cap (<a href="https://makerworld.com.cn/zh/models/2838721-openmicrokbd-kai-yuan-jian-pan" rel="noopener">MakerWorld 中国</a> for mainland printers), so you can queue the whole set on the slicer while the order is in transit: 0.4&nbsp;mm nozzle, 0.2&nbsp;mm layers, PLA or PETG, no supports.</p>
 
 <p><strong>Program the firmware.</strong> Every <a href="https://github.com/conol-ai/openmicrokbd/releases/latest" rel="noopener">GitHub release</a> ships <code>openmicro-fw-&lt;version&gt;.hex</code>, Intel HEX with the <code>0x08000000</code> load address embedded, so any STM32-capable programmer places it correctly with no address entry. Verify it against the release's <code>SHA256SUMS</code>, then full-chip erase, program, and verify over SWD at <code>J2</code>.</p>
 
@@ -333,7 +333,7 @@ smt_pos.py pcb/openmicro.kicad_pcb out/openmicro-smt.csv
 <li><strong>The order package</strong> — <code>hw/v1/fab/</code>, with <a href="https://github.com/conol-ai/openmicrokbd/blob/main/hw/v1/fab/README.md" rel="noopener">its own README</a> covering fab parameters, the accepted DRC flags, and programming</li>
 <li>The routed board — <code>hw/v1/pcb/openmicro.kicad_pcb</code>, opens in KiCad 10+</li>
 <li>CoHDL schematic source and generated outputs — <code>hw/v1/src/</code>, <code>hw/v1/out/</code></li>
-<li>Printable case, knob, joystick cap, packaging and the soldering jig — <code>hw/v1/mechanical/</code></li>
+<li>Printable case, knob, joystick cap, packaging and the soldering jig — <code>hw/v1/mechanical/</code>, or ready to slice on <a href="https://makerworld.com/en/models/3163016-openmicrokbd#profileId-3599737" rel="noopener">MakerWorld</a> (<a href="https://makerworld.com.cn/zh/models/2838721-openmicrokbd-kai-yuan-jian-pan" rel="noopener">中国站</a>)</li>
 <li>Datasheets for every active, connector and electromechanical part — <code>hw/v1/docs/</code></li>
 <li>Firmware and companion app — <code>fw/</code>, <code>app/</code></li>
 </ul>
