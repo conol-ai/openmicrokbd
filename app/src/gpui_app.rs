@@ -51,6 +51,7 @@ const CELL_ENCODER: usize = 13;
 const CELL_JOYSTICK: usize = 14;
 const CELL_TOUCH: usize = 15;
 const ICON_PAGE_SIZE: usize = 30;
+const DISCORD_INVITE_URL: &str = "https://discord.gg/x7DXPvK66";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Sheet {
@@ -784,6 +785,7 @@ pub struct OpenMicro {
     installed_apps: Vec<InstalledApp>,
     agent_integrations: Vec<IntegrationReport>,
     agent_integration_feedback: Option<(String, BadgeTone)>,
+    discord_open_error: Option<String>,
     app_updater: MacOsUpdater,
     app_updater_active: bool,
     icon_library: IconLibrary,
@@ -840,6 +842,7 @@ impl OpenMicro {
             installed_apps: behaviors::installed_apps(),
             agent_integrations: Vec::new(),
             agent_integration_feedback: None,
+            discord_open_error: None,
             app_updater: MacOsUpdater::new(),
             app_updater_active: false,
             icon_library: IconLibrary::Lucide,
@@ -3926,6 +3929,49 @@ impl OpenMicro {
                             .on_click(|_, _, _| actions::open_permission_settings()),
                     )
                     .child(pixel::divider())
+                    .child(inspector_field(
+                        tr("community"),
+                        tr("community_note"),
+                        selection_card(
+                            configured_icon_visual("simple:discord", 20., pixel::accent_color())
+                                .unwrap_or_else(|| {
+                                    lucide_icon_visual(
+                                        "messages-square",
+                                        20.,
+                                        pixel::accent_color(),
+                                    )
+                                }),
+                            tr("join_discord"),
+                            Some(DISCORD_INVITE_URL.into()),
+                        )
+                        .id("join-discord")
+                        .tab_index(0)
+                        .focus(|style| {
+                            style
+                                .border_2()
+                                .border_color(pixel::focus_color())
+                                .bg(pixel::key_color())
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            match open::that(DISCORD_INVITE_URL) {
+                                Ok(()) => this.discord_open_error = None,
+                                Err(error) => {
+                                    eprintln!("app: cannot open Discord invite: {error}");
+                                    this.push_log(format!("cannot open Discord invite: {error}"));
+                                    this.discord_open_error = Some(error.to_string());
+                                }
+                            }
+                            cx.notify();
+                        })),
+                    ))
+                    .when_some(self.discord_open_error.clone(), |content, error| {
+                        content.child(controls::status_rail(
+                            tr("discord_open_failed"),
+                            error,
+                            BadgeTone::Danger,
+                        ))
+                    })
+                    .child(pixel::divider())
                     .child(
                         tiny_button(if self.confirm_reset {
                             tr("reset_confirm")
@@ -5348,6 +5394,7 @@ mod tests {
     fn configured_icons_keep_catalogs_distinct() {
         assert!(configured_icon_visual("apple", 16., pixel::text_color()).is_some());
         assert!(configured_icon_visual("simple:apple", 16., pixel::text_color()).is_some());
+        assert!(configured_icon_visual("simple:discord", 16., pixel::text_color()).is_some());
         assert!(
             configured_icon_visual("simple:not_a_real_brand", 16., pixel::text_color()).is_none()
         );
@@ -5373,5 +5420,10 @@ mod tests {
             icon_picker_page(lucide),
             (crate::lucide::ICONS.len() - 1) / ICON_PAGE_SIZE
         );
+    }
+
+    #[test]
+    fn discord_invite_uses_the_canonical_https_url() {
+        assert_eq!(DISCORD_INVITE_URL, "https://discord.gg/x7DXPvK66");
     }
 }

@@ -21,6 +21,8 @@ This board was designed in [**CoHDL**](https://cohdl.org), an open-source hardwa
 
 **CoHDL is open source.** Visit [cohdl.org](https://cohdl.org) to explore the language, or browse and contribute to the [compiler and libraries on GitHub](https://github.com/conol-ai/cohdl). This repository also checks in the complete compiler outputs under `hw/*/out/`, so the generated hardware design remains directly inspectable.
 
+Questions about CoHDL, the hardware source, or building a board of your own? [Join the CoHDL and OpenMicroKbd community on Discord](https://discord.gg/x7DXPvK66).
+
 ## What's inside
 
 | Path | Contents |
