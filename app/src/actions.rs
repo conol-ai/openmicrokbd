@@ -89,9 +89,17 @@ fn run_command(command: &str) {
         return;
     }
     #[cfg(target_os = "windows")]
-    let spawned = std::process::Command::new("cmd")
-        .args(["/C", command])
-        .spawn();
+    let spawned = {
+        use std::os::windows::process::CommandExt;
+
+        // The companion app uses the GUI subsystem, so a child cmd.exe would
+        // otherwise flash a console window for every Run action.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new("cmd")
+            .args(["/D", "/C", command])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+    };
     #[cfg(not(target_os = "windows"))]
     let spawned = std::process::Command::new("sh")
         .args(["-c", command])

@@ -6,6 +6,16 @@ fn main() {
     println!("cargo:rerun-if-changed=macos/sparkle_bridge.m");
     println!("cargo:rerun-if-env-changed=OPENMICRO_SPARKLE_FRAMEWORK_DIR");
 
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rerun-if-changed=windows/OpenMicro.rc");
+        println!("cargo:rerun-if-changed=windows/OpenMicro.exe.manifest");
+        println!("cargo:rerun-if-changed=../site/public/favicon.ico");
+        embed_resource::compile("windows/OpenMicro.rc", embed_resource::NONE)
+            .manifest_required()
+            .expect("failed to compile Windows application resources");
+        return;
+    }
+
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
     }

@@ -1,10 +1,11 @@
 //! Local IPC bridge for transient LED activity status.
 //!
 //! The OpenMicro process owns the HID handle, so hook clients must not open
-//! the pad directly.  A per-user Unix socket lets a short-lived helper (the
-//! same app binary invoked with `agent-hook`) hand a small, allow-listed event
-//! to the resident app instead. Agent-specific payloads are reduced to the
-//! shared `ActivityEvent` protocol before they cross the socket.
+//! the pad directly. A per-user Unix socket on Unix or authenticated loopback
+//! endpoint on Windows lets a short-lived helper (the same app binary invoked
+//! with `agent-hook`) hand a small, allow-listed event to the resident app
+//! instead. Agent-specific payloads are reduced to the shared `ActivityEvent`
+//! protocol before they cross the local transport.
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -22,6 +23,7 @@ const MAX_IPC_MESSAGE_BYTES: usize = 4096;
 const MAX_HOOK_INPUT_BYTES: usize = 16 * 1024 * 1024;
 const SOCKET_DIR: &str = "OpenMicro";
 const SOCKET_FILE: &str = "activity.sock";
+const WINDOWS_ENDPOINT_FILE: &str = "activity.json";
 
 /// Event reduced by `HostState`. Session and turn identifiers keep several
 /// concurrent agent threads from overwriting one another accidentally.
@@ -37,12 +39,21 @@ pub struct ActivityEvent {
 
 #[derive(Serialize, Deserialize)]
 struct IpcMessage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    token: Option<String>,
     session_id: String,
     #[serde(default)]
     turn_id: Option<String>,
     status: String,
     #[serde(default)]
     begins_turn: bool,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Serialize, Deserialize)]
+struct WindowsEndpoint {
+    port: u16,
+    token: String,
 }
 
 #[derive(Deserialize)]
@@ -99,7 +110,11 @@ pub fn socket_path() -> PathBuf {
     dirs::cache_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join(SOCKET_DIR)
-        .join(SOCKET_FILE)
+        .join(if cfg!(target_os = "windows") {
+            WINDOWS_ENDPOINT_FILE
+        } else {
+            SOCKET_FILE
+        })
 }
 
 /// Start the listener once for the lifetime of the resident app.
@@ -154,25 +169,123 @@ pub fn spawn_listener() {
                 }
             });
     }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::net::TcpListener;
+        use std::sync::OnceLock;
+
+        static STARTED: OnceLock<()> = OnceLock::new();
+        if STARTED.set(()).is_err() {
+            return;
+        }
+
+        let listener = match TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
+            Ok(listener) => listener,
+            Err(error) => {
+                eprintln!("cannot bind OpenMicro activity listener: {error}");
+                return;
+            }
+        };
+        let port = match listener.local_addr() {
+            Ok(address) => address.port(),
+            Err(error) => {
+                eprintln!("cannot inspect OpenMicro activity listener: {error}");
+                return;
+            }
+        };
+        let mut secret = [0u8; 32];
+        if let Err(error) = getrandom::fill(&mut secret) {
+            eprintln!("cannot secure OpenMicro activity listener: {error}");
+            return;
+        }
+        let token = secret
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        if let Err(error) = write_windows_endpoint(&WindowsEndpoint {
+            port,
+            token: token.clone(),
+        }) {
+            eprintln!("cannot publish OpenMicro activity listener: {error}");
+            return;
+        }
+
+        let _ = std::thread::Builder::new()
+            .name("openmicro-activity-ipc".into())
+            .spawn(move || {
+                for incoming in listener.incoming() {
+                    match incoming {
+                        Ok(stream) => handle_windows_stream(stream, &token),
+                        Err(error) => eprintln!("OpenMicro activity listener error: {error}"),
+                    }
+                }
+            });
+    }
 }
 
 #[cfg(unix)]
 fn handle_stream(mut stream: std::os::unix::net::UnixStream) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+    handle_message_reader(&mut stream, None);
+}
+
+#[cfg(target_os = "windows")]
+fn handle_windows_stream(mut stream: std::net::TcpStream, token: &str) {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+    handle_message_reader(&mut stream, Some(token));
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+fn handle_message_reader(reader: &mut impl Read, expected_token: Option<&str>) {
     let mut bytes = Vec::new();
-    let read = std::io::Read::by_ref(&mut stream)
+    let read = std::io::Read::by_ref(reader)
         .take((MAX_IPC_MESSAGE_BYTES + 1) as u64)
         .read_to_end(&mut bytes);
     if read.is_err() || bytes.len() > MAX_IPC_MESSAGE_BYTES {
         return;
     }
-    let Ok(message) = serde_json::from_slice::<IpcMessage>(&bytes) else {
-        return;
-    };
-    let Some(event) = decode_message(message) else {
+    let Some(event) = decode_wire_message(&bytes, expected_token) else {
         return;
     };
     events::post(crate::events::AppEvent::Activity(event));
+}
+
+fn decode_wire_message(bytes: &[u8], expected_token: Option<&str>) -> Option<ActivityEvent> {
+    let message = serde_json::from_slice::<IpcMessage>(bytes).ok()?;
+    if expected_token.is_some_and(|expected| message.token.as_deref() != Some(expected)) {
+        return None;
+    }
+    decode_message(message)
+}
+
+#[cfg(target_os = "windows")]
+fn write_windows_endpoint(endpoint: &WindowsEndpoint) -> Result<(), String> {
+    let path = socket_path();
+    let parent = path
+        .parent()
+        .ok_or_else(|| "OpenMicro activity endpoint has no parent directory".to_string())?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    let temporary = parent.join(format!(
+        ".activity-{}.tmp",
+        std::process::id()
+    ));
+    let bytes = serde_json::to_vec(endpoint).map_err(|error| error.to_string())?;
+    std::fs::write(&temporary, bytes)
+        .map_err(|error| format!("cannot write {}: {error}", temporary.display()))?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(format!("cannot replace {}: {error}", path.display()));
+        }
+    }
+    std::fs::rename(&temporary, &path).map_err(|error| {
+        let _ = std::fs::remove_file(&temporary);
+        format!("cannot store {}: {error}", path.display())
+    })
 }
 
 fn decode_message(message: IpcMessage) -> Option<ActivityEvent> {
@@ -239,6 +352,7 @@ fn send_event(event: &ActivityEvent) -> Result<(), String> {
     #[cfg(unix)]
     {
         let message = IpcMessage {
+            token: None,
             session_id: event.session_id.clone(),
             turn_id: event.turn_id.clone(),
             status: match event.status {
@@ -262,10 +376,51 @@ fn send_event(event: &ActivityEvent) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
         Ok(())
     }
-    #[cfg(not(unix))]
+    #[cfg(target_os = "windows")]
+    {
+        let endpoint_bytes = std::fs::read(socket_path())
+            .map_err(|error| format!("activity listener is not running: {error}"))?;
+        if endpoint_bytes.len() > 1024 {
+            return Err("activity endpoint file is unexpectedly large".into());
+        }
+        let endpoint: WindowsEndpoint = serde_json::from_slice(&endpoint_bytes)
+            .map_err(|error| format!("invalid activity endpoint: {error}"))?;
+        if endpoint.port == 0
+            || endpoint.token.len() != 64
+            || !endpoint.token.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err("invalid activity endpoint".into());
+        }
+        let message = IpcMessage {
+            token: Some(endpoint.token),
+            session_id: event.session_id.clone(),
+            turn_id: event.turn_id.clone(),
+            status: match event.status {
+                ActivityStatus::Idle => "idle",
+                ActivityStatus::Working => "working",
+                ActivityStatus::Attention => "attention",
+                ActivityStatus::Success => "success",
+                ActivityStatus::Error => "error",
+            }
+            .into(),
+            begins_turn: event.begins_turn,
+        };
+        let bytes = serde_json::to_vec(&message).map_err(|error| error.to_string())?;
+        let address = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, endpoint.port));
+        let mut stream = std::net::TcpStream::connect_timeout(&address, Duration::from_secs(1))
+            .map_err(|error| error.to_string())?;
+        stream
+            .set_write_timeout(Some(Duration::from_secs(1)))
+            .map_err(|error| error.to_string())?;
+        stream
+            .write_all(&bytes)
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
     {
         let _ = event;
-        Err("OpenMicro activity IPC is currently supported on Unix hosts only".into())
+        Err("OpenMicro activity IPC is not supported on this host".into())
     }
 }
 
@@ -582,6 +737,7 @@ mod tests {
     #[test]
     fn malformed_or_unknown_messages_are_ignored() {
         assert!(decode_message(IpcMessage {
+            token: None,
             session_id: "x".into(),
             turn_id: None,
             status: "not-a-state".into(),
@@ -589,6 +745,7 @@ mod tests {
         })
         .is_none());
         let event = decode_message(IpcMessage {
+            token: None,
             session_id: " ".into(),
             turn_id: Some(" ".into()),
             status: "working".into(),
@@ -598,5 +755,28 @@ mod tests {
         assert_eq!(event.session_id, "default");
         assert_eq!(event.turn_id, None);
         assert!(!event.begins_turn);
+    }
+
+    #[test]
+    fn authenticated_wire_messages_require_the_listener_token() {
+        let bytes = serde_json::to_vec(&IpcMessage {
+            token: Some("correct".into()),
+            session_id: "windows:test".into(),
+            turn_id: None,
+            status: "working".into(),
+            begins_turn: true,
+        })
+        .expect("IPC message");
+        assert!(decode_wire_message(&bytes, Some("wrong")).is_none());
+        assert!(decode_wire_message(&bytes, None).is_some());
+        assert_eq!(
+            decode_wire_message(&bytes, Some("correct")),
+            Some(ActivityEvent {
+                session_id: "windows:test".into(),
+                turn_id: None,
+                status: ActivityStatus::Working,
+                begins_turn: true,
+            })
+        );
     }
 }

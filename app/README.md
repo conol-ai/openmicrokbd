@@ -11,6 +11,11 @@ embassy firmware, host app) stays in Rust.
 cargo run --release --locked --bin openmicro-app
 ```
 
+On Windows, install Rust plus Visual Studio's **Desktop development with C++**
+workload. Native Arm64 builds also need the Visual Studio LLVM/Clang component
+(the `ring` dependency uses it for its Arm64 assembly). The release ZIPs are
+portable and do not require a Rust or Visual Studio installation.
+
 ## The shape of it
 
 A single 8-bit-styled surface, not tabs: a product header keeps the active
@@ -43,11 +48,11 @@ Two layers, per the PRD's architecture decision:
    defaults (F13–F20, Shift+F13…F17) are interceptable on all three OSes by
    construction — no macOS F21–F24 dead keys.
 2. **The app optionally intercepts that code** OS-wide (`RegisterEventHotKey`
-   on macOS — no accessibility permission needed for the grab itself) and
-   runs the bound action instead of letting it type: **keystroke** (recorded
+   on macOS and `RegisterHotKey` on Windows) and runs the bound action instead
+   of letting it type: **keystroke** (recorded
    chord), **macro** (ordered steps with delays: keystroke / delay / run /
    open / media), **run command**, **open app or URL**, **media control**, or
-   **app settings**. Keystroke and media *synthesis* does need the
+   **app settings**. On macOS, keystroke and media *synthesis* needs the
    Accessibility permission; the app asks with an explanation, shows a
    "not listening" state without it, and stays fully usable read-only.
 
@@ -96,11 +101,12 @@ approval or another user decision is amber, completion is green, and failure
 is red by default. Several concurrent sessions are tracked independently;
 attention and errors remain visible above background work.
 
-The bridge uses a per-user Unix socket and never calls `SAVE`, so agent feedback
-cannot overwrite the profile's LED settings. Success and error display for four
-seconds, abandoned working/attention states have a 30-minute failsafe, and then
-the configured idle key and ambient patterns return. The activity bridge is
-currently available on macOS and Linux; Windows transport is not implemented.
+The bridge uses a per-user Unix socket on macOS/Linux and an authenticated
+loopback endpoint in the user's local app-data directory on Windows. It never
+calls `SAVE`, so agent feedback cannot overwrite the profile's LED settings.
+Success and error display for four seconds, abandoned working/attention states
+have a 30-minute failsafe, and then the configured idle key and ambient
+patterns return.
 
 With firmware 0.7.0 or newer, the four transparent keys on the second row show
 Claude Code, Codex, Grok, and Octoscode respectively. Concurrent sessions cycle
@@ -120,7 +126,7 @@ hook format.
 | Codex | `$CODEX_HOME/hooks.json`, or `~/.codex/hooks.json` | prompt → working, approval → attention, stop → success, session end → idle |
 | Claude Code | `$CLAUDE_CONFIG_DIR/settings.json`, or `~/.claude/settings.json` | prompt/tool → working, permission/question/elicitation → attention, stop → success, API failure → error |
 | OpenCode | `$XDG_CONFIG_HOME/opencode/plugins/openmicro.ts`, or `~/.config/opencode/plugins/openmicro.ts` | busy/retry → working, permission/question → attention, idle → success, session error → error |
-| Deep Code | `~/.deepcode/settings.json` plus `~/.deepcode/openmicro-notify.sh` | completed turn → success, failed turn → error |
+| Deep Code | `~/.deepcode/settings.json` plus `openmicro-notify.sh` (macOS/Linux) or `openmicro-notify.cmd` (Windows) | completed turn → success, failed turn → error |
 | Grok | `~/.grok/hooks/openmicro.json` | prompt/tool → working, permission → attention, stop → success, API failure → error |
 | Octoscode / Octos | `~/.octos/profile-defaults.json` | prompt/LLM call → working, turn end → success |
 
@@ -143,16 +149,18 @@ if the lights do not appear. The OpenMicro companion app must also be running
 when a hook fires. On macOS, move OpenMicro out of a downloaded/translocated
 location (normally into `/Applications`) and reopen it before installing.
 
-The buttons install only user-level integrations on macOS and Linux. For a
-project-local setup or a manual review before installation, the equivalent
+The buttons install user-level integrations on macOS, Windows, and Linux. For
+a project-local setup or a manual review before installation, the equivalent
 templates remain available as [`codex-hooks.example.json`](codex-hooks.example.json),
 [`claude-code-hooks.example.json`](claude-code-hooks.example.json),
 [`opencode-openmicro.example.ts`](opencode-openmicro.example.ts), and
-[`deep-code-notify.example.sh`](deep-code-notify.example.sh).
+[`deep-code-notify.example.sh`](deep-code-notify.example.sh) or
+[`deep-code-notify.example.cmd`](deep-code-notify.example.cmd).
 
-The examples assume the installed macOS binary at
-`/Applications/OpenMicro.app/Contents/MacOS/OpenMicro`; source builds must use
-their own absolute binary path. Hook commands are deliberately synchronous and
+The checked-in JSON examples assume the installed macOS binary at
+`/Applications/OpenMicro.app/Contents/MacOS/OpenMicro`; Windows installations
+use the absolute path to `OpenMicro.exe`. Source builds must use their own
+absolute binary path. Hook commands are deliberately synchronous and
 short-lived in the Codex and Claude Code examples; the OpenCode plugin queues
 its fire-and-forget callbacks so a late helper cannot replace a newer state.
 See the official [Codex hooks](https://learn.chatgpt.com/docs/hooks), [Claude
@@ -170,12 +178,13 @@ reliably report working or approval states. DeepSeek Harness is currently a
 separate developer-preview client and can integrate through the generic command
 below without changing the app.
 
-Start the OpenMicro GUI before testing—the helper sends to its local socket and
-agent hooks deliberately treat a missing resident app as a no-op. For manual
-smoke tests and other agents, the installed binary accepts:
+Start the OpenMicro GUI before testing—the helper sends to its local endpoint
+and agent hooks deliberately treat a missing resident app as a no-op. For
+manual smoke tests and other agents, the installed binary accepts:
 
 ```text
 /Applications/OpenMicro.app/Contents/MacOS/OpenMicro status <idle|working|attention|success|error> [client:session]
+OpenMicro.exe status <idle|working|attention|success|error> [client:session]
 ```
 
 Use a stable, client-prefixed session name so independent agents cannot clear
@@ -207,14 +216,13 @@ never touch.
 ## App updates
 
 Release builds check `release-manifest.json` at startup and every six hours.
-When a newer host version exists, the banner opens Sparkle's native update
-flow. Sparkle downloads the correct architecture-specific DMG, verifies its
-Ed25519 update signature and Developer ID signature, installs it atomically,
-and relaunches OpenMicro. Source and ad-hoc builds deliberately disable
-self-installation; their banner retains the explicit size/SHA-256-verified DMG
-download and Open DMG fallback. See [`../RELEASING.md`](../RELEASING.md) for
-the pinned Sparkle framework, appcast signing, Developer ID signing,
-notarization, and publishing.
+When a newer host version exists, macOS release builds open Sparkle's native
+update flow. Sparkle downloads the correct architecture-specific DMG, verifies
+its Ed25519 update signature and Developer ID signature, installs it atomically,
+and relaunches OpenMicro. Windows downloads the matching x64 or Arm64 portable
+ZIP, verifies its declared size and SHA-256, and opens it for manual replacement.
+Source and ad-hoc macOS builds retain the same verified manual DMG fallback.
+See [`../RELEASING.md`](../RELEASING.md) for packaging and publishing details.
 
 ## Platform notes
 
@@ -222,8 +230,16 @@ notarization, and publishing.
   keystroke/media *synthesis* (actions that type or press media keys for
   you) needs Accessibility, requested with a deep link. macOS has no
   virtual keycodes for F21–F24; the editor marks any code the OS cannot see.
-- **Windows** — DFU needs a WinUSB driver bound to `0483:df11` once (Zadig).
+- **Windows** — DFU needs a WinUSB driver bound to `0483:df11` once. The
+  firmware sheet detects the missing binding, opens the official
+  [Zadig](https://zadig.akeo.ie/) setup page, and shows the exact device/driver
+  selections before a safe retry.
   Interception uses `RegisterHotKey`; synthesis needs no special permission.
+  The app picker scans Start Menu shortcuts and per-user installed programs.
+  Cross-platform application presets translate Command to Ctrl, while
+  macOS-only shortcut catalogs stay hidden. System presets use Windows-native
+  Task View, Search, Dictation, input-language, lock, sleep, media, and emoji
+  actions.
 - **Linux** — udev rules needed for `1209:0001` (hidraw) and `0483:df11`
   (DFU); interception depends on the session (X11 grabs; Wayland varies).
 
@@ -250,4 +266,5 @@ notarization, and publishing.
   lighting remains the only persisted lighting setting.
 
 This crate is standalone (like `../fw`), but the tag-triggered release workflow
-builds and publishes it as native Apple Silicon and Intel DMGs.
+builds and publishes native Apple Silicon and Intel DMGs plus portable Windows
+Arm64 and x64 ZIPs.

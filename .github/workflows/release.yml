@@ -610,12 +610,117 @@ jobs:
           retention-days: 7
           overwrite: true
 
+  windows:
+    name: Build Windows package (${{ matrix.arch }})
+    needs:
+      - validate
+      - firmware
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            runner: windows-11-vs2026-arm
+            rust_target: aarch64-pc-windows-msvc
+          - arch: x86_64
+            runner: windows-2025-vs2026
+            rust_target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download firmware artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-firmware
+          path: dist/firmware
+          digest-mismatch: error
+
+      - name: Install the Rust app toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.92.0
+          targets: ${{ matrix.rust_target }}
+
+      - name: Verify native build tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $actualArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+          $expectedArchitecture = if ("${{ matrix.arch }}" -eq "aarch64") { "arm64" } else { "x64" }
+          if ($actualArchitecture -ne $expectedArchitecture) {
+            throw "Runner architecture $actualArchitecture does not match $expectedArchitecture"
+          }
+          if ("${{ matrix.arch }}" -eq "aarch64") {
+            $clang = Get-Command clang.exe -ErrorAction SilentlyContinue
+            if (-not $clang) {
+              $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+              $installation = & $vswhere -latest -products * -property installationPath
+              $clang = Get-ChildItem `
+                -Path "$installation\VC\Tools\Llvm\ARM64\bin\clang.exe", "$installation\VC\Tools\Llvm\x64\bin\clang.exe" `
+                -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+              if ($clang) {
+                $clangDirectory = Split-Path -Parent $clang.FullName
+                $env:Path = "$clangDirectory;$env:Path"
+                $clangDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+              }
+            }
+            Get-Command clang.exe -ErrorAction Stop | Format-List Source
+          }
+
+      - name: Test the host app
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo test `
+            --manifest-path app/Cargo.toml `
+            --locked `
+            --lib `
+            --target "${{ matrix.rust_target }}"
+          if ($LASTEXITCODE -ne 0) { throw "Windows tests failed" }
+
+      - name: Build portable Windows package
+        shell: pwsh
+        env:
+          FIRMWARE_VERSION: ${{ needs.validate.outputs.firmware_version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $firmware = "dist/firmware/openmicro-fw-$env:FIRMWARE_VERSION.bin"
+          if (-not (Test-Path -LiteralPath $firmware -PathType Leaf)) {
+            throw "Missing firmware image: $firmware"
+          }
+          ./scripts/package-windows.ps1 `
+            -OutputDir dist/windows `
+            -FirmwareBin $firmware `
+            -Target "${{ matrix.rust_target }}"
+
+          $package = "dist/windows/OpenMicro-${{ needs.validate.outputs.app_version }}-windows-${{ matrix.arch }}.zip"
+          if (-not (Test-Path -LiteralPath $package -PathType Leaf)) {
+            throw "Missing Windows package: $package"
+          }
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-windows-${{ matrix.arch }}
+          path: dist/windows/OpenMicro-${{ needs.validate.outputs.app_version }}-windows-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
+
   publish:
     name: Publish GitHub release
     needs:
       - validate
       - firmware
       - macos
+      - windows
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: release
@@ -644,6 +749,8 @@ jobs:
           INTEL_DMG="OpenMicro-$APP_VERSION-macos-x86_64.dmg"
           ARM_APPCAST="appcast-aarch64.xml"
           INTEL_APPCAST="appcast-x86_64.xml"
+          WINDOWS_ARM_ZIP="OpenMicro-$APP_VERSION-windows-aarch64.zip"
+          WINDOWS_INTEL_ZIP="OpenMicro-$APP_VERSION-windows-x86_64.zip"
           FIRMWARE_BIN="openmicro-fw-$FIRMWARE_VERSION.bin"
           FIRMWARE_ELF="openmicro-fw-$FIRMWARE_VERSION.elf"
           FIRMWARE_HEX="openmicro-fw-$FIRMWARE_VERSION.hex"
@@ -653,6 +760,8 @@ jobs:
             "$INTEL_DMG" \
             "$ARM_APPCAST" \
             "$INTEL_APPCAST" \
+            "$WINDOWS_ARM_ZIP" \
+            "$WINDOWS_INTEL_ZIP" \
             "$FIRMWARE_BIN" \
             "$FIRMWARE_ELF" \
             "$FIRMWARE_HEX"
@@ -665,9 +774,13 @@ jobs:
 
           ARM_SHA="$(sha256sum "dist/$ARM_DMG" | awk '{print $1}')"
           INTEL_SHA="$(sha256sum "dist/$INTEL_DMG" | awk '{print $1}')"
+          WINDOWS_ARM_SHA="$(sha256sum "dist/$WINDOWS_ARM_ZIP" | awk '{print $1}')"
+          WINDOWS_INTEL_SHA="$(sha256sum "dist/$WINDOWS_INTEL_ZIP" | awk '{print $1}')"
           FIRMWARE_SHA="$(sha256sum "dist/$FIRMWARE_BIN" | awk '{print $1}')"
           ARM_SIZE="$(stat -c '%s' "dist/$ARM_DMG")"
           INTEL_SIZE="$(stat -c '%s' "dist/$INTEL_DMG")"
+          WINDOWS_ARM_SIZE="$(stat -c '%s' "dist/$WINDOWS_ARM_ZIP")"
+          WINDOWS_INTEL_SIZE="$(stat -c '%s' "dist/$WINDOWS_INTEL_ZIP")"
           FIRMWARE_SIZE="$(stat -c '%s' "dist/$FIRMWARE_BIN")"
           RELEASE_BASE="https://github.com/$GITHUB_REPOSITORY/releases"
           ASSET_BASE="$RELEASE_BASE/download/$TAG"
@@ -683,6 +796,14 @@ jobs:
             --arg intel_url "$ASSET_BASE/$INTEL_DMG" \
             --arg intel_sha "$INTEL_SHA" \
             --argjson intel_size "$INTEL_SIZE" \
+            --arg windows_arm_name "$WINDOWS_ARM_ZIP" \
+            --arg windows_arm_url "$ASSET_BASE/$WINDOWS_ARM_ZIP" \
+            --arg windows_arm_sha "$WINDOWS_ARM_SHA" \
+            --argjson windows_arm_size "$WINDOWS_ARM_SIZE" \
+            --arg windows_intel_name "$WINDOWS_INTEL_ZIP" \
+            --arg windows_intel_url "$ASSET_BASE/$WINDOWS_INTEL_ZIP" \
+            --arg windows_intel_sha "$WINDOWS_INTEL_SHA" \
+            --argjson windows_intel_size "$WINDOWS_INTEL_SIZE" \
             --arg firmware_version "$FIRMWARE_VERSION" \
             --arg firmware_name "$FIRMWARE_BIN" \
             --arg firmware_url "$ASSET_BASE/$FIRMWARE_BIN" \
@@ -706,6 +827,20 @@ jobs:
                     url: $intel_url,
                     sha256: $intel_sha,
                     size: $intel_size
+                  }
+                },
+                windows: {
+                  aarch64: {
+                    name: $windows_arm_name,
+                    url: $windows_arm_url,
+                    sha256: $windows_arm_sha,
+                    size: $windows_arm_size
+                  },
+                  x86_64: {
+                    name: $windows_intel_name,
+                    url: $windows_intel_url,
+                    sha256: $windows_intel_sha,
+                    size: $windows_intel_size
                   }
                 }
               },
@@ -733,6 +868,8 @@ jobs:
               "$INTEL_DMG" \
               "$ARM_APPCAST" \
               "$INTEL_APPCAST" \
+              "$WINDOWS_ARM_ZIP" \
+              "$WINDOWS_INTEL_ZIP" \
               "$FIRMWARE_BIN" \
               "$FIRMWARE_ELF" \
               "$FIRMWARE_HEX" \

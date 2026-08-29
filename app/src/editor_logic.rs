@@ -58,7 +58,15 @@ impl SimpleBehaviorKind {
     pub const fn label(self) -> &'static str {
         match self {
             Self::ApplicationShortcut => "Application shortcut",
-            Self::MacOs => "macOS control",
+            Self::MacOs => {
+                if cfg!(target_os = "windows") {
+                    "Windows control"
+                } else if cfg!(target_os = "macos") {
+                    "macOS control"
+                } else {
+                    "System control"
+                }
+            }
             Self::Keystroke => "Keystroke",
             Self::App => "Open application",
         }
@@ -114,7 +122,8 @@ pub fn apply_simple_behavior_kind(
                 }
             }
 
-            let Some(application) = behaviors::APPLICATION_SHORTCUTS.first() else {
+            let applications = behaviors::shortcut_applications_for_host();
+            let Some(application) = applications.first().copied() else {
                 return false;
             };
             let Some(shortcut) = application.shortcuts.first() else {
@@ -197,13 +206,14 @@ pub fn cycle_shortcut_application(
     input: &mut InputConfig,
     direction: CycleDirection,
 ) -> Option<&'static ShortcutApplication> {
+    let applications = behaviors::shortcut_applications_for_host();
     let current = selected_shortcut_application(input).and_then(|selected| {
-        behaviors::APPLICATION_SHORTCUTS
+        applications
             .iter()
             .position(|application| application.id == selected.id)
     });
-    let index = cycle_index(behaviors::APPLICATION_SHORTCUTS.len(), current, direction)?;
-    let application = &behaviors::APPLICATION_SHORTCUTS[index];
+    let index = cycle_index(applications.len(), current, direction)?;
+    let application = applications[index];
     let shortcut = application.shortcuts.first()?;
     if behaviors::apply_application_shortcut(input, application.id, shortcut.id) {
         Some(application)
@@ -217,8 +227,10 @@ pub fn cycle_shortcut_preset(
     input: &mut InputConfig,
     direction: CycleDirection,
 ) -> Option<&'static ShortcutPreset> {
+    let applications = behaviors::shortcut_applications_for_host();
     let application = selected_shortcut_application(input)
-        .or_else(|| behaviors::APPLICATION_SHORTCUTS.first())?;
+        .filter(|selected| applications.iter().any(|app| app.id == selected.id))
+        .or_else(|| applications.first().copied())?;
     let current = selected_shortcut_preset(input).and_then(|selected| {
         application
             .shortcuts
@@ -234,7 +246,7 @@ pub fn cycle_shortcut_preset(
     }
 }
 
-/// Cycle through the curated macOS controls and apply the corresponding
+/// Cycle through the curated host-system controls and apply the corresponding
 /// device/host mapping atomically.
 pub fn cycle_macos_preset(
     input: &mut InputConfig,
@@ -242,14 +254,14 @@ pub fn cycle_macos_preset(
     direction: CycleDirection,
 ) -> MacOsControl {
     let current = match input.behavior.as_ref() {
-        Some(ControlBehavior::MacOs { command }) => behaviors::MACOS_PRESETS
+        Some(ControlBehavior::MacOs { command }) => behaviors::system_presets()
             .iter()
             .position(|preset| preset.command == *command),
         _ => None,
     };
-    let index = cycle_index(behaviors::MACOS_PRESETS.len(), current, direction)
-        .expect("macOS preset catalog is non-empty");
-    let command = behaviors::MACOS_PRESETS[index].command;
+    let index = cycle_index(behaviors::system_presets().len(), current, direction)
+        .expect("system preset catalog is non-empty");
+    let command = behaviors::system_presets()[index].command;
     behaviors::apply_macos(input, slot_index, command);
     command
 }
@@ -722,10 +734,14 @@ mod tests {
             cycle_simple_behavior(&mut input, 0, CycleDirection::Next),
             SimpleBehaviorKind::ApplicationShortcut
         );
-        let first_app = &behaviors::APPLICATION_SHORTCUTS[0];
+        let applications = behaviors::shortcut_applications_for_host();
+        let first_app = applications[0];
         let first_shortcut = &first_app.shortcuts[0];
         assert_eq!(input.emitted.kind, SlotKind::Keyboard);
-        assert_eq!(input.emitted.mods, first_shortcut.mods);
+        assert_eq!(
+            input.emitted.mods,
+            behaviors::shortcut_mods_for_host(first_shortcut.mods)
+        );
         assert_eq!(input.emitted.code, first_shortcut.key);
         assert_eq!(input.action, Action::None);
 
@@ -781,7 +797,8 @@ mod tests {
     #[test]
     fn shortcut_application_and_preset_catalogs_wrap() {
         let mut input = default_codex_profile().inputs[0].clone();
-        let last_app = behaviors::APPLICATION_SHORTCUTS.last().unwrap();
+        let applications = behaviors::shortcut_applications_for_host();
+        let last_app = applications.last().unwrap();
         let last_shortcut = last_app.shortcuts.last().unwrap();
         assert!(behaviors::apply_application_shortcut(
             &mut input,
@@ -790,13 +807,13 @@ mod tests {
         ));
 
         let app = cycle_shortcut_application(&mut input, CycleDirection::Next).unwrap();
-        assert_eq!(app.id, behaviors::APPLICATION_SHORTCUTS[0].id);
+        assert_eq!(app.id, applications[0].id);
         assert_eq!(
             selected_shortcut_preset(&input).unwrap().id,
             app.shortcuts[0].id
         );
 
-        let app = behaviors::APPLICATION_SHORTCUTS[0];
+        let app = applications[0];
         let last = app.shortcuts.last().unwrap();
         assert!(behaviors::apply_application_shortcut(
             &mut input, app.id, last.id
@@ -808,12 +825,12 @@ mod tests {
     }
 
     #[test]
-    fn macos_and_keyboard_catalogs_wrap_and_apply() {
+    fn system_and_keyboard_catalogs_wrap_and_apply() {
         let mut input = default_codex_profile().inputs[0].clone();
-        let last = behaviors::MACOS_PRESETS.last().unwrap().command;
+        let last = behaviors::system_presets().last().unwrap().command;
         behaviors::apply_macos(&mut input, 0, last);
         let command = cycle_macos_preset(&mut input, 0, CycleDirection::Next);
-        assert_eq!(command, behaviors::MACOS_PRESETS[0].command);
+        assert_eq!(command, behaviors::system_presets()[0].command);
 
         let last_usage = KEYBOARD_USAGES.last().unwrap().usage;
         behaviors::apply_keystroke(&mut input, 0x09, last_usage);
@@ -944,7 +961,14 @@ mod tests {
 
     #[test]
     fn labels_are_human_readable_for_known_and_unknown_values() {
-        assert_eq!(SimpleBehaviorKind::MacOs.label(), "macOS control");
+        let expected_control = if cfg!(target_os = "windows") {
+            "Windows control"
+        } else if cfg!(target_os = "macos") {
+            "macOS control"
+        } else {
+            "System control"
+        };
+        assert_eq!(SimpleBehaviorKind::MacOs.label(), expected_control);
         assert_eq!(slot_kind_label(SlotKind::Consumer), "Media / system key");
         assert_eq!(ActionKind::Run.label(), "Run command");
         assert_eq!(media_op_label(MediaOp::PrevTrack), "Previous track");

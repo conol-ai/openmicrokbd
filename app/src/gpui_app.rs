@@ -32,6 +32,7 @@ use crate::config::{LedPattern, self, Action, ControlBehavior, InputConfig, Joys
     SLOT_JOY_PRESS, SLOT_JOY_RIGHT, SLOT_JOY_UP, SLOT_TOUCH_SWIPE_L, SLOT_TOUCH_SWIPE_R,
     SLOT_TOUCH_TAP,};
 use crate::device::DeviceCmd;
+use crate::dfuse;
 use crate::editor_logic::{self, CycleDirection, SimpleBehaviorKind};
 use crate::events;
 use crate::gpui_controls::{self as controls, CellVisual};
@@ -104,9 +105,9 @@ enum AppUpdateDetailState {
 enum AppUpdateButtonState {
     StartSparkle,
     SparkleBusy,
-    DownloadDmg,
-    DownloadingDmg,
-    OpenDmg,
+    DownloadPackage,
+    DownloadingPackage,
+    OpenPackage,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,11 +142,11 @@ fn app_update_controls(
         AppUpdateButtonState::StartSparkle
     });
     let manual = (!sparkle_available).then_some(if manual_downloading {
-        AppUpdateButtonState::DownloadingDmg
+        AppUpdateButtonState::DownloadingPackage
     } else if manual_ready {
-        AppUpdateButtonState::OpenDmg
+        AppUpdateButtonState::OpenPackage
     } else {
-        AppUpdateButtonState::DownloadDmg
+        AppUpdateButtonState::DownloadPackage
     });
 
     AppUpdateControls {
@@ -695,14 +696,13 @@ fn lucide_icon_visual(name: &str, size: f32, color: Hsla) -> AnyElement {
 
 fn shortcut_app_icon(app: &behaviors::ShortcutApplication, size: f32, color: Hsla) -> AnyElement {
     configured_icon_visual(app.icon, size, color)
-        .unwrap_or_else(|| lucide_icon_visual("app-window-mac", size, color))
+        .unwrap_or_else(|| lucide_icon_visual("app-window", size, color))
 }
 
 /// Catalog order is semantic (legacy apps first); the picker shows a
 /// case-insensitively alphabetized list instead.
 fn sorted_shortcut_applications() -> Vec<&'static behaviors::ShortcutApplication> {
-    let mut apps: Vec<&'static behaviors::ShortcutApplication> =
-        behaviors::APPLICATION_SHORTCUTS.iter().collect();
+    let mut apps = behaviors::shortcut_applications_for_host();
     apps.sort_by_key(|app| app.label.to_lowercase());
     apps
 }
@@ -1348,7 +1348,15 @@ impl OpenMicro {
         match editor_logic::classify_simple_behavior(input, slot) {
             None => tr("custom_existing"),
             Some(SimpleBehaviorKind::ApplicationShortcut) => tr("beh_shortcuts"),
-            Some(SimpleBehaviorKind::MacOs) => tr("beh_macos"),
+            Some(SimpleBehaviorKind::MacOs) => {
+                if cfg!(target_os = "windows") {
+                    tr("beh_windows")
+                } else if cfg!(target_os = "macos") {
+                    tr("beh_macos")
+                } else {
+                    tr("beh_system")
+                }
+            }
             Some(SimpleBehaviorKind::Keystroke) => tr("beh_keystroke"),
             Some(SimpleBehaviorKind::App) => tr("beh_app"),
         }
@@ -1382,9 +1390,11 @@ impl OpenMicro {
                 _ => None,
             }
         });
-        self.shortcut_picker_app =
-            current.unwrap_or_else(|| behaviors::APPLICATION_SHORTCUTS[0].id.to_string());
-        if let Some(index) = sorted_shortcut_applications()
+        let applications = sorted_shortcut_applications();
+        self.shortcut_picker_app = current
+            .filter(|current| applications.iter().any(|app| app.id == current))
+            .unwrap_or_else(|| applications[0].id.to_string());
+        if let Some(index) = applications
             .iter()
             .position(|app| app.id == self.shortcut_picker_app)
         {
@@ -1420,14 +1430,14 @@ impl OpenMicro {
         };
         let command = match self.host.active_profile().inputs[slot].behavior {
             Some(ControlBehavior::MacOs { command }) => command,
-            _ => behaviors::MACOS_PRESETS[0].command,
+            _ => behaviors::system_presets()[0].command,
         };
-        let current = behaviors::MACOS_PRESETS
+        let current = behaviors::system_presets()
             .iter()
             .position(|item| item.command == command)
             .unwrap_or(0);
-        let preset = &behaviors::MACOS_PRESETS
-            [wrapped_index(current, behaviors::MACOS_PRESETS.len(), delta)];
+        let preset = &behaviors::system_presets()
+            [wrapped_index(current, behaviors::system_presets().len(), delta)];
         behaviors::apply_macos(
             &mut self.host.active_profile_mut().inputs[slot],
             slot,
@@ -2153,6 +2163,16 @@ impl OpenMicro {
         cx.notify();
     }
 
+    fn open_windows_dfu_driver_setup(&mut self, cx: &mut Context<Self>) {
+        match open::that(dfuse::WINDOWS_DFU_DRIVER_HELP_URL) {
+            Ok(()) => self.push_log("opened Windows DFU driver setup".into()),
+            Err(error) => {
+                self.host.update_error = Some(format!("cannot open DFU driver setup: {error}"));
+            }
+        }
+        cx.notify();
+    }
+
     fn import_config(
         &mut self,
         mode: config::ImportMode,
@@ -2488,10 +2508,10 @@ impl OpenMicro {
                                     window.prevent_default();
                                     cx.stop_propagation();
                                 })
-                                .on_click(|_, window, cx| {
+                                .on_click(|_, _window, cx| {
                                     cx.stop_propagation();
                                     #[cfg(target_os = "linux")]
-                                    hide_linux_window(window);
+                                    hide_linux_window(_window);
                                 }),
                         )
                     });
@@ -2541,7 +2561,7 @@ impl OpenMicro {
                     AppUpdateDetailState::ManualDownloading => format!(
                         "OpenMicro {} · {} {}%",
                         catalog.app.version,
-                        tr("app_update_downloading_dmg"),
+                        tr("app_update_downloading_package"),
                         progress
                     ),
                     AppUpdateDetailState::ManualReady => format!(
@@ -2582,20 +2602,20 @@ impl OpenMicro {
                 }
                 if let Some(manual) = controls.manual {
                     actions = actions.child(match manual {
-                        AppUpdateButtonState::DownloadDmg => {
-                            tiny_button(tr("app_update_download_dmg"))
+                        AppUpdateButtonState::DownloadPackage => {
+                            tiny_button(tr("app_update_download_package"))
                                 .id("download-app-update")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.begin_manual_app_download(cx)
                                 }))
                                 .into_any_element()
                         }
-                        AppUpdateButtonState::DownloadingDmg => paging_button(
-                            format!("{} {}%", tr("app_update_downloading_dmg"), progress),
+                        AppUpdateButtonState::DownloadingPackage => paging_button(
+                            format!("{} {}%", tr("app_update_downloading_package"), progress),
                             false,
                         )
                         .into_any_element(),
-                        AppUpdateButtonState::OpenDmg => tiny_button(tr("app_update_open_dmg"))
+                        AppUpdateButtonState::OpenPackage => tiny_button(tr("app_update_open_package"))
                             .id("open-app-update")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.open_manual_app_download(cx)
@@ -3030,7 +3050,7 @@ impl OpenMicro {
                 let field = match behaviors::shortcut_preset(application, shortcut) {
                     Some(preset) => {
                         let app = behaviors::shortcut_application(application)
-                            .unwrap_or(&behaviors::APPLICATION_SHORTCUTS[0]);
+                            .expect("shortcut preset belongs to its application catalog");
                         inspector_field(
                             tr("shortcut"),
                             behaviors::shortcut_chord_label(preset),
@@ -3114,7 +3134,7 @@ impl OpenMicro {
                 let app_row = div().w_full().flex().items_center().gap(px(8.)).child(
                     div().flex_1().min_w(px(0.)).child(
                         selection_card(
-                            lucide_icon_visual("app-window-mac", 17., pixel::accent_color()),
+                            lucide_icon_visual("app-window", 17., pixel::accent_color()),
                             app_name,
                             if target.is_empty() {
                                 None
@@ -4036,7 +4056,7 @@ impl OpenMicro {
                             .font_family("lucide")
                             .text_size(px(16.))
                             .text_color(pixel::accent_color())
-                            .child(icon_glyph("app-window-mac")),
+                            .child(icon_glyph("app-window")),
                     )
                     .child(
                         div()
@@ -4205,8 +4225,10 @@ impl OpenMicro {
         let query = self.icon_query.trim().to_lowercase();
 
         let body = if query.is_empty() {
+            let applications = sorted_shortcut_applications();
             let selected = behaviors::shortcut_application(&self.shortcut_picker_app)
-                .unwrap_or(&behaviors::APPLICATION_SHORTCUTS[0]);
+                .filter(|selected| applications.iter().any(|app| app.id == selected.id))
+                .unwrap_or(applications[0]);
             // Rows are direct children of the tracked element so
             // scroll_to_item can index them when the sheet opens.
             let mut rail = div()
@@ -4217,7 +4239,7 @@ impl OpenMicro {
                 .flex()
                 .flex_col()
                 .gap(px(4.));
-            for (index, app) in sorted_shortcut_applications().into_iter().enumerate() {
+            for (index, app) in applications.into_iter().enumerate() {
                 let active = app.id == selected.id;
                 let app_id = app.id;
                 rail = rail.child(
@@ -4656,6 +4678,11 @@ impl OpenMicro {
         } else {
             0.0
         };
+        let windows_driver_required = self
+            .host
+            .update_error
+            .as_deref()
+            .is_some_and(dfuse::is_windows_driver_required);
         let phase = self
             .host
             .update_phase
@@ -4708,6 +4735,36 @@ impl OpenMicro {
                         tr("profiles_and_key_configs_survive"),
                         BadgeTone::Success,
                     ))
+                    .when(
+                        cfg!(target_os = "windows") && windows_driver_required,
+                        |body| {
+                        body.child(controls::status_rail(
+                            tr("windows_dfu_driver"),
+                            tr("dfu_driver_required"),
+                            BadgeTone::Danger,
+                        ))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .child(
+                                    tiny_button(tr("open_dfu_driver_setup"))
+                                        .id("open-dfu-driver-setup")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.open_windows_dfu_driver_setup(cx)
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .text_size(px(11.))
+                                        .text_color(pixel::muted_text_color())
+                                        .child(tr("dfu_driver_steps")),
+                                ),
+                        )
+                    },
+                    )
                     .child(pixel::divider())
                     .child(inspector_field(
                         "FIRMWARE IMAGE",
@@ -5213,6 +5270,8 @@ pub fn run() {
             std::rc::Rc::new(std::cell::RefCell::new(None));
         let main_view_for_action = main_view.clone();
         cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        #[cfg(target_os = "windows")]
+        cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
         cx.set_menus(vec![Menu {
             name: "OpenMicro".into(),
             items: vec![
@@ -5230,7 +5289,11 @@ pub fn run() {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                is_resizable: false,
+                // gpui-component draws a maximize control on Windows. Keep
+                // the underlying native window style in sync so Windows can
+                // provide maximize/restore and Snap Layout behavior.
+                is_resizable: true,
+                window_min_size: Some(size(px(760.), px(460.))),
                 app_id: Some("ai.conol.openmicro".into()),
                 titlebar: Some(TitleBar::title_bar_options()),
                 ..Default::default()
@@ -5330,7 +5393,7 @@ mod tests {
             AppUpdateControls {
                 detail: AppUpdateDetailState::Available,
                 sparkle: None,
-                manual: Some(AppUpdateButtonState::DownloadDmg),
+                manual: Some(AppUpdateButtonState::DownloadPackage),
                 dismissible: true,
             }
         );
@@ -5357,7 +5420,7 @@ mod tests {
             AppUpdateControls {
                 detail: AppUpdateDetailState::ManualDownloading,
                 sparkle: None,
-                manual: Some(AppUpdateButtonState::DownloadingDmg),
+                manual: Some(AppUpdateButtonState::DownloadingPackage),
                 dismissible: false,
             }
         );

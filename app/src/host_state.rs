@@ -894,6 +894,7 @@ mod tests {
                     aarch64: asset("arm.dmg"),
                     x86_64: asset("intel.dmg"),
                 },
+                windows: None,
             },
             firmware: FirmwareRelease {
                 version: firmware_version.into(),

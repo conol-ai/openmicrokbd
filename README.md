@@ -59,11 +59,26 @@ scripts/package-macos.sh dist dist/openmicro-fw-<firmware-version>.bin
 cd app && cargo run --release --locked
 ```
 
+On Windows, install Rust and Visual Studio's **Desktop development with C++**
+workload, then build a portable package from PowerShell:
+
+```powershell
+rustup target add x86_64-pc-windows-msvc
+./scripts/package-windows.ps1 `
+  -OutputDir dist/windows `
+  -FirmwareBin dist/openmicro-fw-<firmware-version>.bin `
+  -Target x86_64-pc-windows-msvc
+```
+
+Use `aarch64-pc-windows-msvc` for a native Windows on Arm package; that build
+also requires the Visual Studio LLVM/Clang component.
+
 The open-source [CoHDL compiler](https://github.com/conol-ai/cohdl) and its documentation are available at [cohdl.org](https://cohdl.org). Generated netlists, BOMs, footprints, and layout constraints remain checked in under `hw/*/out/` for inspection and use without rerunning the toolchain.
 
-Signed releases build both Intel and Apple Silicon DMGs plus firmware through
-GitHub Actions. See [`RELEASING.md`](RELEASING.md) for versioning, Apple
-signing/notarization secrets, the required device smoke test, and the tag flow.
+Releases build Intel and Apple Silicon DMGs, Windows x64 and Arm64 portable
+ZIPs, and firmware through GitHub Actions. See
+[`RELEASING.md`](RELEASING.md) for versioning, Apple signing/notarization
+secrets, the required device smoke test, and the tag flow.
 Linux packaging, USB permissions, and the STM32F072 ROM-DFU host-controller
 workaround are tracked in
 [`docs/linux-firmware-updates.md`](docs/linux-firmware-updates.md).

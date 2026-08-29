@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 const DEFAULT_APP_BINARY: &str = "/Applications/OpenMicro.app/Contents/MacOS/OpenMicro";
 const MANAGED_MARKER: &str = "// Managed by OpenMicro Settings. Remove this line before editing; marked files may be replaced on update.";
 const SHELL_MANAGED_MARKER: &str = "# Managed by OpenMicro Settings. Remove this line before editing; marked files may be replaced on update.";
+const BATCH_MANAGED_MARKER: &str = "REM Managed by OpenMicro Settings. Remove this line before editing; marked files may be replaced on update.";
 const LEGACY_MANAGED_MARKER: &str =
     "// Managed by OpenMicro Settings. Local changes may be replaced on update.";
 const LEGACY_SHELL_MANAGED_MARKER: &str =
@@ -28,6 +29,7 @@ const CLAUDE_TEMPLATE: &str = include_str!("../claude-code-hooks.example.json");
 const GROK_TEMPLATE: &str = include_str!("../grok-hooks.example.json");
 const OPENCODE_TEMPLATE: &str = include_str!("../opencode-openmicro.example.ts");
 const DEEP_CODE_TEMPLATE: &str = include_str!("../deep-code-notify.example.sh");
+const DEEP_CODE_WINDOWS_TEMPLATE: &str = include_str!("../deep-code-notify.example.cmd");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IntegrationKind {
@@ -106,13 +108,6 @@ struct InstallLayout {
 
 impl InstallLayout {
     fn discover() -> Result<Self, String> {
-        if !cfg!(unix) {
-            return Err(
-                "coding-agent activity installation is currently available on macOS and Linux only"
-                    .into(),
-            );
-        }
-
         let home =
             dirs::home_dir().ok_or_else(|| "cannot locate the user home directory".to_string())?;
         let executable = env::current_exe()
@@ -133,13 +128,19 @@ impl InstallLayout {
         let xdg_config =
             nonempty_env_path("XDG_CONFIG_HOME")?.unwrap_or_else(|| home.join(".config"));
 
+        let deep_code_script = if cfg!(target_os = "windows") {
+            home.join(".deepcode/openmicro-notify.cmd")
+        } else {
+            home.join(".deepcode/openmicro-notify.sh")
+        };
+
         Ok(Self {
             executable,
             codex_hooks: codex_home.join("hooks.json"),
             claude_settings: claude_home.join("settings.json"),
             opencode_plugin: xdg_config.join("opencode/plugins/openmicro.ts"),
             deep_code_settings: home.join(".deepcode/settings.json"),
-            deep_code_script: home.join(".deepcode/openmicro-notify.sh"),
+            deep_code_script,
             grok_hooks: home.join(".grok/hooks/openmicro.json"),
             octos_defaults: home.join(".octos/profile-defaults.json"),
         })
@@ -164,7 +165,11 @@ impl InstallLayout {
             claude_settings: home.join(".claude/settings.json"),
             opencode_plugin: home.join(".config/opencode/plugins/openmicro.ts"),
             deep_code_settings: home.join(".deepcode/settings.json"),
-            deep_code_script: home.join(".deepcode/openmicro-notify.sh"),
+            deep_code_script: home.join(if cfg!(target_os = "windows") {
+                ".deepcode/openmicro-notify.cmd"
+            } else {
+                ".deepcode/openmicro-notify.sh"
+            }),
             grok_hooks: home.join(".grok/hooks/openmicro.json"),
             octos_defaults: home.join(".octos/profile-defaults.json"),
         }
@@ -840,6 +845,16 @@ fn desired_hooks(
 }
 
 fn shell_word(value: &str) -> String {
+    if cfg!(target_os = "windows") {
+        if !value.is_empty()
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"\\/_-.+:".contains(&byte))
+        {
+            return value.into();
+        }
+        return format!("\"{value}\"");
+    }
     if !value.is_empty()
         && value
             .bytes()
@@ -1198,13 +1213,18 @@ fn decode_shell_word(word: &str) -> Option<String> {
     }
     if word
         .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || b"/_-.+:".contains(&byte))
+        .all(|byte| byte.is_ascii_alphanumeric() || b"\\/_-.+:".contains(&byte))
     {
         return Some(word.into());
     }
+    if let Some(inner) = word.strip_prefix('"').and_then(|word| word.strip_suffix('"')) {
+        if !inner.is_empty() && !inner.contains(['"', '\r', '\n']) {
+            return Some(inner.into());
+        }
+    }
     let inner = word.strip_prefix('\'')?.strip_suffix('\'')?;
     let decoded = inner.replace("'\"'\"'", "'");
-    (shell_word(&decoded) == word).then_some(decoded)
+    (!decoded.contains(['\r', '\n'])).then_some(decoded)
 }
 
 fn is_managed_binary_path(candidate: &str, executable: &Path) -> bool {
@@ -1219,7 +1239,11 @@ fn is_managed_binary_path(candidate: &str, executable: &Path) -> bool {
     // Recognize stale source-build paths and normal macOS bundle binaries,
     // while leaving arbitrary wrappers containing "openmicro" untouched.
     let file_name = candidate.file_name().and_then(|name| name.to_str());
-    if file_name == Some("openmicro-app") {
+    if file_name.is_some_and(|name| {
+        name.eq_ignore_ascii_case("openmicro-app")
+            || name.eq_ignore_ascii_case("openmicro-app.exe")
+            || name.eq_ignore_ascii_case("OpenMicro.exe")
+    }) {
         return true;
     }
     file_name == Some("OpenMicro")
@@ -1252,6 +1276,20 @@ fn render_opencode_plugin(executable: &Path) -> Result<Vec<u8>, String> {
 }
 
 fn render_deep_code_script(executable: &Path) -> Result<Vec<u8>, String> {
+    if cfg!(target_os = "windows") {
+        let executable = path_text(executable)?;
+        if executable.contains(['"', '\r', '\n']) {
+            return Err("the OpenMicro executable path cannot be represented in a batch file".into());
+        }
+        // Percent signs are expanded by cmd.exe even inside a quoted SET
+        // assignment; doubling them preserves a literal percent in a path.
+        let executable = executable.replace('%', "%%");
+        return replace_declaration(
+            DEEP_CODE_WINDOWS_TEMPLATE,
+            "set \"OPENMICRO_BIN=C:\\Program Files\\OpenMicro\\OpenMicro.exe\"",
+            &format!("set \"OPENMICRO_BIN={executable}\""),
+        );
+    }
     replace_declaration(
         DEEP_CODE_TEMPLATE,
         &format!("OPENMICRO_BIN=\"{DEFAULT_APP_BINARY}\""),
@@ -1307,6 +1345,7 @@ fn has_managed_marker(text: &str) -> bool {
             line,
             MANAGED_MARKER
                 | SHELL_MANAGED_MARKER
+                | BATCH_MANAGED_MARKER
                 | LEGACY_MANAGED_MARKER
                 | LEGACY_SHELL_MANAGED_MARKER
         )
@@ -1317,6 +1356,8 @@ fn normalized_owned_template(text: &str, declaration_prefix: &str) -> Option<Str
     let without_marker = text
         .replacen(&format!("{MANAGED_MARKER}\n"), "", 1)
         .replacen(&format!("{SHELL_MANAGED_MARKER}\n"), "", 1)
+        .replacen(&format!("{BATCH_MANAGED_MARKER}\r\n"), "", 1)
+        .replacen(&format!("{BATCH_MANAGED_MARKER}\n"), "", 1)
         .replacen(&format!("{LEGACY_MANAGED_MARKER}\n"), "", 1)
         .replacen(&format!("{LEGACY_SHELL_MANAGED_MARKER}\n"), "", 1);
     let mut found = 0usize;
@@ -1382,12 +1423,14 @@ fn inspect_deep_code(layout: &InstallLayout) -> Result<InstallState, String> {
     let mut script_state = inspect_owned_template(
         &layout.deep_code_script,
         &render_deep_code_script(&layout.executable),
-        "OPENMICRO_BIN=",
+        deep_code_declaration_prefix(),
     )?;
-    if script_state == InstallState::Installed
-        && FileSnapshot::read(&layout.deep_code_script)?.mode != Some(0o700)
-    {
-        script_state = InstallState::NeedsUpdate;
+    if let Some(required_mode) = deep_code_required_mode() {
+        if script_state == InstallState::Installed
+            && FileSnapshot::read(&layout.deep_code_script)?.mode != Some(required_mode)
+        {
+            script_state = InstallState::NeedsUpdate;
+        }
     }
     match (notify_installed, script_state) {
         (true, InstallState::Installed) => Ok(InstallState::Installed),
@@ -1421,7 +1464,7 @@ fn install_deep_code(
     inspect_owned_template(
         &layout.deep_code_script,
         &Ok(desired_script.clone()),
-        "OPENMICRO_BIN=",
+        deep_code_declaration_prefix(),
     )?;
     let script_snapshot = FileSnapshot::read(&layout.deep_code_script)?;
 
@@ -1435,7 +1478,7 @@ fn install_deep_code(
             snapshot: script_snapshot,
             contents: desired_script,
             default_mode: 0o700,
-            required_mode: Some(0o700),
+            required_mode: deep_code_required_mode(),
         },
         PlannedWrite {
             snapshot: settings_snapshot,
@@ -1449,6 +1492,18 @@ fn install_deep_code(
         changed_files,
         backups,
     })
+}
+
+fn deep_code_declaration_prefix() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "set \"OPENMICRO_BIN="
+    } else {
+        "OPENMICRO_BIN="
+    }
+}
+
+fn deep_code_required_mode() -> Option<u32> {
+    cfg!(unix).then_some(0o700)
 }
 
 fn desired_octoscode_hooks(executable: &Path) -> Result<Vec<Value>, String> {
@@ -1859,12 +1914,14 @@ mod tests {
         let installed = fs::read_to_string(&layout.opencode_plugin).unwrap();
         assert!(installed.contains(MANAGED_MARKER));
         assert!(installed.contains("Remove this line before editing"));
-        assert!(installed.contains(path_text(&layout.executable).unwrap()));
-
         let old_executable = path_text(&layout.executable).unwrap();
+        let encoded_executable = serde_json::to_string(old_executable).unwrap();
+        assert!(installed.contains(&encoded_executable));
+
+        let encoded_replacement = serde_json::to_string("/old/OpenMicro").unwrap();
         fs::write(
             &layout.opencode_plugin,
-            installed.replace(old_executable, "/old/OpenMicro"),
+            installed.replace(&encoded_executable, &encoded_replacement),
         )
         .unwrap();
         assert_eq!(
@@ -1932,7 +1989,11 @@ mod tests {
             path_text(&layout.deep_code_script).unwrap()
         );
         let script = fs::read_to_string(&layout.deep_code_script).unwrap();
-        assert!(script.contains(&shell_word(path_text(&layout.executable).unwrap())));
+        if cfg!(target_os = "windows") {
+            assert!(script.contains(path_text(&layout.executable).unwrap()));
+        } else {
+            assert!(script.contains(&shell_word(path_text(&layout.executable).unwrap())));
+        }
 
         #[cfg(unix)]
         {
@@ -2077,11 +2138,19 @@ mod tests {
 
     #[test]
     fn shell_word_handles_spaces_and_apostrophes() {
-        assert_eq!(shell_word("/tmp/OpenMicro"), "/tmp/OpenMicro");
-        assert_eq!(
-            shell_word("/tmp/Tony's OpenMicro"),
-            "'/tmp/Tony'\"'\"'s OpenMicro'"
-        );
+        if cfg!(target_os = "windows") {
+            assert_eq!(shell_word(r"C:\OpenMicro.exe"), r"C:\OpenMicro.exe");
+            assert_eq!(
+                shell_word(r"C:\Tony's OpenMicro\OpenMicro.exe"),
+                r#""C:\Tony's OpenMicro\OpenMicro.exe""#
+            );
+        } else {
+            assert_eq!(shell_word("/tmp/OpenMicro"), "/tmp/OpenMicro");
+            assert_eq!(
+                shell_word("/tmp/Tony's OpenMicro"),
+                "'/tmp/Tony'\"'\"'s OpenMicro'"
+            );
+        }
     }
 
     #[test]

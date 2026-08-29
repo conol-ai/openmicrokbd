@@ -1,8 +1,8 @@
 //! GitHub Release discovery and integrity-checked artifact downloads.
 //!
-//! Release CI publishes `release-manifest.json` beside the DMGs and firmware
+//! Release CI publishes `release-manifest.json` beside the desktop packages and firmware
 //! image. The app checks GitHub's stable `releases/latest/download` URL on a
-//! worker thread, selects the DMG for the running architecture, and verifies
+//! worker thread, selects the package for the running OS/architecture, and verifies
 //! every downloaded artifact against the SHA-256 recorded in that manifest.
 
 use serde::Deserialize;
@@ -46,10 +46,18 @@ pub struct ReleaseCatalog {
 pub struct AppRelease {
     pub version: String,
     pub macos: MacOsRelease,
+    #[serde(default)]
+    pub windows: Option<WindowsRelease>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct MacOsRelease {
+    pub aarch64: ReleaseAsset,
+    pub x86_64: ReleaseAsset,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct WindowsRelease {
     pub aarch64: ReleaseAsset,
     pub x86_64: ReleaseAsset,
 }
@@ -100,11 +108,15 @@ impl ReleaseCatalog {
         validate_version(&self.app.version)?;
         validate_version(&self.firmware.version)?;
         validate_https_url(&self.release_url)?;
-        for asset in [
+        let mut assets = vec![
             &self.app.macos.aarch64,
             &self.app.macos.x86_64,
             &self.firmware.asset,
-        ] {
+        ];
+        if let Some(windows) = &self.app.windows {
+            assets.extend([&windows.aarch64, &windows.x86_64]);
+        }
+        for asset in assets {
             asset.validate()?;
         }
         if !(FIRMWARE_DOWNLOAD_MIN..=FIRMWARE_DOWNLOAD_LIMIT).contains(&self.firmware.asset.size) {
@@ -117,12 +129,11 @@ impl ReleaseCatalog {
     }
 
     pub fn app_asset(&self) -> Option<&ReleaseAsset> {
-        if !cfg!(target_os = "macos") {
-            return None;
-        }
-        match std::env::consts::ARCH {
-            "aarch64" => Some(&self.app.macos.aarch64),
-            "x86_64" => Some(&self.app.macos.x86_64),
+        match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("macos", "aarch64") => Some(&self.app.macos.aarch64),
+            ("macos", "x86_64") => Some(&self.app.macos.x86_64),
+            ("windows", "aarch64") => self.app.windows.as_ref().map(|set| &set.aarch64),
+            ("windows", "x86_64") => self.app.windows.as_ref().map(|set| &set.x86_64),
             _ => None,
         }
     }
@@ -228,14 +239,19 @@ pub fn spawn_download(kind: DownloadKind, version: String, asset: ReleaseAsset) 
 pub fn bundled_firmware() -> Result<Option<(String, PathBuf)>, String> {
     let executable =
         std::env::current_exe().map_err(|e| format!("cannot locate app executable: {e}"))?;
-    let Some(contents) = executable
+    #[cfg(target_os = "macos")]
+    let Some(firmware_dir) = executable
         .parent()
         .and_then(Path::parent)
         .filter(|path| path.file_name().and_then(|name| name.to_str()) == Some("Contents"))
+        .map(|contents| contents.join("Resources").join("firmware"))
     else {
         return Ok(None);
     };
-    let firmware_dir = contents.join("Resources").join("firmware");
+    #[cfg(not(target_os = "macos"))]
+    let Some(firmware_dir) = executable.parent().map(|directory| directory.join("firmware")) else {
+        return Ok(None);
+    };
     let image = firmware_dir.join("openmicro-fw.bin");
     let manifest_path = firmware_dir.join("manifest.json");
     if !image.is_file() || !manifest_path.is_file() {
@@ -551,6 +567,20 @@ mod tests {
                         "sha256": "b".repeat(64),
                         "size": 40_000_000
                     }
+                },
+                "windows": {
+                    "aarch64": {
+                        "name": "OpenMicro-0.3.0-windows-aarch64.zip",
+                        "url": "https://github.com/conol-ai/openmicrokbd/releases/download/v0.3.0/OpenMicro-0.3.0-windows-aarch64.zip",
+                        "sha256": "d".repeat(64),
+                        "size": 30_000_000
+                    },
+                    "x86_64": {
+                        "name": "OpenMicro-0.3.0-windows-x86_64.zip",
+                        "url": "https://github.com/conol-ai/openmicrokbd/releases/download/v0.3.0/OpenMicro-0.3.0-windows-x86_64.zip",
+                        "sha256": "e".repeat(64),
+                        "size": 30_000_000
+                    }
                 }
             },
             "firmware": {
@@ -565,5 +595,12 @@ mod tests {
         });
         let catalog: ReleaseCatalog = serde_json::from_value(manifest).unwrap();
         catalog.validate().unwrap();
+        assert!(catalog.app.windows.is_some());
+        if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+            assert_eq!(
+                catalog.app_asset().expect("Windows asset").name,
+                "OpenMicro-0.3.0-windows-x86_64.zip"
+            );
+        }
     }
 }

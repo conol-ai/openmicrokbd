@@ -18,6 +18,24 @@ pub const ASSET_DIRECTORY: &str = "simple-icons";
 const CATALOG_JSON: &str = include_str!("../resources/simple-icons.json");
 const CLEAR_ICON_PATH: &str = "icons/circle-x.svg";
 const CLEAR_ICON_SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>"##;
+const WINDOW_CONTROL_ASSETS: &[(&str, &[u8])] = &[
+    (
+        "icons/window-minimize.svg",
+        br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="#000" d="M3 8h10v1H3z"/></svg>"##,
+    ),
+    (
+        "icons/window-maximize.svg",
+        br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="#000" fill-rule="evenodd" d="M3 3h10v10H3V3zm1 1v8h8V4H4z"/></svg>"##,
+    ),
+    (
+        "icons/window-restore.svg",
+        br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="#000" fill-rule="evenodd" d="M5 3h8v8h-2v2H3V5h2V3zm1 1v1h5v5h1V4H6zM4 6v6h6V6H4z"/></svg>"##,
+    ),
+    (
+        "icons/window-close.svg",
+        br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="#000" d="M3.6 2.9 8 7.3l4.4-4.4.7.7L8.7 8l4.4 4.4-.7.7L8 8.7l-4.4 4.4-.7-.7L7.3 8 2.9 3.6z"/></svg>"##,
+    ),
+];
 
 /// One bundled monochrome brand icon.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -143,6 +161,12 @@ impl AssetSource for Assets {
         if path == CLEAR_ICON_PATH {
             return Ok(Some(Cow::Borrowed(CLEAR_ICON_SVG)));
         }
+        if let Some((_, contents)) = WINDOW_CONTROL_ASSETS
+            .iter()
+            .find(|(asset_path, _)| *asset_path == path)
+        {
+            return Ok(Some(Cow::Borrowed(contents)));
+        }
         let Some(slug) = slug_from_asset_path(path) else {
             return Ok(None);
         };
@@ -155,7 +179,11 @@ impl AssetSource for Assets {
                 SharedString::from(ASSET_DIRECTORY),
                 SharedString::from("icons"),
             ]),
-            "icons" => Ok(vec![SharedString::from("circle-x.svg")]),
+            "icons" => Ok(std::iter::once(SharedString::from("circle-x.svg"))
+                .chain(WINDOW_CONTROL_ASSETS.iter().map(|(path, _)| {
+                    SharedString::from(path.trim_start_matches("icons/"))
+                }))
+                .collect()),
             ASSET_DIRECTORY => Ok(icons()
                 .iter()
                 .map(|icon| SharedString::from(format!("{}.svg", icon.slug)))
@@ -236,6 +264,18 @@ mod tests {
     }
 
     #[test]
+    fn titlebar_control_assets_are_embedded() {
+        let source = Assets;
+        for (path, _) in WINDOW_CONTROL_ASSETS {
+            let bytes = source
+                .load(path)
+                .expect("asset load")
+                .expect("window control asset");
+            assert!(bytes.starts_with(b"<svg"), "{path}");
+        }
+    }
+
+    #[test]
     fn asset_listing_exposes_the_virtual_directory() {
         let source = Assets;
         assert_eq!(
@@ -248,10 +288,12 @@ mod tests {
         let listed = source.list("simple-icons/").unwrap();
         assert_eq!(listed.len(), icons().len());
         assert!(listed.iter().any(|path| path.as_ref() == "github.svg"));
-        assert_eq!(
-            source.list("icons").unwrap(),
-            vec![SharedString::from("circle-x.svg")]
-        );
+        let controls = source.list("icons").unwrap();
+        assert_eq!(controls.len(), 1 + WINDOW_CONTROL_ASSETS.len());
+        assert!(controls.iter().any(|path| path.as_ref() == "circle-x.svg"));
+        assert!(controls
+            .iter()
+            .any(|path| path.as_ref() == "window-close.svg"));
         assert!(source.list("missing").unwrap().is_empty());
     }
 }

@@ -5,6 +5,7 @@ Release:
 
 - notarized macOS DMGs for Apple Silicon and Intel;
 - signed Sparkle appcasts for Apple Silicon and Intel;
+- portable Windows ZIPs for Arm64 and x64;
 - the production STM32F072 firmware as `.bin`, debug `.elf`, and factory
   programming `.hex` (same bytes as the `.bin` with the 0x08000000 load
   address embedded, for SWD/gang programmers at manufacturing);
@@ -12,12 +13,13 @@ Release:
 - `SHA256SUMS` and GitHub artifact attestations.
 
 The host app checks the stable manifest at startup and every six hours. A newer
-host version produces an update prompt; a Developer ID release delegates the
-signed download, atomic install, and relaunch to Sparkle. Source/ad-hoc builds
-offer the old verified-DMG manual fallback instead. A newer device version
-produces a firmware prompt; the app uses the verified firmware bundled in the
-app when it matches, or downloads and verifies the release asset before
-flashing.
+host version produces an update prompt. A Developer ID macOS release delegates
+the signed download, atomic install, and relaunch to Sparkle; source/ad-hoc
+macOS builds offer the verified-DMG manual fallback. Windows downloads and
+verifies the matching portable ZIP, then opens it for manual replacement. A
+newer device version produces a firmware prompt; the app uses the verified
+firmware bundled in the app when it matches, or downloads and verifies the
+release asset before flashing.
 
 ## One-time GitHub setup
 
@@ -112,8 +114,9 @@ device, or a normal OpenMicro alongside a generic DFU device.
 
 ## Local release build
 
-CI uses Rust 1.92.0. Local prerequisites are that toolchain,
-`thumbv6m-none-eabi`, `llvm-tools-preview`, Xcode command-line tools, and `jq`.
+CI uses Rust 1.92.0. Firmware and macOS release prerequisites are that
+toolchain, `thumbv6m-none-eabi`, `llvm-tools-preview`, Xcode command-line tools,
+and `jq`.
 
 ```sh
 rustup target add thumbv6m-none-eabi
@@ -126,6 +129,26 @@ rustup target add x86_64-apple-darwin
 OPENMICRO_MACOS_ARCH=x86_64 \
   scripts/package-macos.sh dist dist/openmicro-fw-<firmware-version>.bin
 ```
+
+For Windows, install the same Rust toolchain and Visual Studio's **Desktop
+development with C++** workload. Native Arm64 builds also need the Visual
+Studio LLVM/Clang component. From PowerShell, after producing or downloading
+the firmware binary:
+
+```powershell
+rustup target add x86_64-pc-windows-msvc
+./scripts/package-windows.ps1 `
+  -OutputDir dist/windows `
+  -FirmwareBin dist/openmicro-fw-<firmware-version>.bin `
+  -Target x86_64-pc-windows-msvc
+
+# For Windows on Arm, change both occurrences of x86_64 to aarch64.
+```
+
+The Windows script uses the static Visual C++ runtime and stages the executable,
+firmware, manifest, notices, and operating instructions into one portable ZIP.
+It does not currently Authenticode-sign the executable, so a downloaded public
+build can show a Windows reputation warning until release signing is configured.
 
 The packaging script downloads Sparkle 2.9.6 from its official release,
 verifies the pinned SHA-256, and embeds the framework while preserving its
@@ -144,6 +167,11 @@ codesign --verify --deep --strict dist/macos-<arch>/OpenMicro.app
 otool -L dist/macos-<arch>/OpenMicro.app/Contents/MacOS/OpenMicro
 ```
 
+```powershell
+cargo test --manifest-path app/Cargo.toml --locked --all-targets --target x86_64-pc-windows-msvc
+tar -tf dist/windows/OpenMicro-<app-version>-windows-x86_64.zip
+```
+
 ## Publish
 
 After tests, review, and the hardware gate:
@@ -155,13 +183,14 @@ git push origin v<app-version>
 
 Only a pushed `vX.Y.Z` tag can publish. CI builds and verifies every artifact
 first, signs each final notarized DMG with Sparkle's Ed25519 key, generates and
-verifies one signed appcast per architecture, then creates a draft, uploads the
-complete set, and makes it public only after the upload succeeds. If signing,
-notarization, packaging, appcast generation, checksums, or manifest generation
-fails, no new public release appears and installed apps continue seeing the
-last successful stable release.
+verifies one signed appcast per architecture, builds both Windows packages,
+then creates a draft, uploads the complete set, and makes it public only after
+the upload succeeds. If signing, notarization, packaging, appcast generation,
+checksums, or manifest generation fails, no new public release appears and
+installed apps continue seeing the last successful stable release.
 
-After publication, verify both DMG downloads on the GitHub Release page and:
+After publication, verify both DMGs and both Windows ZIPs on the GitHub Release
+page and:
 
 ```text
 https://github.com/conol-ai/openmicrokbd/releases/latest/download/release-manifest.json
@@ -172,3 +201,5 @@ https://github.com/conol-ai/openmicrokbd/releases/latest/download/appcast-x86_64
 Then launch the previous public app version and confirm both update prompts.
 The first release containing Sparkle is the bootstrap: older apps reach it via
 the manual DMG path; later releases install and relaunch entirely in-app.
+On Windows, confirm the previous version downloads the correct architecture,
+rejects a modified ZIP, and opens the verified package.

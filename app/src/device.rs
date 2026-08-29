@@ -837,9 +837,15 @@ fn run_update(api: &mut HidApi, image_path: &PathBuf, expected_version: Option<&
         }
         (None, true) => log("DFU bootloader already present — resuming recovery".into()),
         (None, false) => {
+            #[cfg(target_os = "windows")]
+            return fail(
+                "device not found. Plug the pad in; if Device Manager shows STM32 BOOTLOADER (0483:df11), use DFU driver setup to bind it to WinUSB, then retry Install."
+                    .into(),
+            );
+            #[cfg(not(target_os = "windows"))]
             return fail(
                 "device not found (and no DFU bootloader present) — plug the pad in".into(),
-            )
+            );
         }
     }
 
@@ -852,17 +858,27 @@ fn run_update(api: &mut HidApi, image_path: &PathBuf, expected_version: Option<&
             Err(e) => return fail(e),
         }
         if Instant::now() > deadline {
+            #[cfg(target_os = "windows")]
+            return fail(dfuse::windows_driver_required(
+                "The pad entered ROM DFU mode, but the bootloader did not become accessible.",
+            ));
+            #[cfg(not(target_os = "windows"))]
             return fail("DFU bootloader (0483:df11) never enumerated".into());
         }
         std::thread::sleep(Duration::from_millis(200));
     };
 
     // -- flash --
-    if let Err(e) = dfuse::flash(dfu, &image, |p, frac| {
+    if let Err(error) = dfuse::flash(dfu, &image, |p, frac| {
         events::post(UpdateMsg::Phase(p.to_string()));
         events::post(UpdateMsg::Progress(frac));
     }) {
-        return fail(format!("DFU flashing failed: {e} — recovery: SWD on J2"));
+        if dfuse::is_windows_driver_required(&error) {
+            return fail(error);
+        }
+        return fail(format!(
+            "DFU flashing failed: {error} — recovery: SWD on J2"
+        ));
     }
 
     // -- wait for the new firmware --

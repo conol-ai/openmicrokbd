@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 
 const DFU_VID: u16 = 0x0483;
 const DFU_PID: u16 = 0xdf11;
+pub const WINDOWS_DFU_DRIVER_HELP_URL: &str = "https://zadig.akeo.ie/";
+const WINDOWS_DFU_DRIVER_REQUIRED: &str = "Windows DFU driver required";
 /// Final 2 KiB page (0x0801_F800..) stores the device keymap/config.
 const MAX_FIRMWARE_LEN: usize = 126 * 1024;
 
@@ -30,6 +32,24 @@ const STATE_DFU_DNBUSY: u8 = 4;
 const STATE_DFU_ERROR: u8 = 10;
 
 const TIMEOUT: Duration = Duration::from_secs(3);
+
+pub fn windows_driver_required(detail: &str) -> String {
+    format!(
+        "{WINDOWS_DFU_DRIVER_REQUIRED}: bind STM32 BOOTLOADER (0483:df11) to WinUSB. Open DFU driver setup below, choose Options > List All Devices in Zadig, select STM32 BOOTLOADER and WinUSB, install/replace the driver, then retry Install. {detail}"
+    )
+}
+
+pub fn is_windows_driver_required(error: &str) -> bool {
+    error.contains(WINDOWS_DFU_DRIVER_REQUIRED)
+}
+
+fn usb_access_error(operation: &str, error: rusb::Error) -> String {
+    #[cfg(target_os = "windows")]
+    if matches!(error, rusb::Error::Access | rusb::Error::NotSupported) {
+        return windows_driver_required(&format!("USB {operation} failed: {error}."));
+    }
+    format!("{operation}: {error}")
+}
 
 pub fn find_bootloader() -> Result<Option<Device<GlobalContext>>, String> {
     let devices = rusb::devices().map_err(|e| format!("enumerate USB devices: {e}"))?;
@@ -60,13 +80,15 @@ struct Dfu {
 impl Dfu {
     fn open(device: Device<GlobalContext>) -> Result<Self, String> {
         let transfer_size = read_transfer_size(&device).unwrap_or(2048);
-        let handle = device.open().map_err(|e| format!("open: {e}"))?;
+        let handle = device
+            .open()
+            .map_err(|error| usb_access_error("open", error))?;
         // Linux may have a kernel driver attached; macOS/Windows return
         // NotSupported, which is fine.
         let _ = handle.set_auto_detach_kernel_driver(true);
         handle
             .claim_interface(0)
-            .map_err(|e| format!("claim interface: {e}"))?;
+            .map_err(|error| usb_access_error("claim interface", error))?;
         Ok(Dfu {
             handle,
             transfer_size,
@@ -243,4 +265,26 @@ pub fn flash(
     // Point the bootloader at the app and manifest out of DFU mode.
     dfu.set_address(FLASH_BASE)?;
     dfu.leave()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_driver_guidance_is_machine_detectable_and_actionable() {
+        let message = windows_driver_required("USB open failed.");
+        assert!(is_windows_driver_required(&message));
+        assert!(message.contains("0483:df11"));
+        assert!(message.contains("WinUSB"));
+        assert!(message.contains("retry Install"));
+        assert!(!is_windows_driver_required("device unplugged"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn unsupported_windows_usb_backend_maps_to_driver_setup() {
+        let message = usb_access_error("open", rusb::Error::NotSupported);
+        assert!(is_windows_driver_required(&message));
+    }
 }

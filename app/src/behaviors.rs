@@ -630,6 +630,36 @@ pub const APPLICATION_SHORTCUTS: &[ShortcutApplication] = &[
 ];
 // --- generated shortcut catalog end ---
 
+/// Return the curated catalogs that have meaningful shortcuts on this host.
+/// Existing profiles can still resolve every catalog ID so they remain
+/// portable between operating systems.
+pub fn shortcut_applications_for_host() -> Vec<&'static ShortcutApplication> {
+    APPLICATION_SHORTCUTS
+        .iter()
+        .filter(|application| {
+            if cfg!(target_os = "windows") {
+                !matches!(
+                    application.id,
+                    "finder"
+                        | "safari"
+                        | "xcode"
+                        | "terminal"
+                        | "finalcutpro"
+                        | "logicpro"
+                        | "iterm2"
+                        | "notes"
+                        | "mail"
+                        | "keynote"
+                        | "preview"
+                        | "music"
+                )
+            } else {
+                true
+            }
+        })
+        .collect()
+}
+
 const fn shortcut(
     id: &'static str,
     labels: [&'static str; 4],
@@ -656,12 +686,24 @@ pub fn shortcut_preset(application: &str, id: &str) -> Option<&'static ShortcutP
 }
 
 pub fn shortcut_chord_label(shortcut: &ShortcutPreset) -> String {
-    let mods = mods_label(shortcut.mods);
+    let mods = mods_label(shortcut_mods_for_host(shortcut.mods));
     let key = keyboard_name(shortcut.key).unwrap_or("Unknown key");
     if mods.is_empty() {
         key.to_string()
     } else {
         format!("{mods} + {key}")
+    }
+}
+
+/// The generated shortcut catalog is authored with macOS modifier bits.
+/// Most cross-platform applications use Control for the equivalent Windows
+/// command, so translate Command while retaining Shift, Option/Alt and any
+/// explicitly-authored Control modifier.
+pub const fn shortcut_mods_for_host(mods: u8) -> u8 {
+    if cfg!(target_os = "windows") && mods & 0x08 != 0 {
+        (mods & !0x08) | 0x01
+    } else {
+        mods
     }
 }
 
@@ -742,6 +784,84 @@ pub const MACOS_PRESETS: &[MacOsPreset] = &[
     ),
 ];
 
+/// Windows equivalents use the existing serialized control identifiers so a
+/// profile keeps its intent (search, lock, media, and so on) when it moves
+/// between hosts. The execution mapping is regenerated for the current OS.
+pub const WINDOWS_PRESETS: &[MacOsPreset] = &[
+    macos(
+        MacOsControl::BrightnessUp,
+        "Brightness up",
+        "Increase display brightness when the keyboard/display driver supports the standard HID control.",
+    ),
+    macos(
+        MacOsControl::BrightnessDown,
+        "Brightness down",
+        "Decrease display brightness when the keyboard/display driver supports the standard HID control.",
+    ),
+    macos(
+        MacOsControl::MissionControl,
+        "Task view",
+        "Show open windows and virtual desktops (Win+Tab).",
+    ),
+    macos(
+        MacOsControl::Applications,
+        "All apps",
+        "Open the Windows Applications folder.",
+    ),
+    macos(
+        MacOsControl::Search,
+        "Windows Search",
+        "Open Windows Search (Win+S).",
+    ),
+    macos(
+        MacOsControl::Dictation,
+        "Voice typing",
+        "Open Windows voice typing (Win+H).",
+    ),
+    macos(
+        MacOsControl::Globe,
+        "Input language",
+        "Switch the active keyboard/input language (Win+Space).",
+    ),
+    macos(
+        MacOsControl::LockScreen,
+        "Lock screen",
+        "Lock the current Windows session (Win+L).",
+    ),
+    macos(MacOsControl::Sleep, "Sleep", "Suspend this Windows PC."),
+    macos(
+        MacOsControl::VolumeUp,
+        "Volume up",
+        "Increase the system output volume.",
+    ),
+    macos(
+        MacOsControl::VolumeDown,
+        "Volume down",
+        "Decrease the system output volume.",
+    ),
+    macos(MacOsControl::Mute, "Mute", "Toggle system audio mute."),
+    macos(
+        MacOsControl::PlayPause,
+        "Play / pause",
+        "Toggle media playback.",
+    ),
+    macos(
+        MacOsControl::NextTrack,
+        "Next track",
+        "Skip to the next media item.",
+    ),
+    macos(
+        MacOsControl::PreviousTrack,
+        "Previous track",
+        "Return to the previous media item.",
+    ),
+    macos(
+        MacOsControl::EmojiPicker,
+        "Emoji & symbols",
+        "Open the Windows emoji and symbols picker (Win+Period).",
+    ),
+];
+
 const fn macos(command: MacOsControl, label: &'static str, detail: &'static str) -> MacOsPreset {
     MacOsPreset {
         command,
@@ -751,10 +871,18 @@ const fn macos(command: MacOsControl, label: &'static str, detail: &'static str)
 }
 
 pub fn macos_preset(command: MacOsControl) -> &'static MacOsPreset {
-    MACOS_PRESETS
+    system_presets()
         .iter()
         .find(|preset| preset.command == command)
-        .unwrap_or(&MACOS_PRESETS[0])
+        .unwrap_or(&system_presets()[0])
+}
+
+pub fn system_presets() -> &'static [MacOsPreset] {
+    if cfg!(target_os = "windows") {
+        WINDOWS_PRESETS
+    } else {
+        MACOS_PRESETS
+    }
 }
 
 /// Apply a curated application chord. Returns false only for stale/unknown
@@ -771,7 +899,7 @@ pub fn apply_application_shortcut(
         application: application.to_string(),
         shortcut: shortcut_id.to_string(),
     });
-    input.emitted = keyboard_slot(shortcut.mods, shortcut.key);
+    input.emitted = keyboard_slot(shortcut_mods_for_host(shortcut.mods), shortcut.key);
     input.action = Action::None;
     true
 }
@@ -784,6 +912,36 @@ pub fn apply_keystroke(input: &mut InputConfig, mods: u8, key: u16) {
 
 pub fn apply_macos(input: &mut InputConfig, slot_index: usize, command: MacOsControl) {
     input.behavior = Some(ControlBehavior::MacOs { command });
+    #[cfg(target_os = "windows")]
+    let (emitted, action) = match command {
+        MacOsControl::BrightnessUp => (consumer_slot(0x006F), Action::None),
+        MacOsControl::BrightnessDown => (consumer_slot(0x0070), Action::None),
+        MacOsControl::MissionControl => (keyboard_slot(0x08, 0x2B), Action::None),
+        MacOsControl::Applications => (
+            host_trigger(slot_index),
+            Action::Run {
+                command: "explorer.exe shell:AppsFolder".to_string(),
+            },
+        ),
+        MacOsControl::Search => (keyboard_slot(0x08, 0x16), Action::None),
+        MacOsControl::Dictation => (keyboard_slot(0x08, 0x0B), Action::None),
+        MacOsControl::Globe => (keyboard_slot(0x08, 0x2C), Action::None),
+        MacOsControl::LockScreen => (keyboard_slot(0x08, 0x0F), Action::None),
+        MacOsControl::Sleep => (
+            host_trigger(slot_index),
+            Action::Run {
+                command: "powershell.exe -NoProfile -WindowStyle Hidden -Command \"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::SetSuspendState('Suspend',$false,$false)\"".to_string(),
+            },
+        ),
+        MacOsControl::VolumeUp => (consumer_slot(0x00E9), Action::None),
+        MacOsControl::VolumeDown => (consumer_slot(0x00EA), Action::None),
+        MacOsControl::Mute => (consumer_slot(0x00E2), Action::None),
+        MacOsControl::PlayPause => (consumer_slot(0x00CD), Action::None),
+        MacOsControl::NextTrack => (consumer_slot(0x00B5), Action::None),
+        MacOsControl::PreviousTrack => (consumer_slot(0x00B6), Action::None),
+        MacOsControl::EmojiPicker => (keyboard_slot(0x08, 0x37), Action::None),
+    };
+    #[cfg(not(target_os = "windows"))]
     let (emitted, action) = match command {
         MacOsControl::BrightnessUp => (consumer_slot(0x006F), Action::None),
         MacOsControl::BrightnessDown => (consumer_slot(0x0070), Action::None),
@@ -971,12 +1129,15 @@ pub struct InstalledApp {
     pub path: String,
 }
 
-/// Discover launchable macOS app bundles from the normal user-facing roots.
-/// Exact paths are persisted because two app bundles can share a bundle ID.
+/// Discover launchable applications from the operating system's normal
+/// user-facing roots. Exact paths are persisted because two applications can
+/// share a display name. On Windows, Start Menu shortcuts are preferred over
+/// raw executables so packaged and argument-bearing applications launch with
+/// the same semantics as they do from the Start menu.
 pub fn installed_apps() -> Vec<InstalledApp> {
     let mut paths = BTreeSet::new();
     for root in application_roots() {
-        collect_app_bundles(&root, 0, 3, &mut paths);
+        collect_applications(&root, 0, application_scan_depth(&root), &mut paths);
     }
 
     let mut by_name: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
@@ -1012,17 +1173,98 @@ pub fn installed_apps() -> Vec<InstalledApp> {
 }
 
 fn application_roots() -> Vec<PathBuf> {
-    let mut roots = vec![
-        PathBuf::from("/Applications"),
-        PathBuf::from("/System/Applications"),
-    ];
-    if let Some(home) = dirs::home_dir() {
-        roots.push(home.join("Applications"));
+    #[cfg(target_os = "windows")]
+    {
+        let mut roots = Vec::new();
+        if let Some(app_data) = std::env::var_os("APPDATA").map(PathBuf::from) {
+            roots.push(app_data.join("Microsoft/Windows/Start Menu/Programs"));
+        }
+        if let Some(program_data) = std::env::var_os("PROGRAMDATA").map(PathBuf::from) {
+            roots.push(program_data.join("Microsoft/Windows/Start Menu/Programs"));
+        }
+        // Some per-user installers omit a Start Menu entry. Keep this root
+        // last so a normal shortcut sorts before its raw executable.
+        if let Some(local_data) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+            roots.push(local_data.join("Programs"));
+        }
+        return roots;
     }
-    roots
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut roots = vec![
+            PathBuf::from("/Applications"),
+            PathBuf::from("/System/Applications"),
+        ];
+        if let Some(home) = dirs::home_dir() {
+            roots.push(home.join("Applications"));
+        }
+        return roots;
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let mut roots = vec![PathBuf::from("/usr/share/applications")];
+        if let Some(home) = dirs::home_dir() {
+            roots.push(home.join(".local/share/applications"));
+        }
+        roots
+    }
 }
 
-fn collect_app_bundles(
+fn application_scan_depth(root: &Path) -> usize {
+    #[cfg(target_os = "windows")]
+    {
+        // Start Menu groups are commonly nested; LocalAppData/Programs only
+        // needs enough depth to reach an app's main executable.
+        return if root
+            .to_string_lossy()
+            .contains("Start Menu")
+        {
+            6
+        } else {
+            3
+        };
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = root;
+        3
+    }
+}
+
+fn is_launchable_application(path: &Path, file_type: &fs::FileType) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        return file_type.is_dir()
+            && path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("app"));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return file_type.is_file()
+            && path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("lnk")
+                        || extension.eq_ignore_ascii_case("url")
+                        || extension.eq_ignore_ascii_case("exe")
+                });
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        file_type.is_file()
+            && path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("desktop"))
+    }
+}
+
+fn collect_applications(
     directory: &Path,
     depth: usize,
     max_depth: usize,
@@ -1039,17 +1281,13 @@ fn collect_app_bundles(
         let Ok(file_type) = entry.file_type() else {
             continue;
         };
-        if !file_type.is_dir() || file_type.is_symlink() {
+        if file_type.is_symlink() {
             continue;
         }
-        let is_app = path
-            .extension()
-            .and_then(|value| value.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("app"));
-        if is_app {
+        if is_launchable_application(&path, &file_type) {
             found.insert(path);
-        } else if depth < max_depth {
-            collect_app_bundles(&path, depth + 1, max_depth, found);
+        } else if file_type.is_dir() && depth < max_depth {
+            collect_applications(&path, depth + 1, max_depth, found);
         }
     }
 }
@@ -1133,6 +1371,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn host_shortcut_catalog_and_modifiers_match_windows_conventions() {
+        let applications = shortcut_applications_for_host();
+        assert!(!applications.is_empty());
+        if cfg!(target_os = "windows") {
+            assert_eq!(applications[0].id, "chrome");
+            assert!(!applications.iter().any(|app| app.id == "finder"));
+            assert_eq!(shortcut_mods_for_host(0x0A), 0x03);
+        } else {
+            assert_eq!(applications[0].id, "finder");
+            assert_eq!(shortcut_mods_for_host(0x0A), 0x0A);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_application_scan_finds_shortcuts_and_executables() {
+        let unique = format!(
+            "openmicro-app-scan-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        let nested = root.join("Utilities");
+        fs::create_dir_all(&nested).expect("temporary app directory");
+        fs::write(root.join("Editor.lnk"), b"shortcut").expect("shortcut fixture");
+        fs::write(nested.join("Tool.exe"), b"executable").expect("executable fixture");
+        fs::write(nested.join("Ignore.txt"), b"text").expect("non-app fixture");
+
+        let mut found = BTreeSet::new();
+        collect_applications(&root, 0, 3, &mut found);
+        assert!(found.contains(&root.join("Editor.lnk")));
+        assert!(found.contains(&nested.join("Tool.exe")));
+        assert!(!found.contains(&nested.join("Ignore.txt")));
+
+        fs::remove_dir_all(&root).expect("remove temporary app directory");
+    }
+
     /// Saved profiles reference (application, shortcut) ids and re-derive the
     /// emitted chord from this catalog — these historical pairs must keep
     /// producing identical bytes forever.
@@ -1201,7 +1480,11 @@ mod tests {
             input.emitted,
             Slot {
                 kind: SlotKind::Keyboard,
-                mods: 0x0A,
+                mods: if cfg!(target_os = "windows") {
+                    0x03
+                } else {
+                    0x0A
+                },
                 code: 0x13,
             }
         );
@@ -1240,17 +1523,23 @@ mod tests {
     }
 
     #[test]
-    fn macos_globe_uses_apples_native_consumer_usage() {
+    fn globe_or_input_language_uses_the_platform_mapping() {
         let mut input = sample_input();
         apply_macos(&mut input, 4, MacOsControl::Globe);
-        assert_eq!(
-            input.emitted,
+        let expected = if cfg!(target_os = "windows") {
+            Slot {
+                kind: SlotKind::Keyboard,
+                mods: 0x08,
+                code: 0x2C,
+            }
+        } else {
             Slot {
                 kind: SlotKind::Consumer,
                 mods: 0,
                 code: 0x029D,
             }
-        );
+        };
+        assert_eq!(input.emitted, expected);
         assert_eq!(input.action, Action::None);
         assert_eq!(
             input.behavior,
