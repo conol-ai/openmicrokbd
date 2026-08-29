@@ -1354,11 +1354,15 @@ fn has_managed_marker(text: &str) -> bool {
 
 fn normalized_owned_template(text: &str, declaration_prefix: &str) -> Option<String> {
     let without_marker = text
+        .replacen(&format!("{MANAGED_MARKER}\r\n"), "", 1)
         .replacen(&format!("{MANAGED_MARKER}\n"), "", 1)
+        .replacen(&format!("{SHELL_MANAGED_MARKER}\r\n"), "", 1)
         .replacen(&format!("{SHELL_MANAGED_MARKER}\n"), "", 1)
         .replacen(&format!("{BATCH_MANAGED_MARKER}\r\n"), "", 1)
         .replacen(&format!("{BATCH_MANAGED_MARKER}\n"), "", 1)
+        .replacen(&format!("{LEGACY_MANAGED_MARKER}\r\n"), "", 1)
         .replacen(&format!("{LEGACY_MANAGED_MARKER}\n"), "", 1)
+        .replacen(&format!("{LEGACY_SHELL_MANAGED_MARKER}\r\n"), "", 1)
         .replacen(&format!("{LEGACY_SHELL_MANAGED_MARKER}\n"), "", 1);
     let mut found = 0usize;
     let mut normalized = String::with_capacity(without_marker.len());
@@ -1940,15 +1944,19 @@ mod tests {
             "the explicit managed marker permits future template upgrades"
         );
 
-        let unowned_edit = installed
-            .replace(&format!("{MANAGED_MARKER}\n"), "")
-            .replace("export const OpenMicroStatus", "export const LocallyEdited");
-        fs::write(&layout.opencode_plugin, unowned_edit).unwrap();
-        assert_eq!(
-            inspect(&layout, IntegrationKind::OpenCode).state,
-            InstallState::Conflict,
-            "removing the marker protects local edits"
-        );
+        let installed_lf = installed.replace("\r\n", "\n");
+        for newline in ["\n", "\r\n"] {
+            let unowned_edit = installed_lf
+                .replace('\n', newline)
+                .replace(&format!("{MANAGED_MARKER}{newline}"), "")
+                .replace("export const OpenMicroStatus", "export const LocallyEdited");
+            fs::write(&layout.opencode_plugin, unowned_edit).unwrap();
+            assert_eq!(
+                inspect(&layout, IntegrationKind::OpenCode).state,
+                InstallState::Conflict,
+                "removing the marker protects local edits with {newline:?} line endings"
+            );
+        }
     }
 
     #[test]
