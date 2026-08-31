@@ -747,6 +747,9 @@ fn chrome_icon_button(name: &str) -> Div {
         .text_size(px(14.))
         .text_color(pixel::muted_text_color())
         .cursor_pointer()
+        // Keep interactive controls inside GPUI's Windows title bar out of the
+        // parent drag hitbox so Windows delivers their mouse events normally.
+        .occlude()
         .hover(|style| {
             style
                 .bg(pixel::raised_color())
