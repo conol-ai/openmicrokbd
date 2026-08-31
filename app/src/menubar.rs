@@ -45,11 +45,11 @@ enum LinuxTrayCommand {
     },
 }
 
-/// The tray glyph: the brand mark — the gradient µ keycap from the icon kit,
-/// shipped as pre-decoded 32x32 RGBA so no image decoder is pulled in here.
+/// The tray glyph: the rounded keycap with a transparent µ cutout, shipped as
+/// pre-decoded 96x96 RGBA so no image decoder is pulled in here.
 fn tray_icon() -> Option<Icon> {
-    const S: u32 = 32;
-    const RGBA: &[u8] = include_bytes!("../resources/tray-icon-32.rgba");
+    const S: u32 = 96;
+    const RGBA: &[u8] = include_bytes!("../resources/tray-icon-96.rgba");
     debug_assert_eq!(RGBA.len(), (S * S * 4) as usize);
     Icon::from_rgba(RGBA.to_vec(), S, S).ok()
 }
@@ -74,6 +74,7 @@ impl Menubar {
         let tray = tray_icon().and_then(|icon| {
             TrayIconBuilder::new()
                 .with_icon(icon)
+                .with_icon_as_template(true)
                 .with_tooltip("OpenMicro")
                 .build()
                 .ok()
@@ -103,6 +104,7 @@ impl Menubar {
                 let mut tray = tray_icon().and_then(|icon| {
                     TrayIconBuilder::new()
                         .with_icon(icon)
+                        .with_icon_as_template(true)
                         .with_tooltip("OpenMicro")
                         .build()
                         .ok()
