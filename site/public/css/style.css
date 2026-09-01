@@ -434,6 +434,7 @@ html[data-theme="night"] .hero__tagline { color: var(--cream); }
 .hero__sub { font-size: 22px; margin: 0 0 26px; max-width: 30ch; color: var(--ink-soft); }
 html[data-theme="night"] .hero__sub { color: var(--ink-soft); }
 .hero__cta { display: flex; gap: 14px; flex-wrap: wrap; }
+.hero__platforms { font-size: 17px; margin: 10px 0 0; color: var(--ink-dim); }
 .hero__stats { list-style: none; display: flex; gap: 22px; padding: 0; margin: 30px 0 0; }
 .hero__stats li { display: flex; flex-direction: column; }
 .hero__stats b { font-family: "Press Start 2P", monospace; font-size: 18px; color: var(--wood-dark); }
