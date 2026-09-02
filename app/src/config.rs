@@ -899,9 +899,20 @@ pub fn default_codex_profile() -> Profile {
     }
     // SETUP opens this app's settings sheet (the PRD's one hardwired action).
     inputs[12].action = Action::AppSettings;
+    push_default_controls(&mut inputs);
 
-    // Encoder: system volume, handled OS-side via consumer usages — works
-    // with the app closed.
+    debug_assert_eq!(inputs.len(), SLOT_COUNT);
+    Profile {
+        name: "Codex".to_string(),
+        inputs,
+        analog: AnalogTuning::default(),
+    }
+}
+
+/// The OS-level controls every template starts from: encoder = system
+/// volume, joystick = arrow keys + Enter, touch pad = play/pause. Consumer
+/// usages are handled OS-side, so they work with the app closed.
+fn push_default_controls(inputs: &mut Vec<InputConfig>) {
     inputs.push(consumer_input("Vol +", "volume-2", 0xE9));
     inputs.push(consumer_input("Vol −", "volume-2", 0xEA));
     inputs.push(consumer_input("Mute", "volume-2", 0xE2));
@@ -920,14 +931,222 @@ pub fn default_codex_profile() -> Profile {
     inputs.push(touch);
     inputs.push(unbound_input());
     inputs.push(unbound_input());
+}
 
+// ---------------------------------------------------------------------------
+// Profile templates — what the header's "+" menu offers.
+// ---------------------------------------------------------------------------
+
+/// A starting point for a new profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProfileTemplate {
+    /// Every slot unbound: a blank slate.
+    Empty,
+    /// The stock keycaps wired to the Codex CLI.
+    Codex,
+    /// The stock keycaps wired to Claude Code.
+    ClaudeCode,
+}
+
+impl ProfileTemplate {
+    /// The agent templates, in menu order.
+    pub const AGENTS: [ProfileTemplate; 2] = [ProfileTemplate::Codex, ProfileTemplate::ClaudeCode];
+
+    /// Menu label. Product names stay untranslated.
+    pub fn name(self) -> &'static str {
+        match self {
+            ProfileTemplate::Empty => "Profile",
+            ProfileTemplate::Codex => "Codex",
+            ProfileTemplate::ClaudeCode => "Claude Code",
+        }
+    }
+
+    /// Build the profile, named so it does not collide with `existing`.
+    pub fn profile(self, existing: &[Profile]) -> Profile {
+        let mut profile = match self {
+            ProfileTemplate::Empty => empty_profile(),
+            ProfileTemplate::Codex => stock_keycap_profile(self.name(), &CODEX_KEYS),
+            ProfileTemplate::ClaudeCode => stock_keycap_profile(self.name(), &CLAUDE_CODE_KEYS),
+        };
+        let base = match self {
+            // Numbered the way the plain "+" button always named them.
+            ProfileTemplate::Empty => format!("Profile {}", existing.len() + 1),
+            _ => self.name().to_string(),
+        };
+        profile.name = fresh_name(existing, &base);
+        profile
+    }
+}
+
+/// `base` if no profile uses it, else "base 2", "base 3", … Imports keep
+/// their own "(imported)" scheme so a template never looks like one.
+fn fresh_name(existing: &[Profile], base: &str) -> String {
+    let taken = |name: &str| existing.iter().any(|p| p.name == name);
+    if !taken(base) {
+        return base.to_string();
+    }
+    let mut n = 2u32;
+    loop {
+        let candidate = format!("{base} {n}");
+        if !taken(&candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// Nothing bound anywhere: no labels, no icons, and the pad emits nothing
+/// until the user assigns a behavior.
+pub fn empty_profile() -> Profile {
+    Profile {
+        name: ProfileTemplate::Empty.name().to_string(),
+        inputs: (0..SLOT_COUNT).map(|_| unbound_input()).collect(),
+        analog: AnalogTuning::default(),
+    }
+}
+
+/// One printed key of a stock-keycap template: the on-screen label and
+/// Lucide icon matching the cap, and the chord the pad emits for it. The
+/// chord is stored on the pad as a plain keystroke, so the template works
+/// with the app closed and needs no Accessibility permission. A `code` of 0
+/// leaves the key free (icon kept, so the map still mirrors the cap).
+struct TemplateKey {
+    label: &'static str,
+    icon: &'static str,
+    mods: u8,
+    /// Also hold the platform's primary modifier: ⌘ on macOS, Ctrl on
+    /// Windows and Linux (Electron's "CmdOrCtrl").
+    primary: bool,
+    code: u16,
+}
+
+const fn template_key(label: &'static str, icon: &'static str, mods: u8, code: u16) -> TemplateKey {
+    TemplateKey {
+        label,
+        icon,
+        mods,
+        primary: false,
+        code,
+    }
+}
+
+/// A chord under the platform's primary modifier, plus `mods`.
+const fn primary_key(label: &'static str, icon: &'static str, mods: u8, code: u16) -> TemplateKey {
+    TemplateKey {
+        label,
+        icon,
+        mods,
+        primary: true,
+        code,
+    }
+}
+
+/// HID bit of the primary modifier: Left GUI (⌘) on macOS, Left Ctrl
+/// elsewhere.
+const fn primary_modifier(macos: bool) -> u8 {
+    if macos {
+        MOD_GUI
+    } else {
+        MOD_CTRL
+    }
+}
+
+// HID modifier bits and usages the templates use. `MOD_ALT` is Option on
+// macOS.
+const MOD_CTRL: u8 = 0x01;
+const MOD_SHIFT: u8 = 0x02;
+const MOD_ALT: u8 = 0x04;
+const MOD_GUI: u8 = 0x08;
+const KEY_ENTER: u16 = 0x28;
+const KEY_ESCAPE: u16 = 0x29;
+const KEY_TAB: u16 = 0x2B;
+const KEY_SPACE: u16 = 0x2C;
+const KEY_GRAVE: u16 = 0x35;
+
+/// Keyboard usage of a lowercase letter (`a` = 0x04).
+const fn letter(c: u8) -> u16 {
+    (c - b'a') as u16 + 0x04
+}
+
+/// Keyboard usage of a digit key on the main row (`1` = 0x1E).
+const fn digit(d: u8) -> u16 {
+    (d - b'1') as u16 + 0x1E
+}
+
+/// The stock keycap set, top-left to bottom-right: ★, the crowned mascot,
+/// four clear caps over the agent activity LEDs, a 2×2 grid, ✓, ✗, a
+/// terminal prompt, a microphone, a party popper, and a robot.
+fn stock_keycap_profile(name: &str, keys: &[TemplateKey; KEY_SLOTS]) -> Profile {
+    let mut inputs: Vec<InputConfig> = keys
+        .iter()
+        .map(|key| {
+            if key.code == 0 {
+                let mut input = unbound_input();
+                input.icon = key.icon.to_string();
+                return input;
+            }
+            let mut mods = key.mods;
+            if key.primary {
+                mods |= primary_modifier(cfg!(target_os = "macos"));
+            }
+            let mut input = keyboard_input(key.label, key.icon, mods, key.code);
+            input.behavior = Some(ControlBehavior::Keystroke);
+            input
+        })
+        .collect();
+    push_default_controls(&mut inputs);
     debug_assert_eq!(inputs.len(), SLOT_COUNT);
     Profile {
-        name: "Codex".to_string(),
+        name: name.to_string(),
         inputs,
         analog: AnalogTuning::default(),
     }
 }
+
+/// Stock keycaps → Codex in the ChatGPT desktop app (macOS, Windows, Linux
+/// preview), following the Codex Micro's own
+/// layout: the clear second row is the session selector (the app's recent
+/// chats 1–4, the slots its agent keys use), ✓ and ✗ answer approval
+/// prompts, and the rest follow their pictures. Every chord is the app's
+/// default keybinding; `primary_key` is ⌘ on macOS and Ctrl elsewhere,
+/// exactly as the app resolves "CmdOrCtrl". Fast mode, Fork and Send have
+/// no keyboard chord in the app (the Micro reaches them natively), so they
+/// are not here.
+const CODEX_KEYS: [TemplateKey; KEY_SLOTS] = [
+    primary_key("ATTN", "star", MOD_ALT, letter(b'a')), // next chat needing attention
+    primary_key("NEW", "crown", 0, letter(b'n')),      // new chat
+    primary_key("CHAT 1", "message-square", MOD_ALT, digit(b'1')), // recent chat 1
+    primary_key("CHAT 2", "message-square", MOD_ALT, digit(b'2')), // recent chat 2
+    primary_key("CHAT 3", "message-square", MOD_ALT, digit(b'3')), // recent chat 3
+    primary_key("CHAT 4", "message-square", MOD_ALT, digit(b'4')), // recent chat 4
+    primary_key("MENU", "grid-2x2", 0, letter(b'k')),  // command menu
+    template_key("APPR", "check", 0, KEY_ENTER),       // approve request
+    template_key("REJ", "x", 0, KEY_ESCAPE),           // decline request
+    template_key("TERM", "square-terminal", MOD_CTRL, KEY_GRAVE), // open terminal (Ctrl on every OS)
+    template_key("MIC", "mic", MOD_CTRL | MOD_SHIFT, letter(b'd')), // start dictation (Ctrl on every OS)
+    primary_key("SIDE", "party-popper", MOD_ALT, letter(b's')),    // open side chat
+    template_key("MODEL", "bot", MOD_CTRL | MOD_SHIFT, letter(b'm')), // model picker (Ctrl on every OS)
+];
+
+/// Stock keycaps → Claude Code's documented interactive-mode shortcuts.
+/// The four clear caps carry the quiet utilities; the printed ones follow
+/// their pictures. Option+P and Option+O need "Option as Meta" in the
+/// terminal on macOS; Claude Code handles Option+T itself.
+const CLAUDE_CODE_KEYS: [TemplateKey; KEY_SLOTS] = [
+    template_key("THINK", "star", MOD_ALT, letter(b't')), // toggle extended thinking
+    template_key("MODE", "crown", MOD_SHIFT, KEY_TAB),    // cycle permission modes
+    template_key("BG", "layers", MOD_CTRL, letter(b'b')), // background the running task
+    template_key("STASH", "archive", MOD_CTRL, letter(b's')), // stash / restore the prompt
+    template_key("HIST", "history", MOD_CTRL, letter(b'r')),  // reverse-search history
+    template_key("EDIT", "square-pen", MOD_CTRL, letter(b'g')), // prompt in external editor
+    template_key("TASKS", "grid-2x2", MOD_CTRL, letter(b't')),  // toggle the task checklist
+    template_key("YES", "check", 0, KEY_ENTER), // confirm a prompt (Enter also sends)
+    template_key("STOP", "x", 0, KEY_ESCAPE),   // interrupt, or decline a prompt
+    template_key("LOG", "square-terminal", MOD_CTRL, letter(b'o')), // transcript viewer
+    template_key("VOICE", "mic", 0, KEY_SPACE), // push-to-talk once /voice is on
+    template_key("FAST", "party-popper", MOD_ALT, letter(b'o')), // toggle fast mode
+    template_key("MODEL", "bot", MOD_ALT, letter(b'p')),         // switch model
+];
 
 // ---------------------------------------------------------------------------
 // Sanitizing — every AppConfig that enters the app goes through here.
@@ -1227,6 +1446,100 @@ pub fn factory_reset(cfg: &mut AppConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_template_binds_nothing() {
+        let p = ProfileTemplate::Empty.profile(&[]);
+        assert_eq!(p.name, "Profile 1");
+        assert_eq!(p.inputs.len(), SLOT_COUNT);
+        for input in &p.inputs {
+            assert_eq!(input.emitted, Slot::default());
+            assert_eq!(input.action, Action::None);
+            assert_eq!(input.behavior, None);
+            assert!(input.label.is_empty() && input.icon.is_empty());
+        }
+        assert_eq!(p.analog, AnalogTuning::default());
+    }
+
+    #[test]
+    fn agent_templates_emit_pad_side_keystrokes() {
+        for template in ProfileTemplate::AGENTS {
+            let p = template.profile(&[]);
+            assert_eq!(p.name, template.name());
+            assert_eq!(p.inputs.len(), SLOT_COUNT);
+            let mut bound = Vec::new();
+            for (i, input) in p.inputs.iter().take(KEY_SLOTS).enumerate() {
+                // Every key shows the icon printed on its cap.
+                assert!(
+                    crate::lucide::icon_char(&input.icon).is_some(),
+                    "{template:?} key {i} icon {:?}",
+                    input.icon
+                );
+                assert_eq!(input.action, Action::None);
+                if input.emitted.kind == SlotKind::None {
+                    // A deliberately free key (Codex has no voice input).
+                    assert!(input.label.is_empty() && input.behavior.is_none());
+                    continue;
+                }
+                // Bound keys are pad-side keystrokes with a legend: nothing
+                // host-side to depend on.
+                assert_eq!(input.emitted.kind, SlotKind::Keyboard, "{template:?} key {i}");
+                assert_eq!(input.behavior, Some(ControlBehavior::Keystroke));
+                assert!(!input.label.is_empty(), "{template:?} key {i} label");
+                bound.push(input.emitted);
+            }
+            assert!(bound.len() >= KEY_SLOTS - 1, "{template:?} leaves too many keys free");
+            // Distinct chords, so one press never means two things.
+            for a in 0..bound.len() {
+                for b in a + 1..bound.len() {
+                    assert_ne!(bound[a], bound[b], "{template:?} chords {a}/{b}");
+                }
+            }
+            // Controls match the out-of-the-box profile.
+            let codex = default_codex_profile();
+            assert_eq!(p.inputs[KEY_SLOTS..], codex.inputs[KEY_SLOTS..]);
+        }
+    }
+
+    #[test]
+    fn codex_template_uses_the_platform_primary_modifier() {
+        assert_eq!(primary_modifier(true), MOD_GUI);
+        assert_eq!(primary_modifier(false), MOD_CTRL);
+        let p = ProfileTemplate::Codex.profile(&[]);
+        let primary = primary_modifier(cfg!(target_os = "macos"));
+        // NEW = CmdOrCtrl+N; the second row = CmdOrCtrl+Alt+1..4.
+        assert_eq!(p.inputs[1].emitted, Slot { kind: SlotKind::Keyboard, mods: primary, code: 0x11 });
+        for (i, slot) in (2..6).enumerate() {
+            assert_eq!(
+                p.inputs[slot].emitted,
+                Slot { kind: SlotKind::Keyboard, mods: primary | MOD_ALT, code: 0x1E + i as u16 },
+                "session key {slot}"
+            );
+        }
+        // Chords the app binds with a literal Ctrl stay Ctrl everywhere.
+        assert_eq!(p.inputs[9].emitted.mods, MOD_CTRL);
+        assert_eq!(p.inputs[10].emitted.mods, MOD_CTRL | MOD_SHIFT);
+    }
+
+    #[test]
+    fn template_names_avoid_collisions() {
+        let mut existing = vec![ProfileTemplate::Codex.profile(&[])];
+        assert_eq!(existing[0].name, "Codex");
+        existing.push(ProfileTemplate::Codex.profile(&existing));
+        assert_eq!(existing[1].name, "Codex 2");
+        existing.push(ProfileTemplate::Codex.profile(&existing));
+        assert_eq!(existing[2].name, "Codex 3");
+        // Empty profiles count from the slot they land in, then step past
+        // anything already using that name.
+        existing.push(ProfileTemplate::Empty.profile(&existing));
+        assert_eq!(existing[3].name, "Profile 4");
+        existing.push(ProfileTemplate::Empty.profile(&existing));
+        assert_eq!(existing[4].name, "Profile 5");
+        let mut clash = ProfileTemplate::Empty.profile(&existing);
+        clash.name = "Profile 7".into();
+        existing.push(clash);
+        assert_eq!(ProfileTemplate::Empty.profile(&existing).name, "Profile 7 2");
+    }
 
     #[test]
     fn default_profile_shape() {

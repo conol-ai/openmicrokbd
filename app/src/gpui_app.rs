@@ -12,15 +12,16 @@ use std::time::Duration;
 
 use gpui::{
     div, point, prelude::*, px, relative, size, svg, AnyElement, App, Application, Bounds,
-    Context, Div, Entity, Hsla, InteractiveElement, IntoElement, KeyBinding,
-    KeyDownEvent, Menu, MenuItem, MouseButton, ParentElement, PathPromptOptions, Render, ScrollHandle,
-    SharedString, Styled, Subscription, Timer, Window, WindowAppearance, WindowBounds,
-    WindowOptions,
+    Context, Corner, Div, Entity, Hsla, InteractiveElement, Interactivity, IntoElement,
+    KeyBinding, KeyDownEvent, Menu, MenuItem, MouseButton, ParentElement, PathPromptOptions,
+    Render, RenderOnce, ScrollHandle, SharedString, Stateful, StyleRefinement, Styled,
+    Subscription, Timer, Window, WindowAppearance, WindowBounds, WindowOptions,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::tooltip::Tooltip;
-use gpui_component::{Root, StyledExt, TitleBar};
+use gpui_component::{Root, Selectable, StyledExt, TitleBar};
 
 use crate::actions;
 use crate::agent_integrations::{
@@ -29,7 +30,7 @@ use crate::agent_integrations::{
 use crate::behaviors::{self, InstalledApp};
 use crate::config::{
     self, Action, ControlBehavior, InputConfig, JoystickMode, LanguageSetting, LedPattern,
-    MacroStep, MacroStepEntry, MediaOp, RotatorPressPreset, RotatorRotationPreset, SlotKind,
+    MacroStep, MacroStepEntry, MediaOp, ProfileTemplate, RotatorPressPreset, RotatorRotationPreset, SlotKind,
     ThemeSetting, KEY_SLOTS, SLOT_ENC_CCW, SLOT_ENC_CW, SLOT_ENC_PRESS, SLOT_JOY_DOWN,
     SLOT_JOY_LEFT, SLOT_JOY_PRESS, SLOT_JOY_RIGHT, SLOT_JOY_UP, SLOT_TOUCH_SWIPE_L,
     SLOT_TOUCH_SWIPE_R, SLOT_TOUCH_TAP,
@@ -750,7 +751,22 @@ fn configured_icon_label(value: &str) -> String {
     value.to_string()
 }
 
-fn chrome_icon_button(name: &str) -> Div {
+/// One entry of the "+" menu: picking it appends `template` as a new profile.
+fn profile_template_item(
+    label: &'static str,
+    template: ProfileTemplate,
+    view: &Entity<OpenMicro>,
+) -> PopupMenuItem {
+    let view = view.clone();
+    PopupMenuItem::new(label).on_click(move |_, window, cx| {
+        view.update(cx, |this, cx| this.add_profile(template, window, cx));
+    })
+}
+
+/// The face of a header chrome button, without its own hitbox occlusion.
+/// Use `chrome_icon_button` unless something around the face occludes for
+/// it (see `ChromeMenuButton`).
+fn chrome_icon_face(name: &str) -> Div {
     div()
         .w(px(28.))
         .h(px(26.))
@@ -762,15 +778,84 @@ fn chrome_icon_button(name: &str) -> Div {
         .text_size(px(14.))
         .text_color(pixel::muted_text_color())
         .cursor_pointer()
-        // Keep interactive controls inside GPUI's Windows title bar out of the
-        // parent drag hitbox so Windows delivers their mouse events normally.
-        .occlude()
         .hover(|style| {
             style
                 .bg(pixel::raised_color())
                 .text_color(pixel::accent_highlight_color())
         })
         .child(icon_glyph(name))
+}
+
+fn chrome_icon_button(name: &str) -> Div {
+    // Keep interactive controls inside GPUI's Windows title bar out of the
+    // parent drag hitbox so Windows delivers their mouse events normally.
+    chrome_icon_face(name).occlude()
+}
+
+/// A header chrome button that anchors a gpui-component dropdown menu.
+///
+/// `DropdownMenu` is implemented for the library's own `Button`; this thin
+/// wrapper lends a chrome button face the `Selectable` state the popover
+/// drives, so the button stays lit while its menu is open.
+///
+/// The face deliberately does not occlude: the popover listens for the
+/// mouse on a wrapper *around* the trigger, and GPUI's hit test stops at an
+/// occluding child, which would hide that wrapper from the click. Callers
+/// occlude outside the whole dropdown instead (`chrome_menu_button_slot`).
+#[derive(IntoElement)]
+struct ChromeMenuButton {
+    button: Stateful<Div>,
+    open: bool,
+}
+
+impl ChromeMenuButton {
+    fn new(id: &'static str, icon: &str) -> Self {
+        Self {
+            button: chrome_icon_face(icon).id(id),
+            open: false,
+        }
+    }
+}
+
+/// The occluding slot a `ChromeMenuButton` dropdown sits in, keeping the
+/// whole thing out of the title bar's window-drag hitbox.
+fn chrome_menu_button_slot(dropdown: impl IntoElement) -> Div {
+    div().occlude().child(dropdown)
+}
+
+impl Styled for ChromeMenuButton {
+    fn style(&mut self) -> &mut StyleRefinement {
+        self.button.style()
+    }
+}
+
+impl InteractiveElement for ChromeMenuButton {
+    fn interactivity(&mut self) -> &mut Interactivity {
+        self.button.interactivity()
+    }
+}
+
+impl Selectable for ChromeMenuButton {
+    fn selected(mut self, selected: bool) -> Self {
+        self.open = selected;
+        self
+    }
+
+    fn is_selected(&self) -> bool {
+        self.open
+    }
+}
+
+impl DropdownMenu for ChromeMenuButton {}
+
+impl RenderOnce for ChromeMenuButton {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        self.button.when(self.open, |button| {
+            button
+                .bg(pixel::raised_color())
+                .text_color(pixel::accent_highlight_color())
+        })
+    }
 }
 
 pub struct OpenMicro {
@@ -1215,6 +1300,20 @@ impl OpenMicro {
             self.sync_inputs(window, cx);
             cx.notify();
         }
+    }
+
+    /// Append a profile from the "+" menu and make it active.
+    fn add_profile(
+        &mut self,
+        template: ProfileTemplate,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.sheet != Sheet::None {
+            return;
+        }
+        let index = self.host.add_profile(template);
+        self.switch_profile(index, window, cx);
     }
 
     fn switch_profile(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -2414,6 +2513,7 @@ impl OpenMicro {
 
     fn render_header(&self, cx: &mut Context<Self>) -> AnyElement {
         let profile = self.host.active_profile().name.clone();
+        let view = cx.entity();
         let (connection, connection_color) = if self.host.connected {
             (tr("connected"), pixel::success_color())
         } else {
@@ -2481,18 +2581,33 @@ impl OpenMicro {
                                 }),
                             ),
                     )
-                    .child(
-                        chrome_icon_button("plus")
-                            .id("profile-add")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                let number = this.host.config.profiles.len() + 1;
-                                let mut profile = config::default_codex_profile();
-                                profile.name = format!("Profile {number}");
-                                this.host.config.profiles.push(profile);
-                                let index = this.host.config.profiles.len() - 1;
-                                this.switch_profile(index, window, cx);
-                            })),
-                    )
+                    .child(chrome_menu_button_slot(
+                        ChromeMenuButton::new("profile-add", "plus").dropdown_menu_with_anchor(
+                            Corner::TopRight,
+                            move |menu, window, cx| {
+                                let templates = view.clone();
+                                menu.item(profile_template_item(
+                                    tr("profile_menu_empty"),
+                                    ProfileTemplate::Empty,
+                                    &view,
+                                ))
+                                .submenu(
+                                    tr("profile_menu_templates"),
+                                    window,
+                                    cx,
+                                    move |menu, _, _| {
+                                        ProfileTemplate::AGENTS.iter().fold(menu, |menu, template| {
+                                            menu.item(profile_template_item(
+                                                template.name(),
+                                                *template,
+                                                &templates,
+                                            ))
+                                        })
+                                    },
+                                )
+                            },
+                        ),
+                    ))
                     .child(chrome_icon_button("settings").id("open-settings").on_click(
                         cx.listener(|this, _, _, cx| {
                             this.agent_integration_feedback = None;

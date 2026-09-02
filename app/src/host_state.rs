@@ -303,6 +303,15 @@ impl HostState {
         true
     }
 
+    /// Append a profile built from `template`, named so it does not collide
+    /// with the existing ones, and return its index. Nothing is persisted or
+    /// activated here; `switch_profile` does both.
+    pub fn add_profile(&mut self, template: config::ProfileTemplate) -> usize {
+        let profile = template.profile(&self.config.profiles);
+        self.config.profiles.push(profile);
+        self.config.profiles.len() - 1
+    }
+
     /// Activate a profile, persist it, update host interception/menu state,
     /// and make the pad follow the switch.
     pub fn switch_profile(&mut self, index: usize) -> bool {
@@ -1415,6 +1424,25 @@ mod tests {
             host.handle_event(AppEvent::Menubar(MenubarMsg { id: "quit".into() })),
             vec![HostEffect::Quit]
         );
+    }
+
+    #[test]
+    fn add_profile_appends_uniquely_named_template_without_activating_it() {
+        let mut host = state();
+        assert_eq!(host.config.profiles.len(), 1);
+
+        let first = host.add_profile(config::ProfileTemplate::ClaudeCode);
+        let second = host.add_profile(config::ProfileTemplate::ClaudeCode);
+        let empty = host.add_profile(config::ProfileTemplate::Empty);
+
+        assert_eq!((first, second, empty), (1, 2, 3));
+        assert_eq!(host.config.profiles[first].name, "Claude Code");
+        assert_eq!(host.config.profiles[second].name, "Claude Code 2");
+        assert_eq!(host.config.profiles[empty].name, "Profile 4");
+        assert_eq!(host.config.active_profile, 0);
+
+        assert!(host.switch_profile(empty));
+        assert_eq!(host.config.active_profile, empty);
     }
 
     #[test]

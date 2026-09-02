@@ -214,6 +214,8 @@ pub const STRINGS: &[(&str, &str, &str, &str, &str)] = &[
     ("dial_joystick", "JOYSTICK", "摇杆", "搖桿", "ジョイスティック"),
     ("dial_touch", "TOUCH", "触摸", "觸控", "タッチ"),
     ("profile_name_placeholder", "Profile name", "配置名称", "設定檔名稱", "プロファイル名"),
+    ("profile_menu_empty", "Empty profile", "空白配置", "空白設定檔", "空のプロファイル"),
+    ("profile_menu_templates", "Templates", "模板", "範本", "テンプレート"),
     ("keycap_label_placeholder", "Short keycap label", "键帽短标签", "鍵帽短標籤", "キーキャップの短いラベル"),
     ("change_icon", "Change icon…", "更换图标…", "更換圖示…", "アイコンを変更…"),
     ("existing_setup_note", "This control keeps its existing setup until you choose a behavior.", "在您选择行为之前，此控件保持现有设置。", "在您選擇行為之前，此控制項保持現有設定。", "動作を選ぶまで、このコントロールは現在の設定を保持します。"),
