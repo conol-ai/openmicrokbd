@@ -5,6 +5,7 @@
 //! system body text. CJK text and IME composition go through GPUI's platform
 //! text stack instead of the former canvas-font path.
 
+use crate::device::DeviceMode;
 use std::borrow::Cow;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -3781,6 +3782,43 @@ impl OpenMicro {
                             })),
                         )
                     })
+                    .child(pixel::divider())
+                    .child(
+                        // Lives on the pad, not in the config: the toggle
+                        // shows what the connected pad booted as and asks
+                        // it to restart the other way. Greyed out until a
+                        // pad on firmware 0.8.0+ is connected.
+                        controls::toggle_face(
+                            tr("codex_compat_mode"),
+                            self.host.device_mode == Some(DeviceMode::Codex),
+                            self.host.device_mode.is_some() && !self.host.mode_switch_pending,
+                        )
+                        .id("toggle-codex-mode")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if this.host.mode_switch_pending {
+                                return;
+                            }
+                            let next = match this.host.device_mode {
+                                Some(DeviceMode::Codex) => DeviceMode::OpenMicro,
+                                Some(DeviceMode::OpenMicro) => DeviceMode::Codex,
+                                None => return,
+                            };
+                            this.host.set_device_mode(next);
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(pixel::muted_text_color())
+                            .child(if self.host.mode_switch_pending {
+                                tr("codex_compat_restarting")
+                            } else if self.host.device_mode.is_some() {
+                                tr("codex_compat_note")
+                            } else {
+                                tr("codex_compat_unsupported")
+                            }),
+                    )
                     .child(inspector_field(
                         tr("language_eyebrow"),
                         tr("language_applies"),

@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use crate::actions;
 use crate::config::{self, Action, AppConfig, LedPattern, Profile, SLOT_COUNT};
-use crate::device::{DeviceCmd, DeviceMsg, PadEvent, UpdateMsg};
+use crate::device::{DeviceCmd, DeviceMode, DeviceMsg, PadEvent, UpdateMsg};
 use crate::events::AppEvent;
 use crate::intercept::Intercept;
 use crate::menubar::{Menubar, MenubarMsg};
@@ -91,6 +91,12 @@ pub struct HostState {
     pub connected: bool,
     /// Last connected `(firmware version, serial)` pair.
     pub last_conn: Option<(String, String)>,
+    /// The connected pad's boot identity; None while disconnected or on
+    /// firmware that predates device modes.
+    pub device_mode: Option<DeviceMode>,
+    /// A SET_MODE is in flight: the pad takes a second or two to save,
+    /// reset and reappear, during which the toggle must not fire again.
+    pub mode_switch_pending: bool,
     pub pressed_cells: [bool; CELL_COUNT],
 
     /// Runtime activity reported by local coding-agent integrations.
@@ -186,6 +192,8 @@ impl HostState {
             device_tx: None,
             connected: false,
             last_conn: None,
+            device_mode: None,
+            mode_switch_pending: false,
             pressed_cells: [false; CELL_COUNT],
             activities: HashMap::new(),
             activity_epoch: 0,
@@ -364,6 +372,24 @@ impl HostState {
         effects
     }
 
+    /// Ask the pad to boot as a Codex Micro, or back as itself. The pad
+    /// persists the choice, acks, and resets; it returns as a fresh
+    /// connection under the other USB identity (`find_raw` knows both).
+    pub fn set_device_mode(&mut self, mode: DeviceMode) -> bool {
+        if self.device_tx.is_none() || self.mode_switch_pending {
+            return false;
+        }
+        self.push_log(format!("switching the pad to {mode} mode"));
+        let sent = self
+            .device_tx
+            .as_ref()
+            .is_some_and(|tx| tx.send(DeviceCmd::SetDeviceMode { mode }).is_ok());
+        // Cleared by the Connected that follows the pad's reset (or by
+        // Disconnected, after which the toggle is disabled anyway).
+        self.mode_switch_pending = sent;
+        sent
+    }
+
     pub fn push_log(&mut self, line: impl Into<String>) {
         self.logs.push_back(line.into());
         while self.logs.len() > LOG_LIMIT {
@@ -385,6 +411,10 @@ impl HostState {
             .last_conn
             .clone()
             .unwrap_or_else(|| ("?".into(), "?".into()));
+        let version = match self.device_mode {
+            Some(DeviceMode::Codex) => format!("{version} · Codex Micro mode"),
+            _ => version,
+        };
         menubar.update(
             self.connected,
             &version,
@@ -396,9 +426,15 @@ impl HostState {
 
     fn handle_device(&mut self, message: DeviceMsg, effects: &mut Vec<HostEffect>) {
         match message {
-            DeviceMsg::Connected { version, serial } => {
+            DeviceMsg::Connected {
+                version,
+                serial,
+                mode,
+            } => {
                 self.connected = true;
                 self.last_conn = Some((version, serial));
+                self.device_mode = mode;
+                self.mode_switch_pending = false;
                 self.firmware_banner_dismissed = false;
                 self.refresh_menubar();
                 self.refresh_activity_led();
@@ -406,6 +442,7 @@ impl HostState {
             DeviceMsg::Disconnected => {
                 self.connected = false;
                 self.last_conn = None;
+                self.device_mode = None;
                 self.pressed_cells.fill(false);
                 self.refresh_menubar();
             }

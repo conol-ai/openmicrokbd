@@ -1,0 +1,12 @@
+[package]
+name = "codex-wire-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Host-side unit tests for fw/src/codex/wire.rs (the Codex Micro protocol codec)"
+
+# Not a workspace member: the firmware crate only builds for thumbv6m. Run
+# with scripts/test-codex-wire.sh, which points cargo at the host target.
+[workspace]
+
+[dependencies]

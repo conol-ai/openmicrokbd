@@ -32,7 +32,46 @@ use crate::events;
 
 pub const VID: u16 = 0x1209;
 pub const PID: u16 = 0x0001;
+/// Every USB identity the pad can boot with: its own, and — in the opt-in
+/// Codex Micro compat mode (firmware 0.8.0+) — the Codex Micro's, under
+/// which it still exposes the same vendor interface so this app keeps
+/// working. The raw-HID usage page is what actually singles it out.
+pub const IDENTITIES: [(u16, u16); 2] = [(VID, PID), (0x303A, 0x8360)];
 const RAW_USAGE_PAGE: u16 = 0xFF60;
+
+/// Which USB identity the pad boots with (firmware 0.8.0+, `GET_MODE` /
+/// `SET_MODE`). Changing it restarts the pad under the other identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceMode {
+    OpenMicro,
+    Codex,
+}
+
+impl DeviceMode {
+    fn from_wire(byte: u8) -> Option<Self> {
+        match byte {
+            0 => Some(Self::OpenMicro),
+            1 => Some(Self::Codex),
+            _ => None,
+        }
+    }
+
+    fn to_wire(self) -> u8 {
+        match self {
+            Self::OpenMicro => 0,
+            Self::Codex => 1,
+        }
+    }
+}
+
+impl std::fmt::Display for DeviceMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::OpenMicro => "OpenMicro",
+            Self::Codex => "Codex Micro compat",
+        })
+    }
+}
 
 const CMD_VERSION: u8 = 0x01;
 const CMD_ENTER_DFU: u8 = 0x02;
@@ -49,6 +88,8 @@ const CMD_SET_LED: u8 = 0x0C;
 const CMD_GET_LEDPATTERN: u8 = 0x0D;
 const CMD_SET_LEDPATTERN: u8 = 0x0E;
 const CMD_SET_KEY_LED_OVERRIDE: u8 = 0x0F;
+const CMD_GET_MODE: u8 = 0x10;
+const CMD_SET_MODE: u8 = 0x11;
 
 /// First byte of an unsolicited device->host event report.
 const EVENT_MARK: u8 = 0x80;
@@ -75,6 +116,8 @@ pub enum DeviceMsg {
     Connected {
         version: String,
         serial: String,
+        /// None on firmware that predates device modes (< 0.8.0).
+        mode: Option<DeviceMode>,
     },
     Disconnected,
     Event(PadEvent),
@@ -164,6 +207,12 @@ pub enum DeviceCmd {
     },
     ReadKeymap,
     FactoryReset,
+    /// Persist a boot identity and restart the pad under it. The session
+    /// ends when the pad drops off the bus; it comes back as a fresh
+    /// connection (and a fresh `Connected`) with the new mode.
+    SetDeviceMode {
+        mode: DeviceMode,
+    },
 }
 
 pub fn spawn_worker() -> mpsc::Sender<DeviceCmd> {
@@ -252,7 +301,9 @@ fn handle_cmd_offline(api: &mut HidApi, cmd: DeviceCmd) {
             expected_version,
         } => run_update(api, &image, expected_version.as_deref()),
         DeviceCmd::EnterDfuOnly => enter_dfu_standalone(api),
-        DeviceCmd::SyncKeymap { .. } | DeviceCmd::FactoryReset => {
+        DeviceCmd::SyncKeymap { .. }
+        | DeviceCmd::FactoryReset
+        | DeviceCmd::SetDeviceMode { .. } => {
             events::post(DeviceMsg::SyncDone {
                 ok: false,
                 detail: "device not connected".into(),
@@ -271,7 +322,18 @@ fn handle_cmd_offline(api: &mut HidApi, cmd: DeviceCmd) {
 /// tuning so the UI starts from what is actually on the device.
 fn hello(dev: &HidDevice, serial: String) {
     let version = query_version(dev).unwrap_or_else(|| "?".into());
-    events::post(DeviceMsg::Connected { version, serial });
+    // Older firmware never answers GET_MODE, and the 500 ms it would take
+    // to find that out would delay Connected on every plug-in.
+    let mode = if supports_device_mode(&version) {
+        query_mode(dev)
+    } else {
+        None
+    };
+    events::post(DeviceMsg::Connected {
+        version,
+        serial,
+        mode,
+    });
     match read_keymap(dev) {
         Ok(keymap) => events::post(keymap.into_msg()),
         Err(e) => events::post(DeviceMsg::SyncDone {
@@ -380,6 +442,29 @@ fn session(api: &mut HidApi, rx: &mpsc::Receiver<DeviceCmd>, dev: &HidDevice) ->
                         detail: format!("keymap read failed: {e}"),
                     }),
                 },
+                Ok(DeviceCmd::SetDeviceMode { mode }) => {
+                    // The pad rewrites flash (SAVE budget), acks, then resets
+                    // ~50 ms later — the next read fails and this session
+                    // ends as Lost, which is the normal path back to search.
+                    let mut reply = [0u8; 32];
+                    let result = command(
+                        dev,
+                        &[CMD_SET_MODE, mode.to_wire(), b'M', b'O', b'D', b'E'],
+                        &mut reply,
+                        SAVE_TIMEOUT,
+                    )
+                    .and_then(|n| expect_ack(n, &reply, "SET_MODE"));
+                    events::post(match result {
+                        Ok(()) => DeviceMsg::SyncDone {
+                            ok: true,
+                            detail: format!("switching to {mode} mode — the pad is restarting"),
+                        },
+                        Err(e) => DeviceMsg::SyncDone {
+                            ok: false,
+                            detail: format!("device mode: {e}"),
+                        },
+                    });
+                }
                 Ok(DeviceCmd::FactoryReset) => {
                     match factory_reset(dev).and_then(|()| read_keymap(dev)) {
                         Ok(keymap) => {
@@ -705,11 +790,11 @@ fn factory_reset(dev: &HidDevice) -> Result<(), String> {
 
 // --------------------------------------------------------------- discovery --
 
-/// Locate the raw-HID (usage page 0xFF60) interface of the pad.
+/// Locate the raw-HID (usage page 0xFF60) interface of the pad, under
+/// whichever of its USB identities it booted with.
 fn find_raw(api: &HidApi) -> Option<(CString, String)> {
     for info in api.device_list() {
-        if info.vendor_id() == VID
-            && info.product_id() == PID
+        if IDENTITIES.contains(&(info.vendor_id(), info.product_id()))
             && info.usage_page() == RAW_USAGE_PAGE
         {
             let serial = info.serial_number().unwrap_or("?").to_string();
@@ -735,6 +820,25 @@ fn query_version(dev: &HidDevice) -> Option<String> {
     core::str::from_utf8(&reply[2..2 + len])
         .ok()
         .map(|s| s.to_string())
+}
+
+/// Device modes (GET_MODE / SET_MODE) arrived in firmware 0.8.0.
+fn supports_device_mode(version: &str) -> bool {
+    let mut parts = version.split('.').filter_map(|part| part.parse::<u32>().ok());
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(major), Some(minor), Some(_)) => major > 0 || minor >= 8,
+        _ => false,
+    }
+}
+
+/// GET_MODE. None on firmware before 0.8.0, which simply never replies.
+fn query_mode(dev: &HidDevice) -> Option<DeviceMode> {
+    let mut reply = [0u8; 32];
+    let n = command(dev, &[CMD_GET_MODE], &mut reply, REPLY_TIMEOUT).ok()?;
+    if n < 2 {
+        return None;
+    }
+    DeviceMode::from_wire(reply[1])
 }
 
 fn enter_dfu(dev: &HidDevice) -> Result<(), String> {

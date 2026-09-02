@@ -46,16 +46,28 @@
 //! tuning, joystick mode, and unsolicited input-event reports (first byte
 //! 0x80) that give the app live press feedback without any OS
 //! input-monitoring permission.
+//!
+//! Device mode (keymap.rs `device_mode`, persisted with the keymap): the pad
+//! normally boots as OpenMicro (1209:0001, the composite above). In the
+//! opt-in **Codex Micro compat mode** (codex.rs) it boots with the Codex
+//! Micro's USB identity plus a fifth HID interface speaking ChatGPT
+//! Desktop's device protocol, and every input is routed there instead of
+//! through the keymap (the vendor interface stays, so the app still works).
+//! Switch by holding a key while plugging in — the first key of the second
+//! row (slot 2, "KEY 03" in the app) → OpenMicro, the second key of that row
+//! (slot 3, "KEY 04") → Codex — or with `SET_MODE` from the app. The choice is saved and applies to every later
+//! boot; the underglow shows the mode's colour for a moment at power-up.
 
 #![no_std]
 #![no_main]
 
+mod codex;
 mod dfu;
 mod keymap;
 mod ws2812;
 
 use embassy_executor::Spawner;
-use embassy_futures::join::join3;
+use embassy_futures::join::join4;
 use embassy_futures::select::{select, Either};
 use embassy_stm32::adc::Adc;
 use embassy_stm32::exti::ExtiInput;
@@ -66,7 +78,7 @@ use embassy_stm32::usb::Driver;
 use embassy_stm32::{bind_interrupts, peripherals, usb, Config};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::channel::Channel;
-use embassy_time::{with_timeout, Duration, Ticker, Timer};
+use embassy_time::{with_timeout, Duration, Instant, Ticker, Timer};
 use embassy_usb::class::hid::{HidReaderWriter, HidWriter, State};
 use embassy_usb::driver::{Driver as UsbDriver, EndpointError};
 // Bring-up logging over the SWD probe (RTT) + panic messages on the same
@@ -171,6 +183,10 @@ const RAW_HID_DESC: &[u8] = &[
 //                                     (per-chain pattern: 0 rainbow, 1 solid RGB)
 //   [0x0E, kmode,kr,kg,kb, umode,ur,ug,ub] -> [0x0E, 0x01] (RAM; SAVE persists)
 //   [0x0F, index, enabled, r,g,b] -> [0x0F, 0x01] (RAM-only per-key override)
+//   [0x10]                         -> [0x10, mode] (running device mode:
+//                                     0 OpenMicro / 1 Codex Micro compat)
+//   [0x11, mode, 'M','O','D','E']  -> [0x11, ok]; a CHANGED mode is persisted
+//                                     and the pad resets to re-enumerate in it
 const CMD_VERSION: u8 = 0x01;
 const CMD_ENTER_DFU: u8 = 0x02;
 const CMD_GET_KEYMAP: u8 = 0x03;
@@ -186,10 +202,63 @@ const CMD_SET_LED: u8 = 0x0C;
 const CMD_GET_LEDPATTERN: u8 = 0x0D;
 const CMD_SET_LEDPATTERN: u8 = 0x0E;
 const CMD_SET_KEY_LED_OVERRIDE: u8 = 0x0F;
+const CMD_GET_MODE: u8 = 0x10;
+const CMD_SET_MODE: u8 = 0x11;
 const ENTER_DFU_KEY: &[u8; 4] = b"DFU!";
 const SAVE_KEY: &[u8; 4] = b"SAVE";
 const RESET_KEY: &[u8; 4] = b"RST!";
+const MODE_KEY: &[u8; 4] = b"MODE";
 const EVENT_REPORT: u8 = 0x80;
+
+/// Boot identity (keymap::MODE_*), fixed for this power cycle: the USB
+/// descriptors are built from it once, so a change only lands after a reset.
+static DEVICE_MODE: core::sync::atomic::AtomicU8 =
+    core::sync::atomic::AtomicU8::new(keymap::MODE_OPENMICRO);
+
+fn codex_mode() -> bool {
+    DEVICE_MODE.load(core::sync::atomic::Ordering::Relaxed) == keymap::MODE_CODEX
+}
+
+/// Boot splash on the underglow ring: the mode's colour, solid for a moment
+/// after every boot and blinking when a boot chord has just changed it.
+static SPLASH_UNTIL_MS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static SPLASH_RGB: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static SPLASH_BLINK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// OpenMicro mode shows the app's accent amber; Codex mode plain white.
+const MODE_RGB_OPENMICRO: u32 = 0xF5AE58;
+const MODE_RGB_CODEX: u32 = 0xFFFFFF;
+
+fn splash(rgb: u32, blink: bool) {
+    use core::sync::atomic::Ordering::Relaxed;
+    let now = Instant::now().as_millis() as u32;
+    SPLASH_RGB.store(rgb, Relaxed);
+    SPLASH_BLINK.store(blink, Relaxed);
+    SPLASH_UNTIL_MS.store(now.wrapping_add(if blink { 1800 } else { 1000 }), Relaxed);
+}
+
+/// Boot chord: a key held while power arrives picks the device mode for
+/// this and every later boot. Row 1 is driven like a scan step and the two
+/// columns sampled 20 times over 100 ms, so a bounce or a glancing touch
+/// during plug-in cannot flip the mode; both keys down is ambiguous and
+/// ignored. Slot 2 (the app's KEY 03) = row 1 / col 0, slot 3 (KEY 04) =
+/// row 1 / col 1 (POSITIONS).
+async fn boot_chord(rows: &mut [Output<'static>; 4], cols: &[Input<'static>; 4]) -> Option<u8> {
+    const SAMPLES: u32 = 20;
+    let mut key2 = 0u32;
+    let mut key3 = 0u32;
+    rows[1].set_high();
+    for _ in 0..SAMPLES {
+        Timer::after_millis(5).await;
+        key2 += cols[0].is_high() as u32;
+        key3 += cols[1].is_high() as u32;
+    }
+    rows[1].set_low();
+    match (key2 == SAMPLES, key3 == SAMPLES) {
+        (true, false) => Some(keymap::MODE_OPENMICRO),
+        (false, true) => Some(keymap::MODE_CODEX),
+        _ => None,
+    }
+}
 
 static KEY_LED_OVERRIDE_MASK: portable_atomic::AtomicU16 =
     portable_atomic::AtomicU16::new(0);
@@ -521,20 +590,95 @@ async fn main(spawner: Spawner) {
         info!("keymap: no saved configuration — factory defaults");
     }
 
+    // ---- matrix pins ---- (built before USB: the boot chord scans them)
+    #[cfg(not(feature = "proto"))]
+    let mut rows = [
+        Output::new(p.PA9, Level::Low, Speed::Low),
+        Output::new(p.PA10, Level::Low, Speed::Low),
+        Output::new(p.PB3, Level::Low, Speed::Low),
+        Output::new(p.PB8, Level::Low, Speed::Low),
+    ];
+    #[cfg(feature = "proto")]
+    let mut rows = [
+        Output::new(p.PA9, Level::Low, Speed::Low),
+        Output::new(p.PB3, Level::Low, Speed::Low),
+        Output::new(p.PB6, Level::Low, Speed::Low),
+        Output::new(p.PB5, Level::Low, Speed::Low),
+    ];
+    #[cfg(not(feature = "proto"))]
+    let cols = [
+        Input::new(p.PB4, Pull::Down),
+        Input::new(p.PB5, Pull::Down),
+        Input::new(p.PC14, Pull::Down),
+        Input::new(p.PC13, Pull::Down),
+    ];
+    #[cfg(feature = "proto")]
+    let cols = [
+        Input::new(p.PB8, Pull::Down),
+        Input::new(p.PB7, Pull::Down),
+        Input::new(p.PA15, Pull::Down),
+        Input::new(p.PA10, Pull::Down),
+    ];
+
+    // ---- device mode: the saved one, unless a boot chord changes it ----
+    // Persisted only on an actual change (flash endurance), before the USB
+    // identity is chosen from it below.
+    let saved_mode = keymap::device_mode();
+    let chord = boot_chord(&mut rows, &cols).await;
+    let changed = matches!(chord, Some(m) if m != saved_mode);
+    let mode = match chord {
+        Some(m) if m != saved_mode => {
+            keymap::set_device_mode(m);
+            match keymap::save_to_flash(&mut flash) {
+                Ok(()) => info!("mode: boot chord -> {=u8}, saved", m),
+                Err(()) => warn!("mode: boot chord -> {=u8}, FLASH ERROR (this boot only)", m),
+            }
+            m
+        }
+        Some(m) => {
+            info!("mode: boot chord confirms {=u8}", m);
+            m
+        }
+        None => saved_mode,
+    };
+    DEVICE_MODE.store(mode, core::sync::atomic::Ordering::Relaxed);
+    let codex_mode = mode == keymap::MODE_CODEX;
+    info!(
+        "device mode: {}",
+        if codex_mode { "Codex Micro compat" } else { "OpenMicro" }
+    );
+    splash(
+        if codex_mode { MODE_RGB_CODEX } else { MODE_RGB_OPENMICRO },
+        changed,
+    );
+
     // ---- USB HID: a boot keyboard + a consumer-control interface ----
+    // (+ mouse + the vendor/app interface; in Codex Micro compat mode the
+    // whole device borrows that identity and gains the Codex interface.)
     let driver = Driver::new(p.USB, Irqs, p.PA12, p.PA11);
-    let mut usb_config = embassy_usb::Config::new(0x1209, 0x0001);
-    usb_config.manufacturer = Some("conol");
-    usb_config.product = Some("OpenMicro");
+    let mut usb_config = if codex_mode {
+        embassy_usb::Config::new(codex::VID, codex::PID)
+    } else {
+        embassy_usb::Config::new(0x1209, 0x0001)
+    };
+    usb_config.manufacturer = Some(if codex_mode { codex::MANUFACTURER } else { "conol" });
+    usb_config.product = Some(if codex_mode { codex::PRODUCT } else { "OpenMicro" });
     // Every unit reports its own serial: the MCU's factory-programmed
     // 96-bit unique ID, hex-encoded. Distinguishes pads when several are
     // plugged in, and gives support/logs a stable per-unit identity.
     usb_config.serial_number = Some(embassy_stm32::uid::uid_hex());
-    usb_config.device_release = version_bcd(FW_VERSION);
+    usb_config.device_release = if codex_mode {
+        codex::DEVICE_RELEASE
+    } else {
+        version_bcd(FW_VERSION)
+    };
 
     static CONFIG_DESC: StaticCell<[u8; 256]> = StaticCell::new();
     static BOS_DESC: StaticCell<[u8; 256]> = StaticCell::new();
-    static CONTROL_BUF: StaticCell<[u8; 64]> = StaticCell::new();
+    // Must hold a whole control-OUT data stage: a 64-byte SET_REPORT on the
+    // Codex interface, with headroom.
+    static CONTROL_BUF: StaticCell<[u8; 128]> = StaticCell::new();
+    static CODEX_STATE: StaticCell<State> = StaticCell::new();
     static KBD_STATE: StaticCell<State> = StaticCell::new();
     static CONSUMER_STATE: StaticCell<State> = StaticCell::new();
     static MOUSE_STATE: StaticCell<State> = StaticCell::new();
@@ -546,8 +690,29 @@ async fn main(spawner: Spawner) {
         CONFIG_DESC.init([0; 256]),
         BOS_DESC.init([0; 256]),
         &mut [],
-        CONTROL_BUF.init([0; 64]),
+        CONTROL_BUF.init([0; 128]),
     );
+
+    // Compat mode: the Codex interface goes FIRST (interface 0), so a host
+    // that takes "the first HID interface with this VID/PID" lands on it.
+    // Control SET_REPORTs need the request handler; without one embassy
+    // STALLs them.
+    let codex_hid = if codex_mode {
+        Some(
+            HidReaderWriter::<_, { codex::REPORT_LEN }, { codex::REPORT_LEN }>::new(
+                &mut builder,
+                CODEX_STATE.init(State::new()),
+                embassy_usb::class::hid::Config {
+                    report_descriptor: codex::REPORT_DESC,
+                    request_handler: Some(codex::CONTROL.init(codex::ControlHandler)),
+                    poll_ms: 1,
+                    max_packet_size: codex::REPORT_LEN as u16,
+                },
+            ),
+        )
+    } else {
+        None
+    };
 
     let kbd_hid = HidReaderWriter::<_, 1, 8>::new(
         &mut builder,
@@ -597,36 +762,7 @@ async fn main(spawner: Spawner) {
     let (_kbd_reader, mut kbd_writer) = kbd_hid.split();
     let (_consumer_reader, mut consumer_writer) = consumer_hid.split();
     let (mut raw_reader, mut raw_writer) = raw_hid.split();
-
-    // ---- matrix pins ----
-    #[cfg(not(feature = "proto"))]
-    let rows = [
-        Output::new(p.PA9, Level::Low, Speed::Low),
-        Output::new(p.PA10, Level::Low, Speed::Low),
-        Output::new(p.PB3, Level::Low, Speed::Low),
-        Output::new(p.PB8, Level::Low, Speed::Low),
-    ];
-    #[cfg(feature = "proto")]
-    let rows = [
-        Output::new(p.PA9, Level::Low, Speed::Low),
-        Output::new(p.PB3, Level::Low, Speed::Low),
-        Output::new(p.PB6, Level::Low, Speed::Low),
-        Output::new(p.PB5, Level::Low, Speed::Low),
-    ];
-    #[cfg(not(feature = "proto"))]
-    let cols = [
-        Input::new(p.PB4, Pull::Down),
-        Input::new(p.PB5, Pull::Down),
-        Input::new(p.PC14, Pull::Down),
-        Input::new(p.PC13, Pull::Down),
-    ];
-    #[cfg(feature = "proto")]
-    let cols = [
-        Input::new(p.PB8, Pull::Down),
-        Input::new(p.PB7, Pull::Down),
-        Input::new(p.PA15, Pull::Down),
-        Input::new(p.PA10, Pull::Down),
-    ];
+    let codex_parts = codex_hid.map(|h| h.split());
 
     // ---- encoder + buttons ----
     // A/B are EXTI-driven rather than polled: at speed a 1 kHz scan aliases
@@ -903,6 +1039,46 @@ async fn main(spawner: Spawner) {
                                 reply[1] = 0x01;
                             }
                         }
+                        CMD_GET_MODE => {
+                            reply[1] = DEVICE_MODE.load(core::sync::atomic::Ordering::Relaxed);
+                        }
+                        CMD_SET_MODE if &buf[2..6] == MODE_KEY => {
+                            let mode = buf[1];
+                            if mode > keymap::MODE_CODEX {
+                                reply[1] = 0;
+                            } else if mode == DEVICE_MODE.load(core::sync::atomic::Ordering::Relaxed)
+                            {
+                                // Already running it: nothing to persist or
+                                // restart (an unchanged RAM copy may still
+                                // have been edited; SAVE covers that).
+                                reply[1] = 0x01;
+                            } else {
+                                // Persists the whole RAM configuration, like
+                                // SAVE. On a flash error put the RAM mode
+                                // back, or a later ordinary SAVE would carry
+                                // the switch the app was just told failed.
+                                keymap::set_device_mode(mode);
+                                let ok = keymap::save_to_flash(&mut flash).is_ok();
+                                if !ok {
+                                    keymap::set_device_mode(
+                                        DEVICE_MODE.load(core::sync::atomic::Ordering::Relaxed),
+                                    );
+                                }
+                                warn!(
+                                    "app: device mode -> {=u8} ({})",
+                                    mode,
+                                    if ok { "saved, resetting" } else { "FLASH ERROR" }
+                                );
+                                reply[1] = ok as u8;
+                                if ok {
+                                    let _ = raw_writer.write(&reply).await;
+                                    // Let the ack reach the host, then come
+                                    // back up with the new identity.
+                                    Timer::after_millis(50).await;
+                                    dfu::reboot();
+                                }
+                            }
+                        }
                         other => {
                             debug!("app: unknown cmd 0x{=u8:02x}", other);
                             continue;
@@ -913,7 +1089,15 @@ async fn main(spawner: Spawner) {
             }
         }
     };
-    join3(usb_fut, pump, updater).await;
+    // Codex Micro compat interface: only exists in that mode; otherwise this
+    // future just parks.
+    let codex_fut = async {
+        match codex_parts {
+            Some((mut reader, mut writer)) => codex::pump(&mut reader, &mut writer).await,
+            None => core::future::pending::<()>().await,
+        }
+    };
+    join4(usb_fut, pump, updater, codex_fut).await;
 }
 
 /// 1 kHz matrix scan with 5 ms debounce + encoder quadrature + buttons.
@@ -947,8 +1131,27 @@ async fn scan_task(
     let mut n: u32 = 0;
     let mut debounce = [[0u8; 4]; 4];
     let mut pressed = [[false; 4]; 4];
+    // Keys already down when we start (the boot chord) must not emit a
+    // press — nor a release when they finally come up. Seed the state from
+    // one scan and swallow that first release edge.
+    let mut suppress = [[false; 4]; 4];
+    for (ri, row) in rows.iter_mut().enumerate() {
+        row.set_high();
+        cortex_m::asm::delay(48);
+        for (ci, col) in cols.iter().enumerate() {
+            if col.is_high() {
+                pressed[ri][ci] = true;
+                suppress[ri][ci] = true;
+            }
+        }
+        row.set_low();
+    }
     let mut enc_sw_last = enc_sw.is_high();
     let mut joy_sw_last = joy_sw.is_high();
+    // Same rule for the two push switches: down at boot means their first
+    // release is not an input either.
+    let mut enc_sw_suppress = !enc_sw_last;
+    let mut joy_sw_suppress = !joy_sw_last;
     // Which form of "joystick push down" is outstanding, so a mode switch
     // mid-hold retracts exactly what was asserted.
     let mut joy_key_held = false;
@@ -973,7 +1176,10 @@ async fn scan_task(
                         pressed[ri][ci] = raw;
                         debounce[ri][ci] = 0;
                         let pos = POSITIONS[ri][ci];
-                        if pos >= 0 {
+                        if suppress[ri][ci] {
+                            // The boot-chord key letting go: not an input.
+                            suppress[ri][ci] = false;
+                        } else if pos >= 0 {
                             let pos = pos as usize;
                             info!(
                                 "key p{=usize} {} (r{=usize} c{=usize})",
@@ -982,7 +1188,11 @@ async fn scan_task(
                                 ri,
                                 ci
                             );
-                            set_held(pos, raw);
+                            if codex_mode() {
+                                codex::key(pos as u8, raw);
+                            } else {
+                                set_held(pos, raw);
+                            }
                             post_event(0, pos as u8, raw as u8);
                             // LED feedback tracks the physical press whatever
                             // the slot emits (or even if it emits nothing).
@@ -1002,9 +1212,15 @@ async fn scan_task(
 
         // -- encoder push + joystick push: held slots like any key --
         let e = enc_sw.is_high();
-        if e != enc_sw_last {
+        if e != enc_sw_last && enc_sw_suppress {
+            enc_sw_suppress = false;
+        } else if e != enc_sw_last {
             info!("encoder switch {}", if e { "UP" } else { "DOWN" });
-            set_held(keymap::SLOT_ENC_PRESS, !e);
+            if codex_mode() {
+                codex::encoder_press(!e);
+            } else {
+                set_held(keymap::SLOT_ENC_PRESS, !e);
+            }
             post_event(2, !e as u8, 0);
         }
         enc_sw_last = e;
@@ -1012,12 +1228,14 @@ async fn scan_task(
         // Joystick push: a held key slot in keys mode, mouse button 1 in
         // the pointer modes (mouse and grade). The mode can change while the
         // switch is down (app sync), so retract a stale assertion before
-        // honouring the new mode.
+        // honouring the new mode. Codex mode has no known stick-click
+        // message, so there it only feeds the app's live view.
         let j = joy_sw.is_high();
-        let pointer_mode = matches!(
-            keymap::joy_mode(),
-            keymap::JOY_MODE_MOUSE | keymap::JOY_MODE_GRADE
-        );
+        let pointer_mode = !codex_mode()
+            && matches!(
+                keymap::joy_mode(),
+                keymap::JOY_MODE_MOUSE | keymap::JOY_MODE_GRADE
+            );
         if pointer_mode && joy_key_held {
             set_held(keymap::SLOT_JOY_PRESS, false);
             joy_key_held = false;
@@ -1031,10 +1249,14 @@ async fn scan_task(
                 dy: 0,
             });
         }
-        if j != joy_sw_last {
+        if j != joy_sw_last && joy_sw_suppress {
+            joy_sw_suppress = false;
+        } else if j != joy_sw_last {
             info!("joystick switch {}", if j { "UP" } else { "DOWN" });
             let down = !j;
-            if pointer_mode {
+            if codex_mode() {
+                // event only (below)
+            } else if pointer_mode {
                 joy_click_held = down;
                 MOUSE_BUTTONS.store(down as u8, core::sync::atomic::Ordering::Relaxed);
                 force_send_mouse(MouseFrame {
@@ -1098,13 +1320,21 @@ async fn encoder_task(mut enc_a: ExtiInput<'static>, mut enc_b: ExtiInput<'stati
         while accum >= ENC_COUNTS_PER_DETENT {
             accum -= ENC_COUNTS_PER_DETENT;
             info!("encoder CW");
-            tap_slot(keymap::SLOT_ENC_CW);
+            if codex_mode() {
+                codex::encoder_step(true);
+            } else {
+                tap_slot(keymap::SLOT_ENC_CW);
+            }
             post_event(1, 1, 0);
         }
         while accum <= -ENC_COUNTS_PER_DETENT {
             accum += ENC_COUNTS_PER_DETENT;
             info!("encoder CCW");
-            tap_slot(keymap::SLOT_ENC_CCW);
+            if codex_mode() {
+                codex::encoder_step(false);
+            } else {
+                tap_slot(keymap::SLOT_ENC_CCW);
+            }
             post_event(1, 0, 0);
         }
     }
@@ -1203,10 +1433,13 @@ async fn adc_task(
 
         // The app can flip the mode while the stick is deflected; hand the
         // active direction over so no mode strands a held key, and drop any
-        // grade-mode drag so the button cannot stay latched.
+        // grade-mode drag so the button cannot stay latched. In Codex mode
+        // the joystick mode is moot: deflections go to the host as analog
+        // stick directions, nothing else.
+        let codex = codex_mode();
         let mode = keymap::joy_mode();
         let keys = mode == keymap::JOY_MODE_KEYS;
-        if mode != last_mode {
+        if !codex && mode != last_mode {
             last_mode = mode;
             acc_x = 0;
             acc_y = 0;
@@ -1227,13 +1460,17 @@ async fn adc_task(
         if dir != last {
             info!("joystick dir {=u8} (x={=u16} y={=u16})", dir, x, y);
             if last != DIR_NONE {
-                if keys {
+                if codex {
+                    codex::stick(last, false);
+                } else if keys {
                     set_held(DIR_SLOTS[last as usize], false);
                 }
                 post_event(3, last, 0);
             }
             if dir != DIR_NONE {
-                if keys {
+                if codex {
+                    codex::stick(dir, true);
+                } else if keys {
                     set_held(DIR_SLOTS[dir as usize], true);
                 }
                 post_event(3, dir, 1);
@@ -1241,7 +1478,7 @@ async fn adc_task(
             last = dir;
         }
 
-        if !keys {
+        if !codex && !keys {
             let grade = mode == keymap::JOY_MODE_GRADE;
             let cx = past_deadzone(x as i32 - 2048);
             let cy = past_deadzone(y as i32 - 2048);
@@ -1392,7 +1629,11 @@ async fn touch_task(mut pad: Flex<'static>) {
         if touched && armed {
             info!("touch TAP (t={=u32} baseline={=u32})", t, baseline);
             armed = false;
-            tap_slot(keymap::SLOT_TOUCH_TAP);
+            // The Codex Micro protocol has no touch message we know of, so
+            // in compat mode a tap only feeds the app's live view.
+            if !codex_mode() {
+                tap_slot(keymap::SLOT_TOUCH_TAP);
+            }
             post_event(4, 1, 0);
         } else if !touched {
             armed = true;
@@ -1430,6 +1671,9 @@ async fn led_task(mut led_key: ws2812::LedPin<'static>, mut led_ug: ws2812::LedP
         let (key_pat, ug_pat) = keymap::led_patterns();
         let override_mask =
             KEY_LED_OVERRIDE_MASK.load(core::sync::atomic::Ordering::Relaxed);
+        // Codex mode: whatever lighting the host has described so far
+        // outranks the pad's own patterns and the app's overrides.
+        let host = if codex_mode() { Some(codex::lights()) } else { None };
 
         let mut keys = [ws2812::Grb::default(); 13];
         for (i, px) in keys.iter_mut().enumerate() {
@@ -1439,6 +1683,8 @@ async fn led_task(mut led_key: ws2812::LedPin<'static>, mut led_ug: ws2812::LedP
             // A pressed key always pops white, whatever the idle pattern.
             *px = if state & (1 << i) != 0 {
                 ws2812::Grb::rgb(255, 255, 255).scaled(dim(24))
+            } else if let Some(c) = host.as_ref().and_then(|h| codex_key_light(h, i, phase)) {
+                c.scaled(dim(20))
             } else if override_mask & (1 << i) != 0 {
                 let rgb = KEY_LED_OVERRIDE_RGB[i]
                     .load(core::sync::atomic::Ordering::Relaxed);
@@ -1455,10 +1701,17 @@ async fn led_task(mut led_key: ws2812::LedPin<'static>, mut led_ug: ws2812::LedP
             };
         }
         // The hue step is 256/UG_LEN so the ring carries exactly one full
-        // wheel around the board regardless of revision.
+        // wheel around the board regardless of revision. The boot splash
+        // (mode colour) and the Codex host's ambient light take precedence.
+        let splash_px = splash_pixel();
+        let ambient = host.as_ref().and_then(|h| codex_light_rgb(&h.ambient, phase));
         let mut ring = [ws2812::Grb::default(); UG_LEN];
         for (i, px) in ring.iter_mut().enumerate() {
-            *px = if ug_pat.mode == keymap::LED_PATTERN_SOLID {
+            *px = if let Some(s) = splash_px {
+                s.scaled(dim(8))
+            } else if let Some(a) = ambient {
+                a.scaled(dim(8))
+            } else if ug_pat.mode == keymap::LED_PATTERN_SOLID {
                 ws2812::Grb::rgb(ug_pat.r, ug_pat.g, ug_pat.b).scaled(dim(8))
             } else {
                 hue(phase.wrapping_add((i as u8) * (256 / UG_LEN) as u8)).scaled(dim(8))
@@ -1476,6 +1729,57 @@ async fn led_task(mut led_key: ws2812::LedPin<'static>, mut led_ug: ws2812::LedP
             ws2812::write_raw(embassy_stm32::pac::GPIOA, 0, &ring);
         }
     }
+}
+
+/// The boot splash colour while it runs (solid, or 150 ms on/off when a
+/// chord just changed the mode); None once it has expired.
+fn splash_pixel() -> Option<ws2812::Grb> {
+    use core::sync::atomic::Ordering::Relaxed;
+    let now = Instant::now().as_millis() as u32;
+    let until = SPLASH_UNTIL_MS.load(Relaxed);
+    let remaining = until.wrapping_sub(now) as i32;
+    if remaining <= 0 {
+        return None;
+    }
+    if SPLASH_BLINK.load(Relaxed) && (remaining as u32 / 150) % 2 == 1 {
+        return Some(ws2812::Grb::default());
+    }
+    let rgb = SPLASH_RGB.load(Relaxed);
+    Some(ws2812::Grb::rgb(
+        ((rgb >> 16) & 0xFF) as u8,
+        ((rgb >> 8) & 0xFF) as u8,
+        (rgb & 0xFF) as u8,
+    ))
+}
+
+/// Codex mode: the host's light for key `i` — an agent status light for
+/// the six Agent Keys (p0..p5), the key-backlight config for the Command
+/// Keys. None until the host has described it, so the pad's own pattern
+/// shows meanwhile.
+fn codex_key_light(h: &codex::Lights, i: usize, phase: u8) -> Option<ws2812::Grb> {
+    let light = if i < 6 { &h.agents[i] } else { &h.keys };
+    codex_light_rgb(light, phase)
+}
+
+/// A host-described light as a colour: its RGB at its brightness, and when
+/// it "breathes" a ~2 s triangle between 30 % and 100 % in step with the
+/// 30 Hz frame counter.
+fn codex_light_rgb(light: &codex::Light, phase: u8) -> Option<ws2812::Grb> {
+    if !light.set {
+        return None;
+    }
+    let mut level = light.level as u32;
+    if light.breath() {
+        let t = (phase % 64) as u32;
+        let tri = if t < 32 { t } else { 63 - t }; // 0..=31
+        level = level * (77 + tri * 178 / 31) / 255;
+    }
+    let ch = |v: u32| ((v & 0xFF) * level / 255) as u8;
+    Some(ws2812::Grb::rgb(
+        ch(light.rgb >> 16),
+        ch(light.rgb >> 8),
+        ch(light.rgb),
+    ))
 }
 
 /// Cheap 0..255 hue -> saturated RGB.

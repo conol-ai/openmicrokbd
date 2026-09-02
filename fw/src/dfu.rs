@@ -56,3 +56,13 @@ pub fn reboot_into_bootloader() -> ! {
     }
     cortex_m::peripheral::SCB::sys_reset();
 }
+
+/// Plain application reset (no bootloader): the way a device-mode change
+/// takes effect, since the USB identity is only chosen at boot. The reset
+/// drops the USB pull-up, so the host sees a clean unplug/replug.
+pub fn reboot() -> ! {
+    unsafe {
+        addr_of_mut!(DFU_MAGIC).cast::<u32>().write_volatile(0);
+    }
+    cortex_m::peripheral::SCB::sys_reset();
+}

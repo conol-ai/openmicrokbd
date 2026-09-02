@@ -1,6 +1,6 @@
 [package]
 name = "openmicro-fw"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 license = "MIT"
 description = "OpenMicro macropad firmware (STM32F072CBT6, embassy)"
@@ -27,7 +27,14 @@ embassy-executor = { version = "0.7", features = [
     "defmt",
 ] }
 embassy-time = { version = "0.4", features = ["defmt"] }
-embassy-usb = { version = "0.4", features = ["defmt"] }
+embassy-usb = { version = "0.4", features = [
+    "defmt",
+    # Codex Micro compat mode adds a fifth HID interface (and its control
+    # handler) on top of keyboard + consumer + mouse + raw; the crate defaults
+    # cap both lists at exactly four.
+    "max-interface-count-5",
+    "max-handler-count-5",
+] }
 embassy-sync = { version = "0.6", features = ["defmt"] }
 embassy-futures = { version = "0.1" }
 

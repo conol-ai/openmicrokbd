@@ -92,6 +92,44 @@ icons from the full bundled Lucide set). The icon picker also includes the
 bundled Simple Icons catalog for monochrome brand marks. Brand names and logos
 remain trademarks of their respective owners.
 
+The header's **+** opens a menu: **Empty profile** (nothing bound, a blank
+slate) or **Templates ▸ Codex / Claude Code**. Both templates are laid out for
+the stock keycap set — ★, the crowned mascot, four clear caps over the
+activity LEDs, a 2×2 grid, ✓, ✗, a terminal prompt, a microphone, a party
+popper and a robot — and every printed key emits a documented chord straight
+from the pad, as a plain keystroke, so a template works with the app closed
+and needs no Accessibility permission. The encoder, joystick and touch pad
+keep the volume / arrow-key / play-pause defaults. Names de-duplicate (Codex,
+Codex 2, …).
+
+**Codex** targets Codex in the ChatGPT desktop app (macOS, Windows, Linux
+preview) and follows the Codex Micro's layout:
+the clear second row is the session selector. Chords are the app's default
+keybindings; ⌘ below is Ctrl on Windows and Linux (the app's "CmdOrCtrl"),
+while Ctrl+Shift+D, Ctrl+Shift+M and Ctrl+` are Ctrl on every OS. Fast mode,
+Fork and Send have no keyboard chord in the app, so they are not on the pad.
+**Claude Code** targets the CLI's interactive mode, whose chords are the same
+on every OS.
+
+| Cap | Codex (ChatGPT desktop app) | Claude Code (CLI) |
+| --- | --- | --- |
+| ★ | ATTN · ⌘⌥A next chat needing attention | THINK · Option/Alt+T toggles extended thinking |
+| Mascot | NEW · ⌘N new chat | MODE · Shift+Tab cycles permission modes |
+| Clear ×4 | CHAT 1–4 · ⌘⌥1…4 recent chats, the agent-key slots | BG Ctrl+B · STASH Ctrl+S · HIST Ctrl+R · EDIT Ctrl+G |
+| 2×2 grid | MENU · ⌘K command menu | TASKS · Ctrl+T toggles the task checklist |
+| ✓ | APPR · Enter approves a request | YES · Enter confirms a prompt (and sends) |
+| ✗ | REJ · Esc declines a request | STOP · Esc interrupts or declines |
+| Terminal | TERM · Ctrl+` opens the terminal | LOG · Ctrl+O transcript viewer |
+| Mic | MIC · Ctrl+Shift+D starts dictation | VOICE · Space push-to-talk once `/voice` is on |
+| Party popper | SIDE · ⌘⌥S opens the side chat | FAST · Option/Alt+O toggles fast mode |
+| Robot | MODEL · Ctrl+Shift+M model picker | MODEL · Option/Alt+P switches model |
+
+On macOS, Claude Code's Option+P and Option+O reach the CLI only when the
+terminal sends Option as Meta — the default in iTerm2, Ghostty and WezTerm;
+in Apple Terminal enable *Use Option as Meta key* in the profile's Keyboard
+settings. Option+T is handled by Claude Code itself. Any key can be re-bound
+afterwards like in any other profile.
+
 ## Coding-agent activity lights
 
 The companion app exposes a transient, non-persistent status bridge for local
@@ -199,6 +237,31 @@ control cycles through the named palette, shows its hex value, persists to the
 local JSON config, and refreshes an active transient status immediately; idle
 lighting remains independent.
 
+## Codex Micro compat mode
+
+With firmware 0.8.0 or newer the pad can boot as a **Codex Micro** — the USB
+identity plus the HID protocol ChatGPT Desktop uses for OpenAI's macropad —
+so the desktop app drives it natively (confirmed with Codex desktop 26.825 on
+macOS, which auto-detects the pad over USB as soon as it enumerates): keys, dial and stick as Codex Micro
+controls, its six agent status lights on the top-row and second-row keys,
+its lighting configuration on the rest. Settings → **Codex Micro compat
+mode** shows what the connected pad booted as and flips it; the pad saves
+the choice, resets, and comes back under the other identity (the app finds
+it either way, so firmware updates and this switch keep working in both
+modes). The same switch without the app: hold KEY 04 (the second key of the second
+row) while plugging in for compat mode, KEY 03 (the first) to come back. The
+toggle is greyed out until a pad on 0.8.0+ is connected, and while a switch
+is in flight. macOS may show Keyboard Setup Assistant the first time the pad
+appears under each identity — dismiss it, nothing is wrong. On Linux the
+second identity needs its own hidraw udev rule (`303a:8360`, see
+[`docs/linux-firmware-updates.md`](../docs/linux-firmware-updates.md)) or the
+app cannot reconnect after switching.
+
+In compat mode the pad's own keymap and this app's agent lights are bypassed
+for the keys — ChatGPT Desktop owns them. The mode is off by default; see
+[`fw/README.md`](../fw/README.md#codex-micro-compat-mode) for the key
+mapping and the provenance and trademark notes.
+
 ## Firmware updates
 
 The product's field-update path (no buttons, no probe): the sheet checks the
@@ -240,7 +303,8 @@ See [`../RELEASING.md`](../RELEASING.md) for packaging and publishing details.
   macOS-only shortcut catalogs stay hidden. System presets use Windows-native
   Task View, Search, Dictation, input-language, lock, sleep, media, and emoji
   actions.
-- **Linux** — udev rules needed for `1209:0001` (hidraw) and `0483:df11`
+- **Linux** — udev rules needed for `1209:0001` (hidraw), `303a:8360`
+  (hidraw, Codex Micro compat mode) and `0483:df11`
   (DFU); interception depends on the session (X11 grabs; Wayland varies).
 
 ## Known deferrals

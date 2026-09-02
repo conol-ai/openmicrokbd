@@ -104,6 +104,15 @@ the exact production firmware build and verify this sequence on a real pad:
 4. The pad re-enumerates as `1209:0001`.
 5. The reported firmware version equals `fw/Cargo.toml`.
 6. The saved keymap/profile still works.
+7. Codex Micro compat mode round-trips: unplug, hold KEY 04 (the second key
+   of the second row) while plugging in — the underglow blinks white and the
+   pad enumerates as `303A:8360` "Codex Micro" (macOS may open Keyboard Setup
+   Assistant for the new identity; dismiss it); with the Codex desktop app
+   quit, `scripts/test-codex-compat.py` passes; with it running, its log
+   (`~/Library/Logs/com.openai.codex/…`) shows `CodexMicroService` answering
+   `device.status` with this firmware's version; the app still connects and its Settings toggle reads Codex Micro
+   compat. Hold KEY 03 (the first key of that row) while plugging in (amber
+   blink) to return to `1209:0001`.
 
 Do not disconnect USB power while flashing. Because this design uses the STM32
 ROM bootloader rather than a resident rollback bootloader, power loss during

@@ -76,6 +76,8 @@ Linux installations need permission for both identities used during an update:
 ```udev
 # /etc/udev/rules.d/70-openmicro.rules
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0001", MODE="0660", TAG+="uaccess"
+# Codex Micro compat mode (fw 0.8.0+): the same pad under its other identity
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="8360", MODE="0660", TAG+="uaccess"
 SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="df11", MODE="0660", TAG+="uaccess"
 ```
 

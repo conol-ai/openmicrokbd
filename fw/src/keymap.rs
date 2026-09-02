@@ -153,6 +153,14 @@ pub const DEFAULT_LED_BRIGHTNESS: u8 = 255;
 pub const LED_PATTERN_RAINBOW: u8 = 0;
 pub const LED_PATTERN_SOLID: u8 = 1;
 
+/// Device modes on the wire (and in flash) — which USB identity the pad
+/// boots with. OPENMICRO is the pad as documented everywhere else; CODEX is
+/// the opt-in Codex Micro compatibility mode (`codex.rs`). Switched by the
+/// boot chord or `SET_MODE`, and only ever takes effect on the next boot.
+pub const MODE_OPENMICRO: u8 = 0;
+pub const MODE_CODEX: u8 = 1;
+pub const DEFAULT_DEVICE_MODE: u8 = MODE_OPENMICRO;
+
 /// One chain's pattern: rainbow animation or a solid colour.
 #[derive(Clone, Copy)]
 pub struct LedPattern {
@@ -177,6 +185,9 @@ pub struct KeymapState {
     pub led_brightness: u8,
     pub key_pattern: LedPattern,
     pub ug_pattern: LedPattern,
+    /// Persisted boot identity (MODE_*). Read once at boot; changing it in
+    /// RAM does nothing until SAVE + reset.
+    pub device_mode: u8,
 }
 
 /// The live keymap. All tasks run in thread mode (no ISR touches this), so a
@@ -190,6 +201,7 @@ pub static KEYMAP: Mutex<ThreadModeRawMutex, RefCell<KeymapState>> =
         led_brightness: DEFAULT_LED_BRIGHTNESS,
         key_pattern: DEFAULT_LED_PATTERN,
         ug_pattern: DEFAULT_LED_PATTERN,
+        device_mode: DEFAULT_DEVICE_MODE,
     }));
 
 pub fn slot(i: usize) -> Slot {
@@ -219,6 +231,21 @@ pub fn led_patterns() -> (LedPattern, LedPattern) {
     })
 }
 
+pub fn device_mode() -> u8 {
+    KEYMAP.lock(|k| k.borrow().device_mode)
+}
+
+/// Set the boot identity in RAM (SAVE persists; a reset applies it).
+/// Unknown values fall back to OpenMicro mode.
+pub fn set_device_mode(mode: u8) {
+    let mode = if mode <= MODE_CODEX {
+        mode
+    } else {
+        DEFAULT_DEVICE_MODE
+    };
+    KEYMAP.lock(|k| k.borrow_mut().device_mode = mode);
+}
+
 // ---- flash persistence -----------------------------------------------------
 
 /// Last 2 KiB page of the 128 KiB flash, as an offset from the flash base.
@@ -231,6 +258,13 @@ const MAGIC: u32 = 0x4F4D_4B31; // "OMK1"
 /// per chain) and moves the checksum after them (112 -> 120) — every step
 /// keeps the body a multiple of the F0's 4-byte programming unit. Older
 /// blobs still load, with the fields they predate at their defaults.
+///
+/// fw 0.8.0 spends v3's reserved byte on `device_mode` WITHOUT bumping the
+/// layout version: every v3/v4 blob ever written has 0 there (= OpenMicro
+/// mode, the default), the checksum already covers it, and firmware that
+/// predates the field ignores it and writes 0 back on its next SAVE — so a
+/// downgrade falls back to OpenMicro mode instead of discarding the whole
+/// saved keymap the way an unknown layout version would.
 const LAYOUT_VERSION: u16 = 4;
 /// Where v1 put the checksum: right after the slots.
 const V1_CK_OFFSET: usize = 8 + SLOT_COUNT * 4;
@@ -238,8 +272,10 @@ const V1_CK_OFFSET: usize = 8 + SLOT_COUNT * 4;
 const JOY_MODE_OFFSET: usize = V1_CK_OFFSET;
 const JOY_SPEED_OFFSET: usize = V1_CK_OFFSET + 1;
 const V2_CK_OFFSET: usize = V1_CK_OFFSET + 2;
-/// v3 field homes (the former v2 checksum area) + one reserved byte.
+/// v3 field homes (the former v2 checksum area) + one reserved byte, which
+/// became the device mode in fw 0.8.0.
 const LED_BRIGHTNESS_OFFSET: usize = V2_CK_OFFSET;
+const DEVICE_MODE_OFFSET: usize = V2_CK_OFFSET + 1;
 const V3_CK_OFFSET: usize = V2_CK_OFFSET + 2;
 /// v4 field homes: key pattern then underglow pattern, 4 bytes each.
 const KEY_PATTERN_OFFSET: usize = V3_CK_OFFSET;
@@ -270,6 +306,7 @@ fn encode(state: &KeymapState) -> [u8; BLOB_LEN] {
     b[JOY_MODE_OFFSET] = state.joy_mode;
     b[JOY_SPEED_OFFSET] = state.joy_mouse_speed;
     b[LED_BRIGHTNESS_OFFSET] = state.led_brightness;
+    b[DEVICE_MODE_OFFSET] = state.device_mode;
     for (off, p) in [
         (KEY_PATTERN_OFFSET, state.key_pattern),
         (UG_PATTERN_OFFSET, state.ug_pattern),
@@ -325,6 +362,13 @@ pub fn load_from_flash() -> bool {
             b[LED_BRIGHTNESS_OFFSET]
         } else {
             DEFAULT_LED_BRIGHTNESS
+        };
+        // The byte only exists from v3 (in a v2 blob it is the checksum's
+        // high byte); an out-of-range value degrades to OpenMicro mode.
+        k.device_mode = if version >= 3 && b[DEVICE_MODE_OFFSET] <= MODE_CODEX {
+            b[DEVICE_MODE_OFFSET]
+        } else {
+            DEFAULT_DEVICE_MODE
         };
         let load_pattern = |off: usize| {
             // An out-of-range mode byte degrades to rainbow, never garbage.
@@ -404,6 +448,9 @@ pub fn factory_reset(flash: &mut Flash<'_, Blocking>) -> Result<(), ()> {
         k.led_brightness = DEFAULT_LED_BRIGHTNESS;
         k.key_pattern = DEFAULT_LED_PATTERN;
         k.ug_pattern = DEFAULT_LED_PATTERN;
+        // The running identity does not change until the next boot, which
+        // then comes up in OpenMicro mode like a fresh unit.
+        k.device_mode = DEFAULT_DEVICE_MODE;
     });
     flash
         .blocking_erase(CONFIG_OFFSET, CONFIG_OFFSET + 2048)

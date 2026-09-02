@@ -97,6 +97,90 @@ device** (`keymap.rs`):
 - **LEDs**: pressed keys light white over an idle rainbow; the underglow
   ring rotates hue. Brightness is capped in `ws2812.rs` (`scaled(n/64)`)
   to keep all 21 LEDs inside the 500 mA VBUS budget.
+- **Codex Micro compat mode** (opt-in, off by default, fw 0.8.0+,
+  `src/codex/`): the pad can boot with the USB identity of OpenAI's Codex
+  Micro plus a fifth HID interface speaking ChatGPT Desktop's device
+  protocol, so the desktop app drives it natively — see
+  [Codex Micro compat mode](#codex-micro-compat-mode).
+
+## Codex Micro compat mode
+
+Off by default. When switched on, the pad boots as a **Codex Micro** — VID
+`0x303A` / PID `0x8360`, manufacturer "Work Louder", product "Codex Micro" —
+and adds a vendor-defined HID interface (usage page `0xFF00`, report ID 6,
+64-byte reports) carrying the JSON-RPC-style protocol ChatGPT Desktop uses
+to talk to that device. The desktop app then treats the pad as the real
+thing: keys, dial and stick arrive as Codex Micro controls, and the app
+pushes its six agent status lights and its lighting configuration back to
+the LEDs. **Confirmed 2026-09-02 with Codex desktop 26.825 on macOS**: the
+app auto-detects the pad over USB the moment it enumerates (no pairing
+step), and runs its `device.status` / `v.oai.thstatus` / `v.oai.rgbcfg`
+traffic against this firmware without errors. The app opens the interface
+**exclusively**, so any other tool holding it (the probe scripts, the
+reference Swift probes) makes the app's connection fail with "exclusive
+access and device already open" until that tool exits — quit one before
+running the other. The normal keymap is bypassed in this mode; the OpenMicro vendor
+interface (`0xFF60`) stays, so the companion app, DFU updates and the mode
+switch keep working.
+
+**Switching.** Hold a key while plugging the pad in:
+
+| Held at power-up | Mode |
+|---|---|
+| The **second** key of the second row (KEY 04 in the app; slot 3, matrix row 1 / col 1) | Codex Micro compat |
+| The **first** key of the second row (KEY 03 in the app; slot 2, matrix row 1 / col 0) | OpenMicro (the default) |
+
+The choice is saved with the keymap (it takes the reserved byte of the v4
+blob, so older firmware ignores it and a downgrade falls back to OpenMicro
+mode — until that older firmware SAVEs, re-flashing 0.8.0+ restores the
+saved mode) and applies to every later boot. The underglow shows the mode for a
+second at power-up — amber for OpenMicro, white for Codex — blinking when a
+chord has just changed it. The app's Settings sheet has the same switch
+(`GET_MODE` / `SET_MODE` below); a change resets the pad so it re-enumerates.
+
+**Mapping.** The official key numbering runs in the same reading order as
+ours, so it is position for position:
+
+| Pad | Codex Micro | Wire id |
+|---|---|---|
+| keys p0–p5 (top row + second row) | Agent Keys 1–6, with the six status lights | `AG00`–`AG05` (`ag` 0–5) |
+| p6 / p7 / p8 / p9 | Command Keys (defaults Fast / Approve / Decline / Fork) | `ACT06`–`ACT09` |
+| p10 / p11 | the two switches under the wide Mic key (push-to-talk if the host assigns it) | `ACT10` / `ACT11` — `ACT11` is inferred from the numbering; only `ACT10` has been observed |
+| p12 | Send | `ACT12` |
+| encoder turn / press | dial step / dial press (hold ≥ 500 ms = settings) | `ENC_CW` `ENC_CC` / `ENC` |
+| joystick | analog stick, four directions | `v.oai.rad` |
+| touch pad | — (no known message; app event only) | |
+
+What each key *does* is configured in ChatGPT Desktop → Settings → Codex
+Micro, not on the pad, and gestures (double-press, holds) are timed by the
+host. Host → pad: `sys.version`, `device.status`, `v.oai.thstatus` (agent
+lights: colour, brightness, breath/focus), `v.oai.rgbcfg` (ambient =
+underglow, keys = command-key backlight), `lights.preview` and
+`host.focused_app` (acknowledged). Message shapes are documented in
+`src/codex/mod.rs`; the codec is unit-tested on the host against the request
+shapes the reference projects' probe scripts and protocol notes use
+(`scripts/test-codex-wire.sh`), and `scripts/test-codex-compat.py` drives a
+pad in compat mode end to end.
+
+**Provenance and disclaimer.** The protocol is undocumented. This is an
+independent Rust re-implementation of the behaviour documented by two
+MIT-licensed projects that emulate the device over Bluetooth,
+[`imliubo/codex-micro-4-core2`](https://github.com/imliubo/codex-micro-4-core2)
+(Copyright (c) 2026 imliubo) and
+[`digitsisyph/codex-micro-stopwatch`](https://github.com/digitsisyph/codex-micro-stopwatch).
+Neither validated USB; that part is now confirmed against the real app,
+whose bundled Work Louder device kit filters on VID `0x303A`, PIDs `0x8360`
+(Codex Micro) / `0x8297` / `0x8298` (Creator Micro V2), usage page `0xFF00`,
+and calls the link USB when the HID transport says so or, failing that, when
+`bcdDevice % 4 == 0` (`codex::DEVICE_RELEASE`). It ignores the pad's other
+HID interfaces, polls `device.status` about once a minute for battery, and
+sends its lighting config with the command-key backlight off. Still
+inferred, not observed: the `ACT11` id above. OpenAI, ChatGPT and Codex are
+trademarks of OpenAI; Codex Micro and Work Louder belong to their owners.
+The identifiers are emitted only so a compatible host recognises the device
+and imply no affiliation, endorsement or official status — the mode is off
+unless the owner turns it on, and a ChatGPT Desktop update can change the
+protocol without notice.
 
 ## Building
 
@@ -162,6 +246,8 @@ any IN report starting `0x80` is an unsolicited input event, not a reply:
 | `[0x0D]` | Replies `[0x0D, kmode,kr,kg,kb, umode,ur,ug,ub]` — per-chain LED pattern (0 rainbow, 1 solid RGB) |
 | `[0x0E, kmode,kr,kg,kb, umode,ur,ug,ub]` | Acks `[0x0E, 0x01]` — set patterns in RAM (SAVE persists) |
 | `[0x0F, index, enabled, r, g, b]` | Acks `[0x0F, 0x01]` — set or clear one key LED override in RAM (never persisted) |
+| `[0x10]` | Replies `[0x10, mode]` — running device mode (0 OpenMicro / 1 Codex Micro compat, fw 0.8.0+) |
+| `[0x11, mode, 'M','O','D','E']` | Acks `[0x11, ok]`; a changed mode is saved (the whole RAM configuration, like SAVE) and the pad resets to re-enumerate in it |
 
 Event reports (`[0x80, src, a, b]`, best-effort, dropped when no host reads):
 src 0 = key (a = position 0–12, b = pressed), 1 = encoder rotate (a = 1 CW),
@@ -185,7 +271,9 @@ dfu-util -a 0 -s 0x08000000:leave -D openmicro.bin   # :leave boots the new app
 
 The updater app can decide *whether* to update without opening the device:
 `bcdDevice` in the USB descriptor carries the semver from `Cargo.toml`
-(`0.1.0` → `0x0110`-style encoding, see `version_bcd`). Minimal host flow
+(`0.1.0` → `0x0110`-style encoding, see `version_bcd`) — except in Codex
+Micro compat mode, where it is fixed at `0x0100` (`codex::DEVICE_RELEASE`)
+and the `0x01` VERSION command is the only version source. Minimal host flow
 (Python + `hidapi` + `dfu-util`):
 
 ```python
