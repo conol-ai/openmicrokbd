@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="day">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Firmware 0.8.0 and app 0.12.0: the pad can be a Codex Micro now · OpenMicroKbd</title>
+<meta name="description" content="Two releases: an opt-in firmware mode in which OpenMicroKbd boots with the Codex Micro's USB identity and speaks the ChatGPT desktop app's device protocol, and profile templates in the companion app so the stock keycaps do the right thing in Codex or Claude Code out of the box." />
+<link rel="canonical" href="https://openmicrokbd.org/blog/codex-micro-compat-mode/" />
+
+<meta property="og:type" content="article" />
+<meta property="og:site_name" content="OpenMicroKbd" />
+<meta property="og:title" content="Firmware 0.8.0 and app 0.12.0: the pad can be a Codex Micro now" />
+<meta property="og:description" content="Compat mode: the ChatGPT desktop app drives the pad natively — agent lights, dial, stick, push-to-talk. Plus one-click profile templates for Codex and Claude Code." />
+<meta property="og:url" content="https://openmicrokbd.org/blog/codex-micro-compat-mode/" />
+<meta property="og:image" content="https://openmicrokbd.org/assets/og.jpg" />
+<meta property="article:published_time" content="2026-09-02" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Firmware 0.8.0 and app 0.12.0: the pad can be a Codex Micro now" />
+<meta name="twitter:description" content="Compat mode: the ChatGPT desktop app drives the pad natively — agent lights, dial, stick, push-to-talk. Plus one-click profile templates for Codex and Claude Code." />
+<meta name="twitter:image" content="https://openmicrokbd.org/assets/og.jpg" />
+
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f2e2bd" />
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#131a3a" />
+
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+<link rel="icon" href="/assets/favicon-32.png" type="image/png" sizes="32x32" />
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" />
+<link rel="alternate" type="application/atom+xml" title="OpenMicroKbd Blog" href="/blog/feed.xml" />
+
+<link rel="preload" href="/fonts/press-start-2p-latin.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="/fonts/vt323-latin.woff2" as="font" type="font/woff2" crossorigin />
+
+<link rel="stylesheet" href="/css/style.css" />
+<link rel="stylesheet" href="/css/blog.css" />
+<script src="/js/theme-init.js"></script>
+
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-M69BJY7W5P"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-M69BJY7W5P');
+</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+
+<div class="progress-track" aria-hidden="true"><div class="progress-fill" id="progressFill"></div></div>
+
+<header class="nav" id="nav">
+  <div class="nav__inner">
+    <a class="brand" href="/" aria-label="OpenMicroKbd — home">
+      <img class="logo-mark" src="/assets/logo-64.png" alt="" width="26" height="26" />
+      <span class="brand__text">OPEN MICRO KBD</span>
+    </a>
+
+    <nav class="nav__links" aria-label="Sections">
+      <a href="/#paradox">The Paradox</a>
+      <a href="/#features">Features</a>
+      <a href="/#demo">Try It</a>
+      <a href="/#blueprint">Blueprint</a>
+      <a href="/blog/" aria-current="true">Blog</a>
+    </nav>
+
+    <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle day and night theme" aria-pressed="false">
+      <span class="theme-toggle__track" aria-hidden="true">
+        <span class="theme-toggle__icon theme-toggle__icon--sun"></span>
+        <span class="theme-toggle__icon theme-toggle__icon--moon"></span>
+        <span class="theme-toggle__knob"></span>
+      </span>
+      <span class="theme-toggle__label" id="themeLabel">DAY</span>
+    </button>
+
+    <button class="nav__burger" id="navBurger" type="button" aria-label="Open menu" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+</header>
+
+<main class="blog-main" id="content">
+
+<header class="post-head">
+  <p class="section-kicker">THE BLOG · RELEASE NOTES</p>
+  <h1>Firmware 0.8.0 and app 0.12.0: the pad can be a Codex Micro now</h1>
+  <p class="post-meta"><span>Tony Huang</span><span>September 2, 2026</span><span>~8 min read</span></p>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <div class="toc-title">CONTENTS</div>
+  <ul>
+    <li><a href="#two-releases">Two releases, one idea</a></li>
+    <li><a href="#compat-mode">Compat mode: the pad boots as a Codex Micro</a>
+      <ul>
+        <li><a href="#what-the-desktop-app-sees">What the desktop app sees</a></li>
+        <li><a href="#switching">Switching, with and without the app</a></li>
+        <li><a href="#where-the-protocol-came-from">Where the protocol came from</a></li>
+      </ul>
+    </li>
+    <li><a href="#templates">Profile templates: the stock keycaps, wired</a>
+      <ul>
+        <li><a href="#codex-template">The Codex template</a></li>
+        <li><a href="#claude-code-template">The Claude Code template</a></li>
+      </ul>
+    </li>
+    <li><a href="#which-mode">Which mode, when</a></li>
+    <li><a href="#get-it">Get it</a></li>
+  </ul>
+</nav>
+
+<article class="post-body">
+
+<figure class="post-figure">
+  <img src="/assets/shot-app.jpg" alt="OpenMicroKbd with its stock keycaps resting on a laptop keyboard, the companion app's key editor open on the screen behind it" width="900" height="1200" loading="lazy" />
+  <figcaption>Same board, two personalities. Firmware 0.8.0 lets it choose at boot.</figcaption>
+</figure>
+
+<h2 id="two-releases">Two releases, one idea</h2>
+
+<p>The <a href="/blog/openmicrokbd-launch/">launch post</a> called OpenMicroKbd a recreation of the Codex Micro's <em>control surface</em>: the same thirteen keys, dial, stick and touch pad, driven by our own firmware and our own companion app. That was deliberately the whole claim. What the pad did in front of a coding agent was up to you and the app's key editor.</p>
+
+<p>Today's two releases close that gap from both ends.</p>
+
+<p><strong>Firmware 0.8.0</strong> adds an opt-in <strong>Codex Micro compat mode</strong>. Switched on, the pad boots with the Codex Micro's USB identity and speaks the device protocol the ChatGPT desktop app uses to talk to that hardware. The desktop app then treats it as the real thing: keys, dial and stick arrive as Codex Micro controls, and the app pushes its six agent status lights and its lighting configuration back to the LEDs. Confirmed on hardware with Codex desktop 26.825 on macOS.</p>
+
+<p><strong>App 0.12.0</strong> adds <strong>profile templates</strong>. The <strong>+</strong> button in the header is now a menu: an empty profile, or a template for <strong>Codex</strong> or <strong>Claude Code</strong>, both laid out for the keycap set the board ships with. Every printed key emits the right chord straight from the pad, so a fresh board does something sensible the moment it is plugged in, with the app closed.</p>
+
+<p><em>OpenMicroKbd remains an independent open-source project, not affiliated with, endorsed by, or sponsored by OpenAI, Work Louder or Anthropic. "Codex Micro", "Codex", "ChatGPT" and "Claude Code" refer to their owners' products; all trademarks belong to their respective owners.</em></p>
+
+<h2 id="compat-mode">Compat mode: the pad boots as a Codex Micro</h2>
+
+<h3 id="what-the-desktop-app-sees">What the desktop app sees</h3>
+
+<p>In compat mode the pad enumerates as VID <code>0x303A</code> / PID <code>0x8360</code>, manufacturer "Work Louder", product "Codex Micro", and adds a fifth HID interface: vendor usage page <code>0xFF00</code>, report ID 6, 64-byte reports carrying a JSON-RPC-style protocol. The desktop app's bundled device kit discovers hardware by exactly that vendor, product and usage page, and it is transport-agnostic, so a wired board qualifies as readily as the Bluetooth original. On the first plug-in the app detected the pad without a pairing step and ran its <code>device.status</code>, <code>v.oai.thstatus</code> and <code>v.oai.rgbcfg</code> traffic against this firmware with no errors.</p>
+
+<p>The official key numbering runs in the same reading order as ours, so the mapping is position for position:</p>
+
+<div class="table-scroll">
+<table>
+<thead><tr><th>Pad</th><th>Codex Micro</th><th>Wire id</th></tr></thead>
+<tbody>
+<tr><td>Keys 1–6 (top row and second row)</td><td>Agent Keys 1–6, with the six status lights</td><td><code>AG00</code>–<code>AG05</code></td></tr>
+<tr><td>Keys 7–10</td><td>Command Keys (defaults Fast / Approve / Decline / Fork)</td><td><code>ACT06</code>–<code>ACT09</code></td></tr>
+<tr><td>Keys 11 and 12</td><td>The two switches under the wide Mic key — push-to-talk</td><td><code>ACT10</code> / <code>ACT11</code></td></tr>
+<tr><td>Key 13</td><td>Send</td><td><code>ACT12</code></td></tr>
+<tr><td>Dial turn / press</td><td>Dial step / dial press (hold for settings)</td><td><code>ENC_CW</code> <code>ENC_CC</code> / <code>ENC</code></td></tr>
+<tr><td>Joystick</td><td>Analog stick, four directions</td><td><code>v.oai.rad</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<p>What each key <em>does</em> is configured in the desktop app under Settings → Codex Micro, not on the pad, and gestures such as double-press and hold are timed by the host. That is the point: in this mode the app owns the keys, exactly as it owns the original. The pad's own keymap is bypassed while it lasts.</p>
+
+<p>What does not go away is everything of ours. The OpenMicro vendor interface stays on the composite device, so the companion app still connects, firmware updates still work, and the mode switch below is always reachable. The desktop app ignores the extra interfaces. It does open its own interface exclusively, so any probe holding it makes the app's connection fail until the probe exits — the repository's <code>scripts/test-codex-compat.py</code> exercises the mode end to end, and you quit the desktop app before running it.</p>
+
+<h3 id="switching">Switching, with and without the app</h3>
+
+<p>Compat mode is off by default and survives reboots once chosen. Two ways to flip it:</p>
+
+<ul>
+  <li><strong>Without the app.</strong> Hold the <strong>second key of the second row</strong> while plugging the pad in for compat mode; hold the <strong>first key of that row</strong> to come back. The underglow shows the mode for a second at power-up — amber for OpenMicro, white for Codex — and blinks when a chord has just changed it.</li>
+  <li><strong>From the app.</strong> Settings gains a <strong>Codex Micro compat mode</strong> toggle that reads what the connected pad booted as and asks it to restart the other way. The pad saves the choice, resets, and comes back under the other identity; the tray shows which one you are in.</li>
+</ul>
+
+<p>The choice lives in the reserved byte of the saved keymap blob. The layout did not change, so older firmware ignores it and a downgrade falls back to OpenMicro mode. Two housekeeping notes: macOS may show Keyboard Setup Assistant the first time the pad appears under each identity — dismiss it, nothing is wrong — and on Linux the second identity needs its own hidraw udev rule for <code>303a:8360</code>, documented alongside the existing ones.</p>
+
+<h3 id="where-the-protocol-came-from">Where the protocol came from</h3>
+
+<p>The protocol is undocumented. This firmware is an independent Rust re-implementation of the behaviour written up by two MIT-licensed projects that emulate the device over Bluetooth, <a href="https://github.com/imliubo/codex-micro-4-core2" rel="noopener">imliubo/codex-micro-4-core2</a> and <a href="https://github.com/digitsisyph/codex-micro-stopwatch" rel="noopener">digitsisyph/codex-micro-stopwatch</a>. Neither had validated USB; that part is now confirmed against the real app. The codec is pure <code>core</code> Rust with host-side tests against the payload shapes those projects' probes use, and the identifiers are emitted only so a compatible host recognises the device. One id, <code>ACT11</code>, is inferred from the numbering rather than observed, and a desktop app update can change the protocol without notice. The mode stays off unless the owner turns it on.</p>
+
+<h2 id="templates">Profile templates: the stock keycaps, wired</h2>
+
+<figure class="post-figure">
+  <img src="/assets/shot-keycaps.jpg" alt="OpenMicroKbd with the stock keycap set installed — a star, a yellow crowned mascot, four clear caps, a grid, a check, a cross, a terminal prompt, a microphone, a party popper and a robot — surrounded by loose spare keycaps" width="900" height="1200" loading="lazy" />
+  <figcaption>The stock set: ★, the mascot, four clear caps over the activity LEDs, then grid, ✓, ✗, terminal, mic, party popper, robot.</figcaption>
+</figure>
+
+<p>Every board leaves the bench with the same keycaps, and until now a fresh profile was a copy of the default with generic labels. Now the <strong>+</strong> menu offers <strong>Empty profile</strong> — nothing bound, a blank slate — or <strong>Templates ▸ Codex / Claude Code</strong>.</p>
+
+<p>The templates share one design rule: every printed key is a plain keystroke stored on the pad. No host interception, no Accessibility permission, nothing that stops working when the app is closed or when the pad moves to another machine. The encoder, joystick and touch pad keep their volume, arrow-key and play/pause defaults, and names de-duplicate (Codex, Codex 2, …). Anything can be re-bound afterwards like in any other profile.</p>
+
+<h3 id="codex-template">The Codex template</h3>
+
+<p>This one targets Codex in the ChatGPT desktop app, and it follows the Codex Micro's own layout rather than inventing one. The clear second row is the <strong>session selector</strong>: the app's "open recent chat 1–4" commands, the same slots the Micro's Agent Keys follow by default, under the same four LEDs that show agent activity. ✓ and ✗ answer approval prompts. The rest follow their pictures.</p>
+
+<p>Where the chords came from matters, because guessing is how a template ends up typing "π" into a terminal. They were read out of the desktop app itself: its bundle carries the Codex Micro keycap catalog, which maps each cap to an app command, and every command's default keybinding, then cross-checked against the app's shortcuts reference. Chords the app defines as "CmdOrCtrl" resolve to ⌘ on macOS and Ctrl on Windows and Linux, and the template does the same at build time; the few it binds with a literal Ctrl stay Ctrl everywhere.</p>
+
+<div class="table-scroll">
+<table>
+<thead><tr><th>Cap</th><th>Label</th><th>Chord (macOS · Windows/Linux)</th><th>In the desktop app</th></tr></thead>
+<tbody>
+<tr><td>★</td><td>ATTN</td><td>⌘⌥A · Ctrl+Alt+A</td><td>Next chat needing attention</td></tr>
+<tr><td>Mascot</td><td>NEW</td><td>⌘N · Ctrl+N</td><td>New chat</td></tr>
+<tr><td>Clear ×4</td><td>CHAT 1–4</td><td>⌘⌥1…4 · Ctrl+Alt+1…4</td><td>Open recent chat 1–4</td></tr>
+<tr><td>Grid</td><td>MENU</td><td>⌘K · Ctrl+K</td><td>Command menu</td></tr>
+<tr><td>✓</td><td>APPR</td><td>Enter</td><td>Approve request</td></tr>
+<tr><td>✗</td><td>REJ</td><td>Esc</td><td>Decline request</td></tr>
+<tr><td>Terminal</td><td>TERM</td><td>Ctrl+`</td><td>Toggle terminal</td></tr>
+<tr><td>Mic</td><td>MIC</td><td>Ctrl+Shift+D</td><td>Start dictation</td></tr>
+<tr><td>Party popper</td><td>SIDE</td><td>⌘⌥S · Ctrl+Alt+S</td><td>Open side chat</td></tr>
+<tr><td>Robot</td><td>MODEL</td><td>Ctrl+Shift+M</td><td>Model picker</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>Three of the Micro's signature actions are missing on purpose: <strong>Fast mode</strong>, <strong>Fork</strong> and <strong>Send</strong> have no keyboard chord in the desktop app at all. The real Micro reaches them over its native protocol — which is exactly what compat mode above gives you. A plain keystroke cannot, so the template does not pretend.</p>
+
+<h3 id="claude-code-template">The Claude Code template</h3>
+
+<p>Claude Code is a terminal program, so its template speaks the CLI's documented interactive-mode shortcuts, which are the same on every operating system. ✓ confirms a permission prompt with Enter, ✗ interrupts or declines with Esc, the mascot cycles permission modes with Shift+Tab, the grid toggles the task checklist, the terminal cap opens the transcript viewer, the mic is push-to-talk once <code>/voice</code> is on, the party popper toggles fast mode and the robot switches model. The four clear caps carry the quiet utilities: background the running task, stash the prompt, search history, open the prompt in an editor.</p>
+
+<p>One caveat that is really a terminal caveat: Claude Code's Option+P and Option+O reach it on macOS only when the terminal sends Option as Meta. iTerm2, Ghostty and WezTerm do by default; Apple Terminal needs <em>Use Option as Meta key</em> switched on in the profile's keyboard settings. Option+T is handled by Claude Code itself.</p>
+
+<h2 id="which-mode">Which mode, when</h2>
+
+<p>If you live in the ChatGPT desktop app, switch compat mode on and stop thinking about it. The app assigns the keys, lights each Agent Key with its chat's state, turns the dial into reasoning effort, holds push-to-talk on the mic, and gets Fast, Fork and Send — the things a keystroke cannot do.</p>
+
+<p>If you live in a terminal, in Claude Code, in the Codex CLI, or in anything else, stay in OpenMicro mode and start from a template. The keys are yours: every one of them is a plain keystroke you can rebind, the four transparent keys still show agent activity from the hooks the app installs, and the pad behaves identically on any machine it is plugged into.</p>
+
+<p>Both modes coexist on one board. Nothing about compat mode is a fork of the firmware, and the companion app keeps working whichever identity the pad booted with.</p>
+
+<h2 id="get-it">Get it</h2>
+
+<p>Firmware 0.8.0 and app 0.12.0 ship together as <a href="https://github.com/conol-ai/openmicrokbd/releases/tag/v0.12.0" rel="noopener">release v0.12.0</a>: notarized macOS DMGs for Apple Silicon and Intel, portable Windows ZIPs for x64 and Arm64, and the firmware as <code>.bin</code>, <code>.elf</code> and <code>.hex</code> with checksums. An installed app offers both updates itself — the app update first, then the firmware prompt — and flashes the verified image over USB with no buttons to hold. Compat mode and its Settings toggle need firmware 0.8.0 or newer; the templates need only the app.</p>
+
+<p>The details are where they always are: <a href="https://github.com/conol-ai/openmicrokbd/blob/main/fw/README.md#codex-micro-compat-mode" rel="noopener"><code>fw/README.md</code></a> for the protocol, the boot chords and the provenance notes, and <a href="https://github.com/conol-ai/openmicrokbd/blob/main/app/README.md#profiles" rel="noopener"><code>app/README.md</code></a> for the templates and the full key tables. If you build one and the desktop app does not see it, or a chord lands somewhere unexpected on your terminal, the Discord is the fastest place to say so.</p>
+
+</article>
+
+<div class="post-foot">
+  <a class="btn btn--primary" href="https://github.com/conol-ai/openmicrokbd/releases/tag/v0.12.0" target="_blank" rel="noopener">★ Get v0.12.0</a>
+  <a class="btn btn--ghost" href="https://discord.gg/x7DXPvK66" target="_blank" rel="noopener" aria-label="Join the Discord — CoHDL and OpenMicroKbd community">Join the Discord</a>
+  <a class="btn btn--ghost" href="/blog/">← All Posts</a>
+</div>
+
+</main>
+
+<footer class="footer--mini">
+  <div class="inner">
+    <span>OpenMicroKbd · MIT licensed · made with ♥ and solder</span>
+    <nav aria-label="Footer">
+      <a href="/">Home</a>
+      <a href="/#demo">Try It</a>
+      <a href="/blog/">Blog</a>
+      <a href="https://github.com/conol-ai/openmicrokbd/releases/latest" rel="noopener">Download</a>
+      <a href="https://github.com/conol-ai/openmicrokbd" rel="noopener">GitHub</a>
+      <a href="https://cohdl.org/" rel="noopener">CoHDL</a>
+      <a href="https://discord.gg/x7DXPvK66" rel="noopener" aria-label="Join the CoHDL and OpenMicroKbd community on Discord">Discord</a>
+      <a href="/blog/feed.xml">Feed</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="/js/main.js"></script>
+</body>
+</html>

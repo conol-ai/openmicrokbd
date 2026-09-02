@@ -5,8 +5,16 @@
   <id>https://openmicrokbd.org/blog/</id>
   <link href="https://openmicrokbd.org/blog/" />
   <link rel="self" type="application/atom+xml" href="https://openmicrokbd.org/blog/feed.xml" />
-  <updated>2026-08-25T00:00:00Z</updated>
+  <updated>2026-09-02T00:00:00Z</updated>
   <author><name>Tony Huang</name></author>
+  <entry>
+    <title>Firmware 0.8.0 and app 0.12.0: the pad can be a Codex Micro now</title>
+    <id>https://openmicrokbd.org/blog/codex-micro-compat-mode/</id>
+    <link href="https://openmicrokbd.org/blog/codex-micro-compat-mode/" />
+    <published>2026-09-02T00:00:00Z</published>
+    <updated>2026-09-02T00:00:00Z</updated>
+    <summary>Firmware 0.8.0 adds an opt-in Codex Micro compat mode: the pad boots with the Codex Micro's USB identity and speaks the ChatGPT desktop app's device protocol, confirmed with Codex desktop 26.825 on macOS. App 0.12.0 adds profile templates for Codex and Claude Code laid out for the stock keycaps, every key a plain keystroke with the right modifier per operating system.</summary>
+  </entry>
   <entry>
     <title>Fab it yourself: ordering OpenMicroKbd from JLCPCB</title>
     <id>https://openmicrokbd.org/blog/fab-with-jlcpcb/</id>

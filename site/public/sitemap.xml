@@ -8,9 +8,14 @@
   </url>
   <url>
     <loc>https://openmicrokbd.org/blog/</loc>
-    <lastmod>2026-08-25</lastmod>
+    <lastmod>2026-09-02</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://openmicrokbd.org/blog/codex-micro-compat-mode/</loc>
+    <lastmod>2026-09-02</lastmod>
+    <priority>0.8</priority>
   </url>
   <url>
     <loc>https://openmicrokbd.org/blog/fab-with-jlcpcb/</loc>
