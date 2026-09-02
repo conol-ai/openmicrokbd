@@ -4500,6 +4500,7 @@ dependencies = [
  "gpui-component",
  "gtk",
  "hidapi",
+ "objc",
  "open",
  "rusb",
  "serde",

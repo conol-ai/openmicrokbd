@@ -26,11 +26,13 @@ use crate::agent_integrations::{
     self, InstallDisposition, InstallState, IntegrationKind, IntegrationReport,
 };
 use crate::behaviors::{self, InstalledApp};
-use crate::config::{LedPattern, self, Action, ControlBehavior, InputConfig, JoystickMode, LanguageSetting, MacroStep,
-    MacroStepEntry, MediaOp, RotatorPressPreset, RotatorRotationPreset, SlotKind, ThemeSetting,
-    KEY_SLOTS, SLOT_ENC_CCW, SLOT_ENC_CW, SLOT_ENC_PRESS, SLOT_JOY_DOWN, SLOT_JOY_LEFT,
-    SLOT_JOY_PRESS, SLOT_JOY_RIGHT, SLOT_JOY_UP, SLOT_TOUCH_SWIPE_L, SLOT_TOUCH_SWIPE_R,
-    SLOT_TOUCH_TAP,};
+use crate::config::{
+    self, Action, ControlBehavior, InputConfig, JoystickMode, LanguageSetting, LedPattern,
+    MacroStep, MacroStepEntry, MediaOp, RotatorPressPreset, RotatorRotationPreset, SlotKind,
+    ThemeSetting, KEY_SLOTS, SLOT_ENC_CCW, SLOT_ENC_CW, SLOT_ENC_PRESS, SLOT_JOY_DOWN,
+    SLOT_JOY_LEFT, SLOT_JOY_PRESS, SLOT_JOY_RIGHT, SLOT_JOY_UP, SLOT_TOUCH_SWIPE_L,
+    SLOT_TOUCH_SWIPE_R, SLOT_TOUCH_TAP,
+};
 use crate::device::DeviceCmd;
 use crate::dfuse;
 use crate::editor_logic::{self, CycleDirection, SimpleBehaviorKind};
@@ -333,13 +335,10 @@ fn cell_for_slot(slot: usize) -> usize {
 
 fn advanced_after_slot_selection(
     advanced: bool,
-    previous_slot: Option<usize>,
-    slot: usize,
+    _previous_slot: Option<usize>,
+    _slot: usize,
 ) -> bool {
-    if previous_slot.is_some_and(|previous| cell_for_slot(previous) == cell_for_slot(slot)) {
-        return advanced;
-    }
-    !matches!(slot, 0..=12 | SLOT_ENC_CW..=SLOT_ENC_PRESS | SLOT_TOUCH_TAP)
+    advanced
 }
 
 fn slots_for_cell(cell: usize) -> &'static [usize] {
@@ -507,9 +506,13 @@ fn apply_launch_at_login(enable: bool) -> Result<(), String> {
         .unwrap_or(&exe);
     #[cfg(not(target_os = "macos"))]
     let app_path = exe.as_path();
-    let auto = auto_launch::AutoLaunchBuilder::new()
+    let mut builder = auto_launch::AutoLaunchBuilder::new();
+    builder
         .set_app_name("OpenMicro")
-        .set_app_path(&app_path.display().to_string())
+        .set_app_path(&app_path.display().to_string());
+    #[cfg(target_os = "macos")]
+    builder.set_args(&["--hidden"]);
+    let auto = builder
         .build()
         .map_err(|error| error.to_string())?;
     if enable {
@@ -777,6 +780,7 @@ pub struct OpenMicro {
     shortcut_picker_app: String,
     shortcut_rail_scroll: ScrollHandle,
     shortcut_list_scroll: ScrollHandle,
+    inspector_scroll: ScrollHandle,
     recording: RecordTarget,
     advanced: bool,
     macro_draft: Vec<MacroStepEntry>,
@@ -835,6 +839,7 @@ impl OpenMicro {
             shortcut_picker_app: String::new(),
             shortcut_rail_scroll: ScrollHandle::new(),
             shortcut_list_scroll: ScrollHandle::new(),
+            inspector_scroll: ScrollHandle::new(),
             recording: RecordTarget::None,
             advanced: false,
             macro_draft: Vec::new(),
@@ -3176,9 +3181,20 @@ impl OpenMicro {
             .child(
                 controls::toggle_face(tr("advanced"), self.advanced, true)
                     .id("toggle-advanced")
-                    .on_click(cx.listener(|this, _, _, cx| {
+                    .on_click(cx.listener(|this, _, window, cx| {
                         this.advanced = !this.advanced;
-                        cx.notify();
+                        if !this.advanced
+                            && this
+                                .host
+                                .selected_slot
+                                .is_some_and(|slot| {
+                                    cell_for_slot(slot) == CELL_TOUCH && slot != SLOT_TOUCH_TAP
+                                })
+                        {
+                            this.select_slot(SLOT_TOUCH_TAP, window, cx);
+                        } else {
+                            cx.notify();
+                        }
                     })),
             )
             .when(self.advanced, |editor| {
@@ -3657,7 +3673,7 @@ impl OpenMicro {
             self.render_rotator_editor(cx)
         } else if cell == CELL_JOYSTICK {
             self.render_joystick_editor(slot, cx)
-        } else if slot < KEY_SLOTS || slot == SLOT_TOUCH_TAP {
+        } else if slot < KEY_SLOTS || cell == CELL_TOUCH {
             self.render_simple_editor(slot, cx)
         } else {
             self.render_advanced_editor(slot, cx)
@@ -3666,14 +3682,17 @@ impl OpenMicro {
         div()
             .w(px(360.))
             .min_w(px(340.))
-            .max_h(relative(1.))
+            .h_full()
+            .min_h(px(0.))
             .overflow_hidden()
             .child(
                 div()
-                    .w_full()
+                    .id("inspector-scroll")
+                    .size_full()
+                    .min_h(px(0.))
                     .py(px(8.))
-                    .max_h(relative(1.))
-                    .overflow_y_scrollbar()
+                    .track_scroll(&self.inspector_scroll)
+                    .overflow_y_scroll()
                     .child(body),
             )
     }
@@ -5148,7 +5167,12 @@ impl OpenMicro {
 }
 
 impl Render for OpenMicro {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(target_os = "macos")]
+        if window.is_window_active() {
+            apply_dock_icon_visibility();
+        }
+
         div()
             .id("openmicro-root")
             .relative()
@@ -5202,11 +5226,34 @@ impl Render for OpenMicro {
     }
 }
 
-fn should_hide_dashboard_on_start(show_menubar: bool, menubar_available: bool) -> bool {
-    show_menubar && menubar_available
+fn should_hide_dashboard_on_start(
+    hidden_launch: bool,
+    show_menubar: bool,
+    menubar_available: bool,
+) -> bool {
+    hidden_launch && show_menubar && menubar_available
+}
+
+#[cfg(target_os = "macos")]
+#[allow(unexpected_cfgs)]
+fn app_was_launched_hidden() -> bool {
+    use cocoa::appkit::NSApp;
+    use objc::{msg_send, sel, sel_impl};
+
+    unsafe { msg_send![NSApp(), isHidden] }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn app_was_launched_hidden() -> bool {
+    false
 }
 
 fn show_main_window(cx: &mut App) {
+    #[cfg(target_os = "macos")]
+    set_main_panel_visible(true);
+    #[cfg(target_os = "macos")]
+    cx.activate(true);
+    #[cfg(not(target_os = "macos"))]
     cx.activate(true);
     if let Some(handle) = cx.windows().into_iter().next() {
         let _ = handle.update(cx, |_, window, _| {
@@ -5219,19 +5266,78 @@ fn show_main_window(cx: &mut App) {
 
 #[cfg(target_os = "macos")]
 fn set_dock_icon_visible(visible: bool) {
+    use std::sync::atomic::Ordering;
+
+    DOCK_ICON_VISIBLE.store(visible, Ordering::Relaxed);
+    apply_dock_icon_visibility();
+}
+
+#[cfg(target_os = "macos")]
+static DOCK_ICON_VISIBLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
+
+#[cfg(target_os = "macos")]
+static MAIN_PANEL_VISIBLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_os = "macos")]
+fn dock_icon_visible() -> bool {
+    use std::sync::atomic::Ordering;
+
+    DOCK_ICON_VISIBLE.load(Ordering::Relaxed)
+}
+
+#[cfg(target_os = "macos")]
+fn set_main_panel_visible(visible: bool) {
+    use std::sync::atomic::Ordering;
+
+    MAIN_PANEL_VISIBLE.store(visible, Ordering::Relaxed);
+    apply_dock_icon_visibility();
+}
+
+fn effective_dock_icon_visible(preference: bool, panel_visible: bool) -> bool {
+    preference || panel_visible
+}
+
+#[cfg(target_os = "macos")]
+#[allow(unexpected_cfgs)]
+fn hide_macos_windows() {
+    use cocoa::appkit::{NSApp, NSWindow};
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::NSArray;
+    use objc::{msg_send, sel, sel_impl};
+
+    unsafe {
+        let windows: id = msg_send![NSApp(), windows];
+        for index in 0..windows.count() {
+            windows.objectAtIndex(index).orderOut_(nil);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[allow(unexpected_cfgs)]
+fn apply_dock_icon_visibility() {
     use cocoa::appkit::{
         NSApp, NSApplication,
         NSApplicationActivationPolicy::{
             NSApplicationActivationPolicyAccessory, NSApplicationActivationPolicyRegular,
         },
     };
+    use objc::{msg_send, sel, sel_impl};
 
+    let panel_visible = MAIN_PANEL_VISIBLE.load(std::sync::atomic::Ordering::Relaxed);
+    let desired = if effective_dock_icon_visible(dock_icon_visible(), panel_visible) {
+        NSApplicationActivationPolicyRegular
+    } else {
+        NSApplicationActivationPolicyAccessory
+    };
     unsafe {
-        NSApp().setActivationPolicy_(if visible {
-            NSApplicationActivationPolicyRegular
-        } else {
-            NSApplicationActivationPolicyAccessory
-        });
+        let current: cocoa::appkit::NSApplicationActivationPolicy =
+            msg_send![NSApp(), activationPolicy];
+        if current != desired {
+            NSApp().setActivationPolicy_(desired);
+        }
     }
 }
 
@@ -5318,6 +5424,7 @@ pub fn run() {
         )]);
 
         let bounds = Bounds::centered(None, size(px(820.), px(500.)), cx);
+        let hidden_launch = app_was_launched_hidden();
         let mut hide_dashboard_on_start = false;
         cx.open_window(
             WindowOptions {
@@ -5334,7 +5441,10 @@ pub fn run() {
             |window, cx| {
                 window.on_window_should_close(cx, |_window, _cx| {
                     #[cfg(target_os = "macos")]
-                    _cx.hide();
+                    {
+                        hide_macos_windows();
+                        set_main_panel_visible(false);
+                    }
                     #[cfg(target_os = "linux")]
                     hide_linux_window(_window);
                     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -5345,6 +5455,7 @@ pub fn run() {
                 hide_dashboard_on_start = {
                     let state = &view.read(cx).host;
                     should_hide_dashboard_on_start(
+                        hidden_launch,
                         state.config.show_menubar,
                         state
                             .menubar
@@ -5379,9 +5490,12 @@ pub fn run() {
         // Otherwise keep the dashboard visible so the app stays recoverable.
         if hide_dashboard_on_start {
             #[cfg(target_os = "macos")]
-            cx.hide();
+            {
+                hide_macos_windows();
+                set_main_panel_visible(false);
+            }
         } else {
-            cx.activate(true);
+            show_main_window(cx);
         }
     });
 }
@@ -5393,29 +5507,28 @@ mod tests {
 
     #[test]
     fn startup_hides_dashboard_only_for_an_enabled_available_menubar() {
-        assert!(!should_hide_dashboard_on_start(false, false));
-        assert!(!should_hide_dashboard_on_start(false, true));
-        assert!(!should_hide_dashboard_on_start(true, false));
-        assert!(should_hide_dashboard_on_start(true, true));
+        assert!(!should_hide_dashboard_on_start(false, true, true));
+        assert!(!should_hide_dashboard_on_start(true, false, true));
+        assert!(!should_hide_dashboard_on_start(true, true, false));
+        assert!(should_hide_dashboard_on_start(true, true, true));
     }
 
     #[test]
-    fn advanced_editor_stays_open_within_one_hardware_control() {
-        assert!(advanced_after_slot_selection(
-            true,
-            Some(SLOT_ENC_CW),
-            SLOT_ENC_PRESS
-        ));
-        assert!(advanced_after_slot_selection(
-            true,
-            Some(SLOT_JOY_UP),
-            SLOT_JOY_RIGHT
-        ));
-        assert!(!advanced_after_slot_selection(
-            true,
-            Some(SLOT_ENC_CW),
-            0
-        ));
+    fn dock_icon_stays_visible_while_the_main_panel_is_open() {
+        assert!(!effective_dock_icon_visible(false, false));
+        assert!(effective_dock_icon_visible(false, true));
+        assert!(effective_dock_icon_visible(true, false));
+        assert!(effective_dock_icon_visible(true, true));
+    }
+
+    #[test]
+    fn slot_selection_never_changes_the_advanced_editor_state() {
+        for previous in 0..crate::config::SLOT_COUNT {
+            for next in 0..crate::config::SLOT_COUNT {
+                assert!(advanced_after_slot_selection(true, Some(previous), next));
+                assert!(!advanced_after_slot_selection(false, Some(previous), next));
+            }
+        }
     }
 
     #[test]
