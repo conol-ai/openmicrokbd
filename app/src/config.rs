@@ -774,6 +774,8 @@ pub struct AppConfig {
     pub profiles: Vec<Profile>,
     pub launch_at_login: bool, // default true
     pub show_menubar: bool,    // default true
+    #[serde(default = "default_true")]
+    pub show_dock: bool,
     /// Pad backlight, 0..=255 (both LED chains; 255 = the power-budget cap).
     /// Device-level rather than per-profile: brightness is a hardware
     /// comfort setting, not part of a workflow mapping.
@@ -802,6 +804,7 @@ impl Default for AppConfig {
             profiles: vec![default_codex_profile()],
             launch_at_login: true,
             show_menubar: true,
+            show_dock: true,
             led_brightness: DEFAULT_LED_BRIGHTNESS,
             language: LanguageSetting::Auto,
             theme: ThemeSetting::System,
@@ -1068,6 +1071,7 @@ fn migrate_legacy(legacy: LegacyConfig) -> AppConfig {
         profiles: vec![profile],
         launch_at_login: true,
         show_menubar: true,
+        show_dock: true,
         led_brightness: DEFAULT_LED_BRIGHTNESS,
         language: LanguageSetting::Auto,
         theme: ThemeSetting::System,
@@ -1675,6 +1679,14 @@ mod tests {
     }
 
     #[test]
+    fn current_config_without_dock_preference_keeps_dock_visible() {
+        let mut json = serde_json::to_value(AppConfig::default()).expect("serialize config");
+        json.as_object_mut().unwrap().remove("show_dock");
+        let cfg: AppConfig = serde_json::from_value(json).expect("deserialize config");
+        assert!(cfg.show_dock);
+    }
+
+    #[test]
     fn sanitize_clamps_and_pads() {
         let mut cfg = AppConfig {
             active_profile: 7,
@@ -1685,6 +1697,7 @@ mod tests {
             }],
             launch_at_login: false,
             show_menubar: false,
+            show_dock: false,
             led_brightness: DEFAULT_LED_BRIGHTNESS,
             language: LanguageSetting::Auto,
             theme: ThemeSetting::System,
