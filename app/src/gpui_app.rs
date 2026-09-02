@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
-    div, img, point, prelude::*, px, relative, size, svg, AnyElement, App, Application, Bounds,
-    Context, Div, Entity, Hsla, Image, ImageFormat, InteractiveElement, IntoElement, KeyBinding,
+    div, point, prelude::*, px, relative, size, svg, AnyElement, App, Application, Bounds,
+    Context, Div, Entity, Hsla, InteractiveElement, IntoElement, KeyBinding,
     KeyDownEvent, Menu, MenuItem, MouseButton, ParentElement, PathPromptOptions, Render, ScrollHandle,
     SharedString, Styled, Subscription, Timer, Window, WindowAppearance, WindowBounds,
     WindowOptions,
@@ -329,6 +329,17 @@ fn cell_for_slot(slot: usize) -> usize {
         SLOT_JOY_UP..=SLOT_JOY_PRESS => CELL_JOYSTICK,
         _ => CELL_TOUCH,
     }
+}
+
+fn advanced_after_slot_selection(
+    advanced: bool,
+    previous_slot: Option<usize>,
+    slot: usize,
+) -> bool {
+    if previous_slot.is_some_and(|previous| cell_for_slot(previous) == cell_for_slot(slot)) {
+        return advanced;
+    }
+    !matches!(slot, 0..=12 | SLOT_ENC_CW..=SLOT_ENC_PRESS | SLOT_TOUCH_TAP)
 }
 
 fn slots_for_cell(cell: usize) -> &'static [usize] {
@@ -758,21 +769,6 @@ fn chrome_icon_button(name: &str) -> Div {
         .child(icon_glyph(name))
 }
 
-fn logo_mark() -> impl IntoElement {
-    // The brand mark: the gradient µ keycap, embedded so the binary stays
-    // self-contained (no bundle-relative asset lookup on any platform).
-    static LOGO: std::sync::OnceLock<std::sync::Arc<Image>> = std::sync::OnceLock::new();
-    let logo = LOGO
-        .get_or_init(|| {
-            std::sync::Arc::new(Image::from_bytes(
-                ImageFormat::Png,
-                include_bytes!("../resources/logo-64.png").to_vec(),
-            ))
-        })
-        .clone();
-    img(logo).w(px(20.)).h(px(20.))
-}
-
 pub struct OpenMicro {
     host: HostState,
     sheet: Sheet,
@@ -810,6 +806,7 @@ pub struct OpenMicro {
 impl OpenMicro {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut host = HostState::new();
+        set_dock_icon_visible(host.config.show_dock);
         pixel::install_theme(resolve_theme(host.config.theme, window.appearance()), cx);
         i18n::set_lang(resolve_language(host.config.language));
         let _ = host.select_slot(0);
@@ -1205,12 +1202,10 @@ impl OpenMicro {
     }
 
     fn select_slot(&mut self, slot: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let previous_slot = self.host.selected_slot;
         if self.host.select_slot(slot) {
             self.recording = RecordTarget::None;
-            self.advanced = !matches!(
-                slot,
-                0..=12 | SLOT_ENC_CW..=SLOT_ENC_PRESS | SLOT_TOUCH_TAP
-            );
+            self.advanced = advanced_after_slot_selection(self.advanced, previous_slot, slot);
             self.sync_inputs(window, cx);
             cx.notify();
         }
@@ -2425,7 +2420,6 @@ impl OpenMicro {
                     .flex()
                     .items_center()
                     .gap(px(9.))
-                    .child(logo_mark())
                     .child(
                         div()
                             .font_family("Monaco")
@@ -3753,6 +3747,21 @@ impl OpenMicro {
                             this.commit(false, cx);
                         })),
                     )
+                    .when(cfg!(target_os = "macos"), |settings| {
+                        settings.child(
+                            controls::toggle_face(
+                                tr("show_dock_icon"),
+                                self.host.config.show_dock,
+                                true,
+                            )
+                            .id("toggle-dock")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.host.config.show_dock = !this.host.config.show_dock;
+                                set_dock_icon_visible(this.host.config.show_dock);
+                                this.commit(false, cx);
+                            })),
+                        )
+                    })
                     .child(inspector_field(
                         tr("language_eyebrow"),
                         tr("language_applies"),
@@ -5208,6 +5217,27 @@ fn show_main_window(cx: &mut App) {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn set_dock_icon_visible(visible: bool) {
+    use cocoa::appkit::{
+        NSApp, NSApplication,
+        NSApplicationActivationPolicy::{
+            NSApplicationActivationPolicyAccessory, NSApplicationActivationPolicyRegular,
+        },
+    };
+
+    unsafe {
+        NSApp().setActivationPolicy_(if visible {
+            NSApplicationActivationPolicyRegular
+        } else {
+            NSApplicationActivationPolicyAccessory
+        });
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_dock_icon_visible(_: bool) {}
+
 #[cfg(target_os = "linux")]
 fn hyprland_eval(code: String) -> bool {
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none() {
@@ -5367,6 +5397,25 @@ mod tests {
         assert!(!should_hide_dashboard_on_start(false, true));
         assert!(!should_hide_dashboard_on_start(true, false));
         assert!(should_hide_dashboard_on_start(true, true));
+    }
+
+    #[test]
+    fn advanced_editor_stays_open_within_one_hardware_control() {
+        assert!(advanced_after_slot_selection(
+            true,
+            Some(SLOT_ENC_CW),
+            SLOT_ENC_PRESS
+        ));
+        assert!(advanced_after_slot_selection(
+            true,
+            Some(SLOT_JOY_UP),
+            SLOT_JOY_RIGHT
+        ));
+        assert!(!advanced_after_slot_selection(
+            true,
+            Some(SLOT_ENC_CW),
+            0
+        ));
     }
 
     #[test]

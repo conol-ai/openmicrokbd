@@ -41,6 +41,9 @@ sha2 = "0.10"
 # initialize it before constructing a tray icon or menu.
 gtk = "0.18"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.26"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 # Used to authenticate the per-user loopback activity bridge. The endpoint
 # file lives in the user's local app-data directory; the random token prevents

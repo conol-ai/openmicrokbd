@@ -4490,6 +4490,7 @@ dependencies = [
  "async-channel 2.5.0",
  "auto-launch",
  "cc",
+ "cocoa 0.26.0",
  "dirs 6.0.0",
  "embed-resource",
  "enigo",

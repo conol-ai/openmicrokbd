@@ -236,6 +236,7 @@ pub const STRINGS: &[(&str, &str, &str, &str, &str)] = &[
     ("done", "Done", "完成", "完成", "完了"),
     ("launch_at_login", "Launch at login", "登录时启动", "登入時啟動", "ログイン時に起動"),
     ("show_menubar_icon", "Show menu bar icon", "显示菜单栏图标", "顯示選單列圖示", "メニューバーにアイコンを表示"),
+    ("show_dock_icon", "Show Dock icon", "显示 Dock 栏图标", "顯示 Dock 圖示", "Dockにアイコンを表示"),
     ("hide_dashboard", "HIDE ×", "隐藏 ×", "隱藏 ×", "隠す ×"),
     ("language", "Language", "语言", "語言", "言語"),
     ("language_auto", "Auto (system)", "自动（跟随系统）", "自動（跟隨系統）", "自動（システムに合わせる）"),
