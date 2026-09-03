@@ -258,7 +258,10 @@ second identity needs its own hidraw udev rule (`303a:8360`, see
 app cannot reconnect after switching.
 
 In compat mode the pad's own keymap and this app's agent lights are bypassed
-for the keys — ChatGPT Desktop owns them. The mode is off by default; see
+for the keys — ChatGPT Desktop owns them, and Work Louder's **Input** app
+(their configurator) can edit what the keys do through its own keymap file
+on the pad (firmware 0.9.0+): Codex controls, plain keys, layers, macros and
+smart actions. The mode is off by default; see
 [`fw/README.md`](../fw/README.md#codex-micro-compat-mode) for the key
 mapping and the provenance and trademark notes.
 

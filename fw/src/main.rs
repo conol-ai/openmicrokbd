@@ -66,8 +66,11 @@ mod dfu;
 mod keymap;
 mod ws2812;
 
+use codex::{Binding, Joystick};
+use core::cell::RefCell;
 use embassy_executor::Spawner;
 use embassy_futures::join::join4;
+use embassy_stm32::flash::Blocking;
 use embassy_futures::select::{select, Either};
 use embassy_stm32::adc::Adc;
 use embassy_stm32::exti::ExtiInput;
@@ -338,17 +341,22 @@ fn post_event(src: u8, a: u8, b: u8) {
     let _ = EVENT_CH.try_send([src, a, b]);
 }
 
+/// Extra held-key entries for macro playback in Codex mode (a macro can
+/// hold a few keys at once, e.g. Cmd+Shift+key).
+const MACRO_SLOTS: usize = 4;
+const HELD_LEN: usize = keymap::SLOT_COUNT + MACRO_SLOTS;
+
 /// Which slots are currently held (matrix keys by position, plus the button
-/// and joystick-direction slots), each with the Slot SNAPSHOT taken at press
-/// time. One shared set so the keyboard report is always rebuilt from the
-/// WHOLE truth — a joystick move can no longer drop a held key from the
-/// host's point of view. The snapshot matters: the app can rewrite the
-/// keymap mid-hold (profile switch), and a release must retract exactly what
-/// its press emitted, not whatever the slot means now.
+/// and joystick-direction slots, plus the macro entries), each with the Slot
+/// SNAPSHOT taken at press time. One shared set so the keyboard report is
+/// always rebuilt from the WHOLE truth — a joystick move can no longer drop
+/// a held key from the host's point of view. The snapshot matters: the app
+/// can rewrite the keymap mid-hold (profile switch), and a release must
+/// retract exactly what its press emitted, not whatever the slot means now.
 static HELD: embassy_sync::blocking_mutex::Mutex<
     ThreadModeRawMutex,
-    core::cell::RefCell<[Option<keymap::Slot>; keymap::SLOT_COUNT]>,
-> = embassy_sync::blocking_mutex::Mutex::new(core::cell::RefCell::new([None; keymap::SLOT_COUNT]));
+    core::cell::RefCell<[Option<keymap::Slot>; HELD_LEN]>,
+> = embassy_sync::blocking_mutex::Mutex::new(core::cell::RefCell::new([None; HELD_LEN]));
 
 /// try_send that never drops the NEWEST complete transition: on a full
 /// channel the oldest transition is evicted first. Every transition ends in
@@ -379,7 +387,7 @@ fn empty_keyboard_report() -> KeyboardReport {
     }
 }
 
-fn keyboard_report(held: &[Option<keymap::Slot>; keymap::SLOT_COUNT]) -> KeyboardReport {
+fn keyboard_report(held: &[Option<keymap::Slot>; HELD_LEN]) -> KeyboardReport {
     let mut report = empty_keyboard_report();
     let mut n = 0;
     for slot in held.iter().flatten() {
@@ -505,13 +513,20 @@ async fn write_keyboard_transition<'d, D: UsbDriver<'d>, const N: usize>(
 /// send their usage on press, and on release fall back to another still-held
 /// consumer slot's usage (or 0) so overlapping holds don't strand each other.
 fn set_held(slot_idx: usize, held: bool) {
-    // Press dispatches on the slot's current meaning; release dispatches on
-    // the snapshot stored at press time.
+    apply_slot(slot_idx, held.then(|| keymap::slot(slot_idx)));
+}
+
+/// Press (`Some(slot)`) or release (`None`) held entry `slot_idx` with an
+/// explicit Slot — the keymap's own for `set_held`, a Work Louder binding
+/// in Codex mode.
+fn apply_slot(slot_idx: usize, press: Option<keymap::Slot>) {
+    // Press dispatches on the given meaning; release dispatches on the
+    // snapshot stored at press time.
+    let held = press.is_some();
     let (changed, s, before, after) = HELD.lock(|h| {
         let mut h = h.borrow_mut();
         let before = keyboard_report(&h);
-        if held {
-            let s = keymap::slot(slot_idx);
+        if let Some(s) = press {
             let changed = h[slot_idx].is_none();
             h[slot_idx] = Some(s);
             let after = keyboard_report(&h);
@@ -560,6 +575,115 @@ fn tap_slot(slot_idx: usize) {
     set_held(slot_idx, false);
 }
 
+/// Codex mode: perform a Work Louder binding for a control going down or
+/// up. `slot` is the held-set entry the control owns, so a held key,
+/// modifier or consumer usage is retracted exactly when it releases.
+fn act(binding: Binding, pressed: bool, slot: usize) {
+    match binding {
+        Binding::None | Binding::Unsupported | Binding::Function => {}
+        Binding::Oai(control) => codex::oai(control, pressed),
+        Binding::Key { mods, code } => apply_slot(
+            slot,
+            pressed.then_some(keymap::Slot {
+                kind: keymap::KIND_KEYBOARD,
+                mods,
+                code: code as u16,
+            }),
+        ),
+        Binding::Consumer(usage) => apply_slot(slot, pressed.then_some(keymap::Slot::consumer(usage))),
+        Binding::LayerToggle(n) => {
+            if pressed {
+                codex::toggle_layer(n);
+            }
+        }
+        Binding::LayerHold(n) => codex::hold_layer(n, pressed),
+        Binding::Profile(n) => {
+            if pressed {
+                codex::set_profile(n);
+            }
+        }
+        Binding::Macro(id) => {
+            if pressed {
+                codex::run_macro(id);
+            }
+        }
+        Binding::Multi(id) => act(codex::multi_tap(id), pressed, slot),
+        Binding::Smart(id) => {
+            if pressed {
+                codex::post(codex::Event::Smart(id));
+            }
+        }
+        Binding::CheatSheet(mode) => {
+            let st = codex::status();
+            let mode = match (mode, pressed) {
+                (3, true) => 1,
+                (3, false) => 0,
+                (m, true) => m,
+                (_, false) => return,
+            };
+            codex::post(codex::Event::CheatSheet {
+                mode,
+                layer: st.layer_index,
+                profile: st.profile_index,
+            });
+        }
+        Binding::Backlight(delta) => {
+            if pressed {
+                keymap::KEYMAP.lock(|k| {
+                    let mut k = k.borrow_mut();
+                    k.led_brightness = if delta > 0 {
+                        k.led_brightness.saturating_add(32)
+                    } else {
+                        k.led_brightness.saturating_sub(32).max(16)
+                    };
+                });
+            }
+        }
+    }
+}
+
+/// Macro playback's view of the keyboard: keys and modifiers occupy the
+/// macro held-set entries, everything else goes through `act`.
+struct MacroKeys;
+
+static MACRO_KEYS: MacroKeys = MacroKeys;
+
+impl codex::MacroKeys for MacroKeys {
+    fn press(&self, b: Binding) {
+        match b {
+            Binding::Key { mods, code } => {
+                let slot = HELD.lock(|h| {
+                    let h = h.borrow();
+                    (keymap::SLOT_COUNT..HELD_LEN).find(|&i| h[i].is_none())
+                });
+                if let Some(slot) = slot {
+                    act(b, true, slot);
+                } else {
+                    warn!("codex: macro holds too many keys (mods {=u8} code {=u8})", mods, code);
+                }
+            }
+            other => act(other, true, keymap::SLOT_COUNT),
+        }
+    }
+
+    fn release(&self, b: Binding) {
+        match b {
+            Binding::Key { mods, code } => {
+                let slot = HELD.lock(|h| {
+                    let h = h.borrow();
+                    (keymap::SLOT_COUNT..HELD_LEN).find(|&i| {
+                        matches!(h[i], Some(s) if s.kind == keymap::KIND_KEYBOARD && s.mods == mods && s.code == code as u16)
+                    })
+                });
+                if let Some(slot) = slot {
+                    act(b, false, slot);
+                }
+            }
+            other => act(other, false, keymap::SLOT_COUNT),
+        }
+    }
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     // First thing, before any clock/peripheral init: divert into the ROM DFU
@@ -583,7 +707,11 @@ async fn main(spawner: Spawner) {
 
     // The configurable keymap: saved copy from the last flash page if one
     // exists, factory defaults otherwise. Loaded before any task can emit.
-    let mut flash = Flash::new_blocking(p.FLASH);
+    // The flash driver is shared by the keymap page and, in Codex mode, the
+    // Work Louder file slots; every use is a short synchronous borrow.
+    static FLASH: StaticCell<RefCell<Flash<'static, Blocking>>> = StaticCell::new();
+    let flash: &'static RefCell<Flash<'static, Blocking>> =
+        FLASH.init(RefCell::new(Flash::new_blocking(p.FLASH)));
     if keymap::load_from_flash() {
         info!("keymap: loaded saved configuration from flash");
     } else {
@@ -629,7 +757,7 @@ async fn main(spawner: Spawner) {
     let mode = match chord {
         Some(m) if m != saved_mode => {
             keymap::set_device_mode(m);
-            match keymap::save_to_flash(&mut flash) {
+            match keymap::save_to_flash(&mut flash.borrow_mut()) {
                 Ok(()) => info!("mode: boot chord -> {=u8}, saved", m),
                 Err(()) => warn!("mode: boot chord -> {=u8}, FLASH ERROR (this boot only)", m),
             }
@@ -651,6 +779,12 @@ async fn main(spawner: Spawner) {
         if codex_mode { MODE_RGB_CODEX } else { MODE_RGB_OPENMICRO },
         changed,
     );
+    if codex_mode {
+        // What the keys do in this mode comes from the Work Louder keymap
+        // file (or its built-in default); macros play on their own task.
+        codex::reload();
+        spawner.must_spawn(codex::macro_task(&MACRO_KEYS));
+    }
 
     // ---- USB HID: a boot keyboard + a consumer-control interface ----
     // (+ mouse + the vendor/app interface; in Codex Micro compat mode the
@@ -930,7 +1064,7 @@ async fn main(spawner: Spawner) {
                             reply[1] = ok as u8;
                         }
                         CMD_SAVE if &buf[1..5] == SAVE_KEY => {
-                            let ok = keymap::save_to_flash(&mut flash).is_ok();
+                            let ok = keymap::save_to_flash(&mut flash.borrow_mut()).is_ok();
                             info!(
                                 "app: keymap save -> {}",
                                 if ok { "flash written" } else { "FLASH ERROR" }
@@ -938,7 +1072,7 @@ async fn main(spawner: Spawner) {
                             reply[1] = ok as u8;
                         }
                         CMD_FACTORY_RESET if &buf[1..5] == RESET_KEY => {
-                            let ok = keymap::factory_reset(&mut flash).is_ok();
+                            let ok = keymap::factory_reset(&mut flash.borrow_mut()).is_ok();
                             warn!("app: factory reset -> defaults");
                             reply[1] = ok as u8;
                         }
@@ -1058,7 +1192,7 @@ async fn main(spawner: Spawner) {
                                 // back, or a later ordinary SAVE would carry
                                 // the switch the app was just told failed.
                                 keymap::set_device_mode(mode);
-                                let ok = keymap::save_to_flash(&mut flash).is_ok();
+                                let ok = keymap::save_to_flash(&mut flash.borrow_mut()).is_ok();
                                 if !ok {
                                     keymap::set_device_mode(
                                         DEVICE_MODE.load(core::sync::atomic::Ordering::Relaxed),
@@ -1093,7 +1227,10 @@ async fn main(spawner: Spawner) {
     // future just parks.
     let codex_fut = async {
         match codex_parts {
-            Some((mut reader, mut writer)) => codex::pump(&mut reader, &mut writer).await,
+            Some((mut reader, mut writer)) => {
+                let mut store = codex::files::FlashStore::new(flash);
+                codex::pump(&mut reader, &mut writer, &mut store).await
+            }
             None => core::future::pending::<()>().await,
         }
     };
@@ -1189,7 +1326,7 @@ async fn scan_task(
                                 ci
                             );
                             if codex_mode() {
-                                codex::key(pos as u8, raw);
+                                act(codex::key_binding(pos as u8), raw, pos);
                             } else {
                                 set_held(pos, raw);
                             }
@@ -1217,7 +1354,11 @@ async fn scan_task(
         } else if e != enc_sw_last {
             info!("encoder switch {}", if e { "UP" } else { "DOWN" });
             if codex_mode() {
-                codex::encoder_press(!e);
+                act(
+                    codex::encoder_binding(codex::layout::ENCODER_PRESS),
+                    !e,
+                    keymap::SLOT_ENC_PRESS,
+                );
             } else {
                 set_held(keymap::SLOT_ENC_PRESS, !e);
             }
@@ -1321,7 +1462,9 @@ async fn encoder_task(mut enc_a: ExtiInput<'static>, mut enc_b: ExtiInput<'stati
             accum -= ENC_COUNTS_PER_DETENT;
             info!("encoder CW");
             if codex_mode() {
-                codex::encoder_step(true);
+                let b = codex::encoder_binding(codex::layout::ENCODER_CW);
+                act(b, true, keymap::SLOT_ENC_CW);
+                act(b, false, keymap::SLOT_ENC_CW);
             } else {
                 tap_slot(keymap::SLOT_ENC_CW);
             }
@@ -1331,7 +1474,9 @@ async fn encoder_task(mut enc_a: ExtiInput<'static>, mut enc_b: ExtiInput<'stati
             accum += ENC_COUNTS_PER_DETENT;
             info!("encoder CCW");
             if codex_mode() {
-                codex::encoder_step(false);
+                let b = codex::encoder_binding(codex::layout::ENCODER_CCW);
+                act(b, true, keymap::SLOT_ENC_CCW);
+                act(b, false, keymap::SLOT_ENC_CCW);
             } else {
                 tap_slot(keymap::SLOT_ENC_CCW);
             }
@@ -1392,7 +1537,12 @@ async fn adc_task(
             0
         }
     }
+    /// Direction → stick angle in thousandths of a turn (right 0, down 250,
+    /// left 500, up 750), the convention of both `v.oai.rad` and the Input
+    /// app's radial sectors.
+    const DIR_ANGLE: [u16; 4] = [750, 250, 500, 0];
     let mut last: u8 = DIR_NONE;
+    let mut sector_binding = Binding::None;
     let mut last_mode = keymap::JOY_MODE_KEYS;
     let mut dragging = false;
     let mut acc_x: i32 = 0;
@@ -1459,19 +1609,46 @@ async fn adc_task(
 
         if dir != last {
             info!("joystick dir {=u8} (x={=u16} y={=u16})", dir, x, y);
+            // Codex mode: the keymap decides whether the stick is the Codex
+            // Micro's analog stick (VENDOR) or a radial menu of keycode
+            // sectors — those also get a kb.radial notification so the
+            // Input app can draw the menu.
+            let joy = if codex { codex::joystick_mode() } else { Joystick::None };
             if last != DIR_NONE {
-                if codex {
-                    codex::stick(last, false);
-                } else if keys {
-                    set_held(DIR_SLOTS[last as usize], false);
+                match joy {
+                    Joystick::Vendor => codex::stick(last, false),
+                    Joystick::Sectors => {
+                        act(sector_binding, false, DIR_SLOTS[last as usize]);
+                        let st = codex::status();
+                        codex::post(codex::Event::Radial {
+                            angle_milli: DIR_ANGLE[last as usize],
+                            open: false,
+                            layer: st.layer_index,
+                            profile: st.profile_index,
+                        });
+                    }
+                    Joystick::None if keys && !codex => set_held(DIR_SLOTS[last as usize], false),
+                    Joystick::None => {}
                 }
                 post_event(3, last, 0);
             }
             if dir != DIR_NONE {
-                if codex {
-                    codex::stick(dir, true);
-                } else if keys {
-                    set_held(DIR_SLOTS[dir as usize], true);
+                match joy {
+                    Joystick::Vendor => codex::stick(dir, true),
+                    Joystick::Sectors => {
+                        let angle = DIR_ANGLE[dir as usize];
+                        sector_binding = codex::sector(angle);
+                        let st = codex::status();
+                        codex::post(codex::Event::Radial {
+                            angle_milli: angle,
+                            open: true,
+                            layer: st.layer_index,
+                            profile: st.profile_index,
+                        });
+                        act(sector_binding, true, DIR_SLOTS[dir as usize]);
+                    }
+                    Joystick::None if keys && !codex => set_held(DIR_SLOTS[dir as usize], true),
+                    Joystick::None => {}
                 }
                 post_event(3, dir, 1);
             }
@@ -1629,9 +1806,12 @@ async fn touch_task(mut pad: Flex<'static>) {
         if touched && armed {
             info!("touch TAP (t={=u32} baseline={=u32})", t, baseline);
             armed = false;
-            // The Codex Micro protocol has no touch message we know of, so
-            // in compat mode a tap only feeds the app's live view.
-            if !codex_mode() {
+            // Codex mode: the touch pad is the keymap's first "button".
+            if codex_mode() {
+                let b = codex::touch_binding();
+                act(b, true, keymap::SLOT_TOUCH_TAP);
+                act(b, false, keymap::SLOT_TOUCH_TAP);
+            } else {
                 tap_slot(keymap::SLOT_TOUCH_TAP);
             }
             post_event(4, 1, 0);
@@ -1649,6 +1829,10 @@ async fn led_task(mut led_key: ws2812::LedPin<'static>, mut led_ug: ws2812::LedP
     info!("led_task: entered");
     let mut ticker = Ticker::every(Duration::from_millis(33));
     let mut phase: u8 = 0;
+    // Codex mode: one animation clock per host-described light (six agent
+    // keys, the command-key strip, the ring), each advancing by that light's
+    // own speed every frame so a stopped effect really stands still.
+    let mut anim = [0u32; 8];
     loop {
         ticker.next().await;
         phase = phase.wrapping_add(1);
@@ -1674,6 +1858,16 @@ async fn led_task(mut led_key: ws2812::LedPin<'static>, mut led_ug: ws2812::LedP
         // Codex mode: whatever lighting the host has described so far
         // outranks the pad's own patterns and the app's overrides.
         let host = if codex_mode() { Some(codex::lights()) } else { None };
+        if let Some(h) = host.as_ref() {
+            for (clock, light) in anim.iter_mut().zip(
+                h.agents
+                    .iter()
+                    .chain(core::iter::once(&h.keys))
+                    .chain(core::iter::once(&h.ambient)),
+            ) {
+                *clock = clock.wrapping_add(light.speed());
+            }
+        }
 
         let mut keys = [ws2812::Grb::default(); 13];
         for (i, px) in keys.iter_mut().enumerate() {
@@ -1683,7 +1877,7 @@ async fn led_task(mut led_key: ws2812::LedPin<'static>, mut led_ug: ws2812::LedP
             // A pressed key always pops white, whatever the idle pattern.
             *px = if state & (1 << i) != 0 {
                 ws2812::Grb::rgb(255, 255, 255).scaled(dim(24))
-            } else if let Some(c) = host.as_ref().and_then(|h| codex_key_light(h, i, phase)) {
+            } else if let Some(c) = host.as_ref().and_then(|h| codex_key_light(h, &anim, i)) {
                 c.scaled(dim(20))
             } else if override_mask & (1 << i) != 0 {
                 let rgb = KEY_LED_OVERRIDE_RGB[i]
@@ -1704,12 +1898,14 @@ async fn led_task(mut led_key: ws2812::LedPin<'static>, mut led_ug: ws2812::LedP
         // wheel around the board regardless of revision. The boot splash
         // (mode colour) and the Codex host's ambient light take precedence.
         let splash_px = splash_pixel();
-        let ambient = host.as_ref().and_then(|h| codex_light_rgb(&h.ambient, phase));
         let mut ring = [ws2812::Grb::default(); UG_LEN];
         for (i, px) in ring.iter_mut().enumerate() {
             *px = if let Some(s) = splash_px {
                 s.scaled(dim(8))
-            } else if let Some(a) = ambient {
+            } else if let Some(a) = host
+                .as_ref()
+                .and_then(|h| codex_light_pixel(&h.ambient, anim[7], i, UG_LEN))
+            {
                 a.scaled(dim(8))
             } else if ug_pat.mode == keymap::LED_PATTERN_SOLID {
                 ws2812::Grb::rgb(ug_pat.r, ug_pat.g, ug_pat.b).scaled(dim(8))
@@ -1753,33 +1949,71 @@ fn splash_pixel() -> Option<ws2812::Grb> {
 }
 
 /// Codex mode: the host's light for key `i` — an agent status light for
-/// the six Agent Keys (p0..p5), the key-backlight config for the Command
-/// Keys. None until the host has described it, so the pad's own pattern
-/// shows meanwhile.
-fn codex_key_light(h: &codex::Lights, i: usize, phase: u8) -> Option<ws2812::Grb> {
-    let light = if i < 6 { &h.agents[i] } else { &h.keys };
-    codex_light_rgb(light, phase)
+/// the six Agent Keys (p0..p5, each its own one-LED strip with its own
+/// clock), or pixel `i - 6` of the seven-key Command Key strip. None until
+/// the host has described it, so the pad's own pattern shows meanwhile.
+fn codex_key_light(h: &codex::Lights, anim: &[u32; 8], i: usize) -> Option<ws2812::Grb> {
+    if i < 6 {
+        codex_light_pixel(&h.agents[i], anim[i], 0, 1)
+    } else {
+        codex_light_pixel(&h.keys, anim[6], i - 6, 7)
+    }
 }
 
-/// A host-described light as a colour: its RGB at its brightness, and when
-/// it "breathes" a ~2 s triangle between 30 % and 100 % in step with the
-/// 30 Hz frame counter.
-fn codex_light_rgb(light: &codex::Light, phase: u8) -> Option<ws2812::Grb> {
+/// Pixel `i` of an `n`-LED strip driven by a host-described light, at that
+/// light's animation clock `acc` (advanced by its speed every 30 Hz frame,
+/// so speed 0.4 breathes about every 1.4 s and runs a snake round the ring
+/// in about the same). Effects follow the host's device kit: off, solid,
+/// snake (a three-LED segment with a fading tail; on a single LED it
+/// breathes instead), rainbow (hue cycles, colour ignored), breath,
+/// gradient (a hue spread along the strip), shallow breath (50–100 %).
+fn codex_light_pixel(light: &codex::Light, acc: u32, i: usize, n: usize) -> Option<ws2812::Grb> {
+    use codex::wire::*;
     if !light.set {
         return None;
     }
-    let mut level = light.level as u32;
-    if light.breath() {
-        let t = (phase % 64) as u32;
-        let tri = if t < 32 { t } else { 63 - t }; // 0..=31
-        level = level * (77 + tri * 178 / 31) / 255;
-    }
-    let ch = |v: u32| ((v & 0xFF) * level / 255) as u8;
-    Some(ws2812::Grb::rgb(
-        ch(light.rgb >> 16),
-        ch(light.rgb >> 8),
-        ch(light.rgb),
-    ))
+    let level = light.level as u32;
+    let scaled = |c: ws2812::Grb, num: u32| ws2812::Grb {
+        g: (c.g as u32 * num / 255) as u8,
+        r: (c.r as u32 * num / 255) as u8,
+        b: (c.b as u32 * num / 255) as u8,
+    };
+    let base = ws2812::Grb::rgb(
+        ((light.rgb >> 16) & 0xFF) as u8,
+        ((light.rgb >> 8) & 0xFF) as u8,
+        (light.rgb & 0xFF) as u8,
+    );
+    // A full breath cycle is 256 phase units: up over the first half, down
+    // over the second.
+    let breath_phase = ((acc >> 6) & 0xFF) as u32;
+    let tri = if breath_phase < 128 { breath_phase * 2 } else { (255 - breath_phase) * 2 }; // 0..=255
+    let n = n.max(1);
+    let px = match light.effect {
+        EFFECT_OFF => return Some(ws2812::Grb::default()),
+        EFFECT_SNAKE if n > 1 => {
+            // Head LED plus a tail of two, dimming behind it.
+            let head = ((acc >> 11) as usize) % n;
+            let behind = (head + n - i) % n;
+            match behind {
+                0 => scaled(base, level),
+                1 => scaled(base, level * 2 / 3),
+                2 => scaled(base, level / 3),
+                _ => ws2812::Grb::default(),
+            }
+        }
+        EFFECT_SNAKE | EFFECT_BREATH => scaled(base, level * (51 + tri * 204 / 255) / 255),
+        EFFECT_SHALLOW_BREATH => scaled(base, level * (128 + tri / 2) / 255),
+        EFFECT_RAINBOW => scaled(
+            hue(((acc >> 7) as u8).wrapping_add((i * 256 / n) as u8)),
+            level,
+        ),
+        EFFECT_GRADIENT => scaled(
+            hue(((acc >> 7) as u8).wrapping_add((i * 256 / n) as u8)),
+            level,
+        ),
+        _ => scaled(base, level), // solid, and anything newer than we know
+    };
+    Some(px)
 }
 
 /// Cheap 0..255 hue -> saturated RGB.

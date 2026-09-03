@@ -154,13 +154,53 @@ ours, so it is position for position:
 What each key *does* is configured in ChatGPT Desktop → Settings → Codex
 Micro, not on the pad, and gestures (double-press, holds) are timed by the
 host. Host → pad: `sys.version`, `device.status`, `v.oai.thstatus` (agent
-lights: colour, brightness, breath/focus), `v.oai.rgbcfg` (ambient =
-underglow, keys = command-key backlight), `lights.preview` and
-`host.focused_app` (acknowledged). Message shapes are documented in
+lights: colour, brightness, effect, speed), `v.oai.rgbcfg` (ambient =
+underglow, keys = command-key backlight, same fields), `lights.preview` and
+`host.focused_app` (acknowledged). Effects are the device kit's numbers —
+0 off, 1 solid, 2 snake (a segment running along the strip; the app uses it
+on the ring while the selected thread works or the mic records), 3 rainbow,
+4 breath (the selected thread), 5 gradient, 6 shallow breath — each at its
+own speed; the pad animates all of them (fw 0.8.1+; 0.8.0 only knew the
+names the Bluetooth emulators use and showed the ring as breathing). Message shapes are documented in
 `src/codex/mod.rs`; the codec is unit-tested on the host against the request
 shapes the reference projects' probe scripts and protocol notes use
 (`scripts/test-codex-wire.sh`), and `scripts/test-codex-compat.py` drives a
 pad in compat mode end to end.
+
+**Work Louder's Input app.** Input (Work Louder's configurator) talks to
+the same interface, but through a device file system: on connect it lists
+files, reads `keymap.json` and, if present, `smart_actions.json`, and saves
+edits back as base64 chunks (`fs.list` / `fs.readbin` / `fs.writebin` /
+`fs.read` / `fs.write` / `fs.delete`, SHA-1 checksums). The pad keeps those
+two files in flash slots above the image (`src/codex/files.rs`: 12 KiB for
+the keymap at `0x1B000`, 6 KiB for smart actions at `0x1E000`; the image
+region shrank to 108 KiB in `memory.x`) and serves a built-in default keymap
+— the ChatGPT layer above — until one is written. Chunks stream straight
+into flash, so a 4 KB write never needs RAM.
+
+The pad then *runs* the keymap (`src/codex/layout.rs`): the active profile
+(`activeProfileId`, or a `KI_PS<n>` profile key) and layer decide what each
+key, the dial, the touch pad (`buttons`) and the stick do.
+
+| Keycode in Input | On the pad |
+|---|---|
+| `KV_OAI_AG00`–`AG05`, `ACT06`–`ACT12`, `ENC_CC`/`ENC_CW`/`ENC_CLK` | the Codex Micro controls (`v.oai.hid`) |
+| `KC_*` (letters, numbers, glyphs, F1–F24, navigation, numpad, media, `KC_LCTL`… modifiers) | USB keyboard / consumer usages |
+| `KI_LS<n>` / `KI_LM<n>` / `KI_PS<n>` | toggle layer n / layer n while held / profile n |
+| Actions (`KA_A<n>`) | the macro's press / release / click steps, with delays, on a background task |
+| Multi-actions (`KA_M<n>`) | the tap keycode (hold / double-tap variants not implemented) |
+| Smart actions (`SA_<n>`) | `kb.sa.inserttext` / `exec` / `openapp` / `openurl` notifications, which the Input app executes on the host |
+| `KI_CS_SHOW` / `HIDE` / `TOGGLE` / `SHOW_TMP` | `kb.cs.*` notifications (Input's cheat sheet) |
+| `KI_BLUP` / `KI_BLDW` | backlight brightness |
+| joystick `VENDOR` | the Codex Micro analog stick (`v.oai.rad`) |
+| joystick `RADIAL` / `JOYSTICK` sectors | the sector's keycode for the four stick directions, plus `kb.radial` so Input can draw the menu |
+| `KI_FP`, Bluetooth keys, `KI_X` | ignored |
+
+A layer's `lights` (backlight / underglow) apply when it becomes active;
+`lights.preview` from Input's lighting editor applies live. Not implemented:
+Work Louder firmware updates through Input (`sys.bootloader` is refused),
+the app manager / media player / wallpapers of screen-equipped models, and
+per-app layer switching (`linkedApps`).
 
 **Provenance and disclaimer.** The protocol is undocumented. This is an
 independent Rust re-implementation of the behaviour documented by two
@@ -248,6 +288,10 @@ any IN report starting `0x80` is an unsolicited input event, not a reply:
 | `[0x0F, index, enabled, r, g, b]` | Acks `[0x0F, 0x01]` — set or clear one key LED override in RAM (never persisted) |
 | `[0x10]` | Replies `[0x10, mode]` — running device mode (0 OpenMicro / 1 Codex Micro compat, fw 0.8.0+) |
 | `[0x11, mode, 'M','O','D','E']` | Acks `[0x11, ok]`; a changed mode is saved (the whole RAM configuration, like SAVE) and the pad resets to re-enumerate in it |
+
+The Codex Micro compat interface (usage page `0xFF00`) is documented in
+[`src/codex/mod.rs`](src/codex/mod.rs); its keymap file format in
+[`src/codex/layout.rs`](src/codex/layout.rs).
 
 Event reports (`[0x80, src, a, b]`, best-effort, dropped when no host reads):
 src 0 = key (a = position 0–12, b = pressed), 1 = encoder rotate (a = 1 CW),

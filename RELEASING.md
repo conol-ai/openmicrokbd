@@ -111,8 +111,10 @@ the exact production firmware build and verify this sequence on a real pad:
    quit, `scripts/test-codex-compat.py` passes; with it running, its log
    (`~/Library/Logs/com.openai.codex/…`) shows `CodexMicroService` answering
    `device.status` with this firmware's version; the app still connects and its Settings toggle reads Codex Micro
-   compat. Hold KEY 03 (the first key of that row) while plugging in (amber
-   blink) to return to `1209:0001`.
+   compat. Work Louder's Input app (if installed) shows the pad with its
+   keymap loaded and no `fs.list` errors in `~/Library/Logs/input/main.log`.
+   Hold KEY 03 (the first key of that row) while plugging in (amber blink)
+   to return to `1209:0001`.
 
 Do not disconnect USB power while flashing. Because this design uses the STM32
 ROM bootloader rather than a resident rollback bootloader, power loss during

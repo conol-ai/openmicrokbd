@@ -42,9 +42,22 @@ def check(name, ok, detail=""):
         failures.append(name)
 
 
+def non_exclusive():
+    """hidapi seizes the device on macOS by default, which knocks the Codex
+    app / Input off it; the flag lives in the compiled module, so poke it."""
+    if sys.platform != "darwin":
+        return
+    try:
+        import ctypes
+        ctypes.CDLL(hid.__file__).hid_darwin_set_open_exclusive(0)
+    except (AttributeError, OSError):
+        pass
+
+
 def open_codex():
     for info in hid.enumerate(VID, PID):
         if info["usage_page"] == CODEX_USAGE_PAGE:
+            non_exclusive()
             dev = hid.device()
             dev.open_path(info["path"])
             return dev, info
@@ -165,6 +178,75 @@ def main():
     r = rpc(dev, asm, "host.focused_app", {"app": "Terminal"}, 4245)
     check("host.focused_app acked", r.get("result") == {"ok": True})
 
+    # Work Louder Input's file system: list, read the keymap in chunks,
+    # and round-trip a small file through the streamed write path.
+    r = rpc(dev, asm, "fs.list", {"checksum": True}, 4250)
+    files = {f["name"]: f for f in r.get("result", [])}
+    check("fs.list has keymap.json", "keymap.json" in files, json.dumps(r)[:200])
+    import base64, hashlib
+    buf = bytearray()
+    off = 0
+    while "keymap.json" in files:
+        r = rpc(dev, asm, "fs.readbin", {"file": "keymap.json", "offset": off, "len": 3072}, 4251)
+        res = r.get("result", {})
+        chunk = base64.b64decode(res.get("data", ""))
+        if not chunk:
+            break
+        buf += chunk
+        off += len(chunk)
+        if off >= res.get("total_size", 0):
+            break
+    check("keymap.json reassembles and parses", bool(buf) and json.loads(buf.decode()).get("profiles") is not None, f"{len(buf)} bytes")
+    check("keymap.json checksum matches fs.list", hashlib.sha1(buf).hexdigest() == files.get("keymap.json", {}).get("checksum"))
+    sa = json.dumps({"version": 1, "smartActions": {"SA_0": {"name": "t", "type": "URL_STEP", "payload": {"url": "https://openmicrokbd.org"}}}, "smartActionGroups": []}).encode()
+    b64 = base64.b64encode(sa).decode()
+    r = rpc(dev, asm, "fs.writebin", {"file": "smart_actions.json", "data": b64, "append": True, "completed": True, "offset": 0}, 4252, timeout_s=4.0)
+    check("fs.writebin stores smart_actions.json", r.get("result", {}).get("data_written") == len(sa), json.dumps(r))
+    r = rpc(dev, asm, "fs.read", {"file": "smart_actions.json"}, 4253)
+    check("fs.read returns the written JSON", r.get("result") == json.loads(sa), json.dumps(r)[:200])
+    r = rpc(dev, asm, "fs.delete", {"file": "smart_actions.json"}, 4254, timeout_s=4.0)
+    check("fs.delete", r.get("result") == {"ok": True})
+
+    # A keymap large enough to need two writebin chunks (Input sends 4096
+    # base64 chars = 3072 bytes per call), with profile 1 active: the pad
+    # must re-read it and report profile_index 1, and fall back to the
+    # built-in keymap (profile 0) once it is deleted.
+    layer = {"id": 0, "name": "L", "color": 0, "os": 0, "layout": {
+        "keymap": [["KC_A", "KC_B"], ["KC_C", "KC_D", "KC_E", "KC_F"], ["KC_G", "KC_H", "KC_I", "KC_J"], ["KC_K", "KC_L", "KC_M"]],
+        "encoders": [["KC_VOLD", "KC_VOLU", "KC_MUTE"]], "buttons": [["KC_MPLY"]],
+        "joystick": {"type": "VENDOR", "sectors": []}}}
+    doc = {"version": 1, "activeProfileId": 1,
+           "profiles": [{"id": 0, "name": "zero", "layers": [layer], "macrosUsed": [], "multiActionsUsed": []},
+                        {"id": 1, "name": "one " + "x" * 3600, "layers": [layer], "macrosUsed": [], "multiActionsUsed": []}],
+           "macros": [], "multiActions": []}
+    raw = json.dumps(doc, separators=(",", ":")).encode()
+    b64 = base64.b64encode(raw).decode()
+    chunks = [b64[i:i + 4096] for i in range(0, len(b64), 4096)]
+    check("keymap test needs two chunks", len(chunks) == 2, str(len(chunks)))
+    written = 0
+    for i, c in enumerate(chunks):
+        r = rpc(dev, asm, "fs.writebin", {"file": "keymap.json", "data": c, "append": True, "completed": i == len(chunks) - 1, "offset": written}, 4260 + i, timeout_s=4.0)
+        written += r.get("result", {}).get("data_written", 0) if isinstance(r.get("result"), dict) else 0
+    check("fs.writebin keymap.json in two chunks", written == len(raw), f"{written}/{len(raw)}")
+    r = rpc(dev, asm, "fs.list", {"checksum": True}, 4262)
+    got = {f["name"]: f for f in r.get("result", [])}.get("keymap.json", {})
+    check("fs.list reports the new keymap", got.get("size") == str(len(raw)) and got.get("checksum") == hashlib.sha1(raw).hexdigest(), json.dumps(got))
+    r = rpc(dev, asm, "device.status", {}, 4263)
+    check("pad switched to profile 1 from the written keymap", r.get("result", {}).get("profile_index") == 1, json.dumps(r))
+    # Every alignment of the final flash program (the driver programs whole
+    # words): file sizes covering each residue mod 4 of the last piece.
+    sizes_ok = []
+    for extra in range(4):
+        doc["profiles"][1]["name"] = "one " + "x" * (900 + extra)
+        raw = json.dumps(doc, separators=(",", ":")).encode()
+        r = rpc(dev, asm, "fs.writebin", {"file": "keymap.json", "data": base64.b64encode(raw).decode(), "append": True, "completed": True, "offset": 0}, 4270 + extra, timeout_s=4.0)
+        sizes_ok.append(r.get("result", {}).get("data_written") == len(raw) if isinstance(r.get("result"), dict) else False)
+    check("single-chunk writes of every size mod 4", all(sizes_ok), str(sizes_ok))
+    r = rpc(dev, asm, "fs.delete", {"file": "keymap.json"}, 4264, timeout_s=4.0)
+    check("fs.delete keymap.json", r.get("result") == {"ok": True}, json.dumps(r))
+    r = rpc(dev, asm, "device.status", {}, 4265)
+    check("pad back on the built-in keymap (profile 0)", r.get("result", {}).get("profile_index") == 0, json.dumps(r))
+
     r = rpc(dev, asm, "no.such.method", {}, 4246)
     check(
         "unknown method -> -32601",
@@ -206,7 +288,7 @@ def main():
                 continue
             seen.add(msg.get("method"))
     check("saw at least one v.oai.hid / v.oai.rad event", bool(seen & {"v.oai.hid", "v.oai.rad"}),
-          "press something during the listen window" if not seen else ", ".join(sorted(seen)))
+          "press something during the listen window" if not seen else ", ".join(sorted(str(m) for m in seen)))
 
     dev.close()
     print()
