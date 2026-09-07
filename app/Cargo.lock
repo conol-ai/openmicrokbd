@@ -4485,7 +4485,7 @@ dependencies = [
 
 [[package]]
 name = "openmicro-app"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "async-channel 2.5.0",
  "auto-launch",
@@ -4502,6 +4502,7 @@ dependencies = [
  "hidapi",
  "objc",
  "open",
+ "openmicro-layout",
  "rusb",
  "serde",
  "serde_json",
@@ -4510,6 +4511,10 @@ dependencies = [
  "tray-icon",
  "ureq",
 ]
+
+[[package]]
+name = "openmicro-layout"
+version = "0.1.0"
 
 [[package]]
 name = "openssl-probe"

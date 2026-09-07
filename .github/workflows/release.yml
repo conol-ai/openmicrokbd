@@ -28,6 +28,7 @@ jobs:
       tag: ${{ steps.versions.outputs.tag }}
       app_version: ${{ steps.versions.outputs.app_version }}
       firmware_version: ${{ steps.versions.outputs.firmware_version }}
+      boot_version: ${{ steps.versions.outputs.boot_version }}
     steps:
       - name: Check out the tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -65,6 +66,14 @@ jobs:
               --format-version 1 |
               jq -er '.packages[] | select(.name == "openmicro-fw") | .version'
           )"
+          BOOT_VERSION="$(
+            cargo metadata \
+              --manifest-path boot/Cargo.toml \
+              --locked \
+              --no-deps \
+              --format-version 1 |
+              jq -er '.packages[] | select(.name == "openmicro-boot") | .version'
+          )"
 
           if [[ "$APP_VERSION" != "${TAG#v}" ]]; then
             echo "tag $TAG does not match app version $APP_VERSION" >&2
@@ -72,6 +81,10 @@ jobs:
           fi
           if [[ ! "$FIRMWARE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "firmware version must have the stable form MAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          if [[ ! "$BOOT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "bootloader version must have the stable form MAJOR.MINOR.PATCH" >&2
             exit 1
           fi
 
@@ -89,6 +102,7 @@ jobs:
             echo "tag=$TAG"
             echo "app_version=$APP_VERSION"
             echo "firmware_version=$FIRMWARE_VERSION"
+            echo "boot_version=$BOOT_VERSION"
           } >> "$GITHUB_OUTPUT"
 
   firmware:
@@ -96,6 +110,14 @@ jobs:
     needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    # What the built image says about itself (fw-image.py info --json on the
+    # verified combined image): the publish job writes these into the
+    # manifest instead of hard-coding the flash layout a second time.
+    outputs:
+      boot_version: ${{ steps.layout.outputs.boot_version }}
+      boot_slot_size: ${{ steps.layout.outputs.boot_slot_size }}
+      app_base: ${{ steps.layout.outputs.app_base }}
+      app_size: ${{ steps.layout.outputs.app_size }}
     steps:
       - name: Check out the tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -109,9 +131,15 @@ jobs:
           targets: thumbv6m-none-eabi
           components: llvm-tools-preview
 
+      - name: Run the host-side firmware tests
+        run: |
+          set -euo pipefail
+          ./scripts/test-firmware-host.sh
+
       - name: Build raw firmware, debug ELF, and factory HEX
         env:
           FIRMWARE_VERSION: ${{ needs.validate.outputs.firmware_version }}
+          BOOT_VERSION: ${{ needs.validate.outputs.boot_version }}
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/dist"
@@ -120,6 +148,7 @@ jobs:
           test -f "dist/openmicro-fw-$FIRMWARE_VERSION.bin"
           test -f "dist/openmicro-fw-$FIRMWARE_VERSION.elf"
           test -f "dist/openmicro-fw-$FIRMWARE_VERSION.hex"
+          test -f "dist/openmicro-boot-$BOOT_VERSION.elf"
 
       - name: Validate firmware memory bounds and vector table
         env:
@@ -156,6 +185,53 @@ jobs:
               f"SP=0x{stack_pointer:08x}, reset=0x{reset_vector:08x}"
           )
           PY
+          python3 scripts/fw-image.py verify "dist/openmicro-fw-$FIRMWARE_VERSION.bin"
+
+      - name: Read the flash layout out of the verified image
+        id: layout
+        env:
+          FIRMWARE_VERSION: ${{ needs.validate.outputs.firmware_version }}
+          BOOT_VERSION: ${{ needs.validate.outputs.boot_version }}
+        run: |
+          set -euo pipefail
+          IMAGE="dist/openmicro-fw-$FIRMWARE_VERSION.bin"
+          INFO="$RUNNER_TEMP/image-info.json"
+          python3 scripts/fw-image.py info --json "$IMAGE" > "$INFO"
+          jq -e '.kind == "combined" and .boot.valid == true and .app.valid == true and .app.stamped == true' \
+            "$INFO" >/dev/null
+
+          IMAGE_BOOT_VERSION="$(jq -er '.boot.version' "$INFO")"
+          IMAGE_APP_VERSION="$(jq -er '.app.version' "$INFO")"
+          BOOT_SLOT_SIZE="$(jq -er '.boot.slot_size' "$INFO")"
+          APP_BASE="$(jq -er '.boot.app_base' "$INFO")"
+          APP_SIZE="$(jq -er '.boot.app_size' "$INFO")"
+
+          if [[ "$IMAGE_BOOT_VERSION" != "$BOOT_VERSION" ]]; then
+            echo "the image's bootloader info block says $IMAGE_BOOT_VERSION, boot/Cargo.toml says $BOOT_VERSION" >&2
+            exit 1
+          fi
+          if [[ "$IMAGE_APP_VERSION" != "$FIRMWARE_VERSION" ]]; then
+            echo "the image's application header says $IMAGE_APP_VERSION, fw/Cargo.toml says $FIRMWARE_VERSION" >&2
+            exit 1
+          fi
+          for value in "$BOOT_SLOT_SIZE" "$APP_BASE" "$APP_SIZE"; do
+            if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+              echo "layout value is not an integer: '$value'" >&2
+              exit 1
+            fi
+          done
+          if (( APP_BASE != 0x08000000 + BOOT_SLOT_SIZE )); then
+            echo "app_base $APP_BASE is not flash base + boot slot ($BOOT_SLOT_SIZE)" >&2
+            exit 1
+          fi
+
+          echo "bootloader $IMAGE_BOOT_VERSION, boot slot $BOOT_SLOT_SIZE, app base $APP_BASE, app slot $APP_SIZE"
+          {
+            echo "boot_version=$IMAGE_BOOT_VERSION"
+            echo "boot_slot_size=$BOOT_SLOT_SIZE"
+            echo "app_base=$APP_BASE"
+            echo "app_size=$APP_SIZE"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -165,6 +241,7 @@ jobs:
             dist/openmicro-fw-${{ needs.validate.outputs.firmware_version }}.bin
             dist/openmicro-fw-${{ needs.validate.outputs.firmware_version }}.elf
             dist/openmicro-fw-${{ needs.validate.outputs.firmware_version }}.hex
+            dist/openmicro-boot-${{ needs.validate.outputs.boot_version }}.elf
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -743,8 +820,25 @@ jobs:
           TAG: ${{ needs.validate.outputs.tag }}
           APP_VERSION: ${{ needs.validate.outputs.app_version }}
           FIRMWARE_VERSION: ${{ needs.validate.outputs.firmware_version }}
+          BOOT_VERSION: ${{ needs.validate.outputs.boot_version }}
+          # From the built image (firmware job), not typed in here.
+          IMAGE_BOOT_VERSION: ${{ needs.firmware.outputs.boot_version }}
+          BOOT_SLOT_SIZE: ${{ needs.firmware.outputs.boot_slot_size }}
+          APP_BASE: ${{ needs.firmware.outputs.app_base }}
+          APP_SIZE: ${{ needs.firmware.outputs.app_size }}
         run: |
           set -euo pipefail
+          if [[ "$IMAGE_BOOT_VERSION" != "$BOOT_VERSION" ]]; then
+            echo "firmware job reported bootloader $IMAGE_BOOT_VERSION, validate job $BOOT_VERSION" >&2
+            exit 1
+          fi
+          for value in "$BOOT_SLOT_SIZE" "$APP_BASE" "$APP_SIZE"; do
+            if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+              echo "firmware job did not report an integer layout value: '$value'" >&2
+              exit 1
+            fi
+          done
+
           ARM_DMG="OpenMicro-$APP_VERSION-macos-aarch64.dmg"
           INTEL_DMG="OpenMicro-$APP_VERSION-macos-x86_64.dmg"
           ARM_APPCAST="appcast-aarch64.xml"
@@ -754,6 +848,7 @@ jobs:
           FIRMWARE_BIN="openmicro-fw-$FIRMWARE_VERSION.bin"
           FIRMWARE_ELF="openmicro-fw-$FIRMWARE_VERSION.elf"
           FIRMWARE_HEX="openmicro-fw-$FIRMWARE_VERSION.hex"
+          BOOT_ELF="openmicro-boot-$BOOT_VERSION.elf"
 
           for asset in \
             "$ARM_DMG" \
@@ -764,7 +859,8 @@ jobs:
             "$WINDOWS_INTEL_ZIP" \
             "$FIRMWARE_BIN" \
             "$FIRMWARE_ELF" \
-            "$FIRMWARE_HEX"
+            "$FIRMWARE_HEX" \
+            "$BOOT_ELF"
           do
             if [[ ! -f "dist/$asset" ]]; then
               echo "missing release asset: $asset" >&2
@@ -809,6 +905,10 @@ jobs:
             --arg firmware_url "$ASSET_BASE/$FIRMWARE_BIN" \
             --arg firmware_sha "$FIRMWARE_SHA" \
             --argjson firmware_size "$FIRMWARE_SIZE" \
+            --arg boot_version "$IMAGE_BOOT_VERSION" \
+            --argjson boot_size "$BOOT_SLOT_SIZE" \
+            --argjson app_base "$APP_BASE" \
+            --argjson app_size "$APP_SIZE" \
             '{
               schema: 1,
               product: "openmicrokbd",
@@ -851,14 +951,40 @@ jobs:
                 name: $firmware_name,
                 url: $firmware_url,
                 sha256: $firmware_sha,
-                size: $firmware_size
+                size: $firmware_size,
+                bootloader_version: $boot_version,
+                layout: {
+                  boot_size: $boot_size,
+                  app_base: $app_base,
+                  app_size: $app_size
+                }
               }
             }' > dist/release-manifest.json
+          # schema 1 / protocol 2 stay: apps before 0.13.0 hard-reject anything
+          # else and ignore the two optional fields. The layout must be the
+          # image's own (the firmware job read it out of the info block) and
+          # must describe the STM32F072's 128 KiB of 2 KiB pages, with the
+          # published .bin fitting inside the two slots.
           jq -e \
+            --arg boot_version "$IMAGE_BOOT_VERSION" \
+            --argjson boot_size "$BOOT_SLOT_SIZE" \
+            --argjson app_base "$APP_BASE" \
+            --argjson app_size "$APP_SIZE" \
             '.schema == 1 and
              .product == "openmicrokbd" and
              .firmware.board == "openmicro-stm32f072cb" and
-             .firmware.protocol == 2' \
+             .firmware.protocol == 2 and
+             .firmware.bootloader_version == $boot_version and
+             (.firmware.bootloader_version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) and
+             .firmware.layout == {boot_size: $boot_size, app_base: $app_base, app_size: $app_size} and
+             .firmware.layout.boot_size > 0 and
+             .firmware.layout.boot_size % 2048 == 0 and
+             .firmware.layout.app_size > 0 and
+             .firmware.layout.app_size % 2048 == 0 and
+             .firmware.layout.app_base == 134217728 + .firmware.layout.boot_size and
+             .firmware.layout.app_base + .firmware.layout.app_size <= 134217728 + 131072 and
+             .firmware.size > .firmware.layout.boot_size and
+             .firmware.size <= .firmware.layout.boot_size + .firmware.layout.app_size' \
             dist/release-manifest.json >/dev/null
 
           (
@@ -873,6 +999,7 @@ jobs:
               "$FIRMWARE_BIN" \
               "$FIRMWARE_ELF" \
               "$FIRMWARE_HEX" \
+              "$BOOT_ELF" \
               release-manifest.json \
               > SHA256SUMS
             sha256sum --check SHA256SUMS

@@ -1,6 +1,6 @@
 [package]
 name = "openmicro-app"
-version = "0.12.1"
+version = "0.13.0"
 edition = "2021"
 license = "MIT"
 description = "OpenMicro companion app: profiles, key actions, firmware updates (GPUI)"
@@ -15,6 +15,8 @@ gpui-component = "=0.5.1"
 # device access: vendor HID interface (keymap + events + updater) + DFU
 hidapi = "2.6"
 rusb = { version = "0.9", features = ["vendored"] }
+# the flash layout, image header and bootloader protocol shared with fw/ and boot/
+openmicro-layout = { path = "../layout" }
 
 # key actions: OS-level interception, keystroke/media synthesis, launchers
 global-hotkey = "0.8"

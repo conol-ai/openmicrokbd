@@ -1,0 +1,10 @@
+[build]
+target = "thumbv6m-none-eabi"
+
+[target.thumbv6m-none-eabi]
+# First bring-up goes over SWD (J2 socket on the bottom of the board) with
+# probe-rs; there is no BOOT0 button on this board. Only `link.x`: the
+# bootloader has no defmt, so no `-Tdefmt.x` (that is why this crate lives
+# outside fw/, whose config would inject it).
+runner = "probe-rs run --chip STM32F072CBTx"
+rustflags = ["-C", "link-arg=-Tlink.x"]

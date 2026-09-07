@@ -28,6 +28,7 @@ use crate::agent_integrations::{
     self, InstallDisposition, InstallState, IntegrationKind, IntegrationReport,
 };
 use crate::behaviors::{self, InstalledApp};
+use crate::boot;
 use crate::config::{
     self, Action, ControlBehavior, InputConfig, JoystickMode, LanguageSetting, LedPattern,
     MacroStep, MacroStepEntry, MediaOp, ProfileTemplate, RotatorPressPreset, RotatorRotationPreset, SlotKind,
@@ -631,6 +632,16 @@ fn selection_card(
                 .child(icon),
         )
         .child(content)
+}
+
+/// The localized short form of a BOOT_INFO `app_valid` code, for readouts
+/// and rails (the worker's `describe_app_valid` is English, for the log).
+fn bootloader_state_label(app_valid: u8) -> &'static str {
+    match app_valid {
+        openmicro_layout::app_valid::VALID => tr("bootloader_state_valid"),
+        openmicro_layout::app_valid::UNSTAMPED => tr("bootloader_state_unstamped"),
+        _ => tr("bootloader_state_none"),
+    }
 }
 
 fn tiny_button(label: impl Into<SharedString>) -> Div {
@@ -2656,6 +2667,106 @@ impl OpenMicro {
 
     fn render_banners(&self, cx: &mut Context<Self>) -> Div {
         let mut banners = div().w_full().flex().flex_col();
+        // A pad in recovery mode (its bootloader waiting for firmware) is
+        // the same kind of event as an update being available, so it gets
+        // the same strip: badge, one line, tiny buttons. Details live in the
+        // firmware sheet, where Install and the advanced actions are.
+        if let Some(pad) = self.host.bootloader.as_ref() {
+            let firmware = match &pad.info {
+                Ok(info) => {
+                    let version = if info.app_version_str().is_empty() {
+                        "?"
+                    } else {
+                        info.app_version_str()
+                    };
+                    match info.app_valid {
+                        openmicro_layout::app_valid::VALID => {
+                            tr("bootloader_app_valid").replace("{v}", version)
+                        }
+                        openmicro_layout::app_valid::UNSTAMPED => {
+                            tr("bootloader_app_unstamped").replace("{v}", version)
+                        }
+                        _ => tr("bootloader_app_none").to_string(),
+                    }
+                }
+                Err(crate::device::BootloaderError::Open(_)) => {
+                    tr("bootloader_unopenable").to_string()
+                }
+                Err(crate::device::BootloaderError::Info(e)) => {
+                    tr("bootloader_info_failed").replace("{e}", e)
+                }
+            };
+            let can_boot = matches!(
+                &pad.info,
+                Ok(info) if info.app_valid == openmicro_layout::app_valid::VALID
+            );
+            let busy = self.host.updating || self.host.firmware_downloading;
+            let detail = if let Some(phase) = self.host.update_phase.as_ref().filter(|_| busy) {
+                format!("{} · {}", tr("recovery_mode_detected"), phase)
+            } else if let Some(error) = self.host.update_error.as_ref() {
+                format!("{} · {}", tr("recovery_mode_detected"), error)
+            } else {
+                format!("{} · {}", tr("recovery_mode_detected"), firmware)
+            };
+            let tone = if can_boot {
+                BadgeTone::Warning
+            } else {
+                BadgeTone::Danger
+            };
+            let mut actions = div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(px(6.));
+            actions = actions.child(if busy {
+                let label = if self.host.updating {
+                    tr("installing")
+                } else {
+                    tr("downloading")
+                };
+                paging_button(label, false).into_any_element()
+            } else {
+                tiny_button(tr("update_firmware"))
+                    .id("recovery-update-firmware")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.sheet = Sheet::Firmware;
+                        cx.notify();
+                    }))
+                    .into_any_element()
+            });
+            if can_boot && !busy {
+                actions = actions.child(
+                    tiny_button(tr("boot_firmware"))
+                        .id("recovery-boot-firmware")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.host.boot_firmware();
+                            cx.notify();
+                        })),
+                );
+            }
+            banners = banners.child(
+                div()
+                    .min_h(px(44.))
+                    .px(px(18.))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .bg(pixel::raised_color())
+                    .border_b_1()
+                    .border_color(pixel::accent_color())
+                    .child(pixel::badge(tr("recovery_badge"), tone))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .truncate()
+                            .text_size(px(13.))
+                            .text_color(pixel::text_color())
+                            .child(detail),
+                    )
+                    .child(actions),
+            );
+        }
         if let Some(catalog) = &self.host.release {
             let app_available = release::is_newer(&catalog.app.version, release::APP_VERSION)
                 && !self.host.app_banner_dismissed;
@@ -2776,7 +2887,8 @@ impl OpenMicro {
                 );
             } else if let Some((installed, _)) = self.host.last_conn.as_ref() {
                 let firmware_available = release::is_newer(&catalog.firmware.version, installed)
-                    && !self.host.firmware_banner_dismissed;
+                    && !self.host.firmware_banner_dismissed
+                    && self.host.bootloader.is_none();
                 if firmware_available {
                     let detail = format!(
                         "Firmware {} available // installed {}",
@@ -2990,8 +3102,10 @@ impl OpenMicro {
             .min_h(px(0.))
             .overflow_hidden()
             .flex()
+            .flex_col()
             .items_center()
             .justify_center()
+            .gap(px(12.))
             .child(board)
     }
 
@@ -4835,11 +4949,33 @@ impl OpenMicro {
     }
 
     fn render_firmware_sheet(&self, cx: &mut Context<Self>) -> Div {
+        // A pad in bootloader mode has no running firmware to ask, but its
+        // bootloader knows what is in the slot.
+        let bootloader_pad = self
+            .host
+            .bootloader
+            .as_ref()
+            .and_then(|pad| pad.info.as_ref().ok().copied());
         let installed = self
             .host
             .last_conn
             .as_ref()
             .map(|(version, _)| version.clone())
+            .or_else(|| {
+                bootloader_pad.map(|info| {
+                    if info.app_valid == openmicro_layout::app_valid::NONE
+                        || info.app_version_str().is_empty()
+                    {
+                        tr("bootloader_app_none").to_string()
+                    } else {
+                        format!(
+                            "{} ({})",
+                            info.app_version_str(),
+                            bootloader_state_label(info.app_valid)
+                        )
+                    }
+                })
+            })
             .unwrap_or_else(|| "—".into());
         let available = self
             .host
@@ -4847,6 +4983,31 @@ impl OpenMicro {
             .as_ref()
             .map(|catalog| catalog.firmware.version.clone())
             .unwrap_or_else(|| "not checked".into());
+        // Bootloader versions: the pad's (from BOOT_INFO, in either mode)
+        // and the release's (optional manifest field).
+        let pad_bootloader = self
+            .host
+            .boot_info
+            .or(bootloader_pad)
+            .map(|info| boot::version_string(info.boot_version));
+        let release_bootloader = self
+            .host
+            .release
+            .as_ref()
+            .and_then(|catalog| catalog.firmware.bootloader_version.clone());
+        let bootloader = match (pad_bootloader, release_bootloader) {
+            (None, None) => None,
+            (pad, release) => Some(format!(
+                "{} // {}",
+                pad.unwrap_or_else(|| "—".into()),
+                release.unwrap_or_else(|| "not checked".into())
+            )),
+        };
+        let has_bootloader = self.host.pad_has_bootloader();
+        // ROM DFU is the bootloader-reinstall path: offered with its warning
+        // whenever a bootloader is around, in either mode — a pad parked in
+        // bootloader mode answers ENTER_DFU itself.
+        let rom_dfu_reinstall = has_bootloader || self.host.bootloader.is_some();
         let image = self
             .host
             .firmware_image
@@ -4912,7 +5073,13 @@ impl OpenMicro {
                             .flex()
                             .gap(px(8.))
                             .child(controls::field_readout(tr("installed"), installed))
-                            .child(controls::field_readout("AVAILABLE", available)),
+                            .child(controls::field_readout("AVAILABLE", available))
+                            .when_some(bootloader, |row, bootloader| {
+                                row.child(controls::field_readout(
+                                    tr("bootloader_label"),
+                                    bootloader,
+                                ))
+                            }),
                     )
                     .child(controls::status_rail(
                         "SAFE FLASH",
@@ -5018,21 +5185,68 @@ impl OpenMicro {
                             .text_color(pixel::accent_highlight_color())
                             .child(tr("advanced")),
                     )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(pixel::muted_text_color())
-                            .child(tr("drops_the_pad_into_its_rom_bootloader")),
-                    )
-                    .child(tiny_button(tr("reboot_into_dfu")).id("enter-dfu").on_click(
-                        cx.listener(|this, _, _, cx| {
-                            if let Some(tx) = &this.host.device_tx {
-                                let _ = tx.send(DeviceCmd::EnterDfuOnly);
-                            }
-                            this.push_log("requested ROM DFU mode".into());
-                            cx.notify();
-                        }),
-                    ))
+                    // A pad on the resident bootloader gets the driverless
+                    // action; ROM DFU stays available behind an explicit
+                    // warning, for reinstalling the bootloader itself —
+                    // also for a pad parked in bootloader mode. A pad
+                    // without one (firmware ≤ 0.9.0, or offline) keeps the
+                    // plain ROM DFU action as before.
+                    .when(has_bootloader, |body| {
+                        body.child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(pixel::muted_text_color())
+                                .child(tr("drops_the_pad_into_its_bootloader")),
+                        )
+                        .child(
+                            tiny_button(tr("reboot_into_bootloader"))
+                                .id("enter-bootloader")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some(tx) = &this.host.device_tx {
+                                        let _ = tx.send(DeviceCmd::EnterBootOnly);
+                                    }
+                                    this.push_log("requested bootloader mode".into());
+                                    cx.notify();
+                                })),
+                        )
+                    })
+                    .when(rom_dfu_reinstall, |body| {
+                        body.child(controls::status_rail(
+                            "ROM DFU",
+                            tr("rom_dfu_warning"),
+                            BadgeTone::Danger,
+                        ))
+                        .child(
+                            tiny_button(tr("reinstall_bootloader_via_rom_dfu"))
+                                .id("enter-dfu")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some(tx) = &this.host.device_tx {
+                                        let _ = tx.send(DeviceCmd::EnterDfuOnly);
+                                    }
+                                    this.push_log("requested ROM DFU mode".into());
+                                    cx.notify();
+                                })),
+                        )
+                    })
+                    .when(!rom_dfu_reinstall, |body| {
+                        body.child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(pixel::muted_text_color())
+                                .child(tr("drops_the_pad_into_its_rom_bootloader")),
+                        )
+                        .child(
+                            tiny_button(tr("reboot_into_dfu")).id("enter-dfu").on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    if let Some(tx) = &this.host.device_tx {
+                                        let _ = tx.send(DeviceCmd::EnterDfuOnly);
+                                    }
+                                    this.push_log("requested ROM DFU mode".into());
+                                    cx.notify();
+                                }),
+                            ),
+                        )
+                    })
                     .child(controls::status_rail(
                         "POWER WARNING",
                         tr("keep_the_pad_powered_if_the"),

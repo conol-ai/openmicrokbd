@@ -1,0 +1,14 @@
+[package]
+name = "openmicro-boot-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Host-side tests for boot/src/update.rs (the bootloader's HID update protocol) against a RAM model of the application slot"
+
+# Not a workspace member: the bootloader crate only builds for thumbv6m.
+# Run with:
+#   cd boot/host-tests && cargo test --offline --target $(rustc -vV | sed -n 's/^host: //p')
+[workspace]
+
+[dependencies]
+openmicro-layout = { path = "../../layout" }

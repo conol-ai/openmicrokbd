@@ -1,68 +1,39 @@
-//! App-triggered entry into the STM32F072 ROM DFU bootloader.
+//! Resets: back into the resident bootloader's ROM-DFU path, or plain.
 //!
 //! The board deliberately has no BOOT0 button — BOOT0 is strapped low
-//! (rboot, 10K) and SWD on J2 is the debug/recovery path. Field updates are
-//! instead software-triggered: the host app writes ENTER_DFU to the vendor
-//! HID interface, we stamp a magic word in noinit RAM and reset, and the
-//! next boot diverts into system memory before touching any peripheral.
-//! The ROM bootloader (AN2606) then enumerates as USB DFU 0483:df11 on the
-//! same USB-C port for a standard DfuSe download.
+//! (rboot, 10K), NRST is unconnected, and SWD on J2 is the last-resort
+//! recovery path. Everything else is software-triggered through the vendor
+//! HID interface (main.rs):
+//!
+//! * opcode 0x12 ENTER_BOOT → the resident bootloader's driverless HID
+//!   update mode. This is how firmware updates work since 0.10.0.
+//! * opcode 0x02 ENTER_DFU → the ST ROM DFU (AN2606, 0483:DF11). Kept for
+//!   the one-time migration from fw ≤ 0.9.0 and for reinstalling the
+//!   bootloader itself with the combined image; needs a WinUSB driver on
+//!   Windows and can brick the pad if interrupted, so the host only offers
+//!   it behind a warning.
+//!
+//! Until 0.9.0 the application itself jumped into system memory from a
+//! magic word in `.uninit` RAM, checked at the top of `main` before any
+//! peripheral init. Now the *bootloader* performs that jump — it reads the
+//! request from the fixed handoff words at reset, in exactly the clean
+//! reset state the ROM expects — so this module only files the request
+//! (boot.rs) and resets.
 
-use core::mem::MaybeUninit;
-use core::ptr::addr_of_mut;
+use crate::boot::{self, Request};
 
-/// F07x system-memory bootloader base (AN2606).
-const SYSTEM_MEMORY: u32 = 0x1FFF_C800;
-const MAGIC: u32 = 0xB007_10AD;
-
-/// Survives a system reset (SRAM keeps its contents; only power-on clears
-/// it) and is skipped by cortex-m-rt's .bss/.data init.
-#[link_section = ".uninit.DFU_MAGIC"]
-static mut DFU_MAGIC: MaybeUninit<u32> = MaybeUninit::uninit();
-
-/// Must run before `embassy_stm32::init` — the ROM bootloader expects the
-/// reset-state clock/peripheral configuration it was designed to start from.
-pub fn check_and_enter() {
-    unsafe {
-        let slot = addr_of_mut!(DFU_MAGIC).cast::<u32>();
-        if slot.read_volatile() == MAGIC {
-            slot.write_volatile(0);
-
-            // Cortex-M0 has no VTOR: exception vectors are always read from
-            // 0x0000_0000. Enable SYSCFG and map system flash there before
-            // handing control to the ROM bootloader (AN2606).
-            embassy_stm32::pac::RCC
-                .apb2enr()
-                .modify(|w| w.set_syscfgen(true));
-            let _ = embassy_stm32::pac::RCC.apb2enr().read();
-            embassy_stm32::pac::SYSCFG.cfgr1().modify(|w| {
-                w.set_mem_mode(embassy_stm32::pac::syscfg::vals::MemMode::SYSTEM_FLASH)
-            });
-            cortex_m::asm::dsb();
-            cortex_m::asm::isb();
-
-            let sp = (SYSTEM_MEMORY as *const u32).read_volatile();
-            let rv = ((SYSTEM_MEMORY + 4) as *const u32).read_volatile();
-            cortex_m::asm::bootstrap(sp as *const u32, rv as *const u32);
-        }
-    }
-}
-
-/// Arm the magic and reset; `check_and_enter` finishes the job on the way
-/// back up.
+/// Arm the ROM-DFU request and reset; the bootloader finishes the job on
+/// the way back up. The name predates the resident bootloader: "bootloader"
+/// here means ST's ROM one, which is what opcode 0x02 has always meant.
 pub fn reboot_into_bootloader() -> ! {
-    unsafe {
-        addr_of_mut!(DFU_MAGIC).cast::<u32>().write_volatile(MAGIC);
-    }
-    cortex_m::peripheral::SCB::sys_reset();
+    boot::request(Request::RomDfu)
 }
 
-/// Plain application reset (no bootloader): the way a device-mode change
-/// takes effect, since the USB identity is only chosen at boot. The reset
-/// drops the USB pull-up, so the host sees a clean unplug/replug.
+/// Plain application reset (through the bootloader, which re-validates the
+/// image and starts it again): the way a device-mode change takes effect,
+/// since the USB identity is only chosen at boot. The reset drops the USB
+/// pull-up, so the host sees a clean unplug/replug.
 pub fn reboot() -> ! {
-    unsafe {
-        addr_of_mut!(DFU_MAGIC).cast::<u32>().write_volatile(0);
-    }
-    cortex_m::peripheral::SCB::sys_reset();
+    boot::clear_request();
+    cortex_m::peripheral::SCB::sys_reset()
 }

@@ -1,0 +1,58 @@
+[package]
+name = "openmicro-boot"
+version = "1.0.0"
+edition = "2021"
+license = "MIT"
+description = "OpenMicro v1 resident bootloader (STM32F072CB): validates the application and offers a driverless USB HID update mode"
+publish = false
+
+# Deliberately not a member of any workspace: like fw/, this crate only
+# builds for thumbv6m and carries its own .cargo/config.toml (no defmt.x).
+[workspace]
+
+[features]
+# Prototype boards fabbed before the 2026-07-28 GPIO re-derivation: encoder
+# switch on PC15, per-key chain on PB4, 16-LED underglow ring on PA0. Must
+# match the application's `proto` feature (the info block records it).
+proto = []
+
+# Every version is pinned with `=` to the exact entries in fw/Cargo.lock so
+# the crate resolves offline from the same registry cache as the firmware.
+[dependencies]
+embassy-stm32 = { version = "=0.2.0", features = [
+    "stm32f072cb",
+    "time-driver-any",
+    # Raw register access: SYSCFG remap, NVIC hygiene, the encoder-switch
+    # sample before any HAL init, and the WS2812 bit-bang.
+    "unstable-pac",
+] }
+embassy-executor = { version = "=0.7.0", features = [
+    "arch-cortex-m",
+    "executor-thread",
+    "task-arena-size-4096",
+] }
+embassy-time = "=0.4.0"
+# The `usbd-hid` default feature would pull in ssmarshal; the report
+# descriptor here is a plain byte slice.
+embassy-usb = { version = "=0.4.0", default-features = false }
+embassy-futures = "=0.1.2"
+
+cortex-m = { version = "=0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "=0.7.5"
+static_cell = "=2.1.1"
+portable-atomic = { version = "=1.14.0", features = ["critical-section"] }
+critical-section = "=1.2.0"
+
+# Flash/RAM map, image header, handoff words, protocol, CRC-32, validation.
+openmicro-layout = { path = "../layout" }
+
+[profile.release]
+# Size is the constraint: the image must stay under BOOT_SIZE - 512.
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+# ELF-only debug info for probe-rs / addr2line; the .bin is unaffected.
+debug = true
+
+[profile.dev]
+opt-level = 1

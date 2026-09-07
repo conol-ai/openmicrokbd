@@ -109,9 +109,13 @@ OpenMicro $appVersion for Windows $architecture
 
 1. Extract this entire folder before running the app.
 2. Run OpenMicro.exe. The app, firmware folder, and licenses must stay together.
-3. Start the firmware update so the keyboard enters DFU mode. If OpenMicro then
-   shows DFU driver setup, open Zadig, enable Options > List All Devices, choose
-   STM32 BOOTLOADER (0483:df11), select WinUSB, and install/replace the driver.
+3. Firmware updates need no driver: the pad reboots into its own bootloader (a
+   plain HID device) and OpenMicro installs the image over it. Only a pad still
+   running firmware 0.9.0 or older gets that bootloader installed once through
+   the STM32 ROM DFU, and only that one-time step needs WinUSB: if OpenMicro
+   shows DFU driver setup then, open Zadig, enable Options > List All Devices,
+   choose STM32 BOOTLOADER (0483:df11), select WinUSB, and install/replace the
+   driver. Every update after that is driverless.
 
 Configuration is stored in your Windows user profile. The portable folder may be moved without losing profiles.
 "@

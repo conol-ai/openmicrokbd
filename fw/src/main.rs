@@ -42,10 +42,20 @@
 //! stick drags it like a panel trackball.
 //!
 //! A vendor-defined HID interface (usage page 0xFF60) carries the app
-//! protocol: version query, DFU reboot, keymap read/write/save, analog
-//! tuning, joystick mode, and unsolicited input-event reports (first byte
-//! 0x80) that give the app live press feedback without any OS
-//! input-monitoring permission.
+//! protocol: version query, reboot into the bootloader (or the ROM DFU),
+//! bootloader/layout info, keymap read/write/save, analog tuning, joystick
+//! mode, and unsolicited input-event reports (first byte 0x80) that give the
+//! app live press feedback without any OS input-monitoring permission.
+//!
+//! Boot: since 0.10.0 this image lives at 0x08006000 behind a resident
+//! bootloader (../../boot) that validates it (header + CRC, boot.rs) and
+//! stays in a driverless HID update mode when it is missing, invalid, asked
+//! for (opcode 0x12) or the encoder switch is held at power-up — so an
+//! interrupted update can no longer brick the pad. The Cortex-M0 has no
+//! VTOR, so our vector table is copied to 0x20000000 and SRAM is remapped
+//! to address 0; memory.x keeps the first 0xC0 bytes of RAM and the four
+//! handoff words at the top (0x20003FF0) out of the linker's hands. The
+//! flash map lives in memory.x and ../../layout/src/lib.rs.
 //!
 //! Device mode (keymap.rs `device_mode`, persisted with the keymap): the pad
 //! normally boots as OpenMicro (1209:0001, the composite above). In the
@@ -61,6 +71,7 @@
 #![no_std]
 #![no_main]
 
+mod boot;
 mod codex;
 mod dfu;
 mod keymap;
@@ -125,6 +136,8 @@ const POSITIONS: [[i8; 4]; 4] = [
 ];
 
 const FW_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// `bcdDevice` for the OpenMicro identity, folded at compile time.
+const DEVICE_RELEASE: u16 = version_bcd(FW_VERSION);
 
 /// "a.b.c" -> USB bcdDevice (a in the high byte, b/c a nibble each), so the
 /// updater can read the running version straight from the device descriptor.
@@ -167,9 +180,14 @@ const RAW_HID_DESC: &[u8] = &[
 ];
 
 // App protocol (v2), one command per 32-byte OUT report; replies echo the
-// command byte, unsolicited event reports start 0x80 (see EVENT_CH):
+// command byte, unsolicited event reports start 0x80 (see EVENT_CH). Opcodes
+// shared with the bootloader (0x01, 0x02, 0x12, 0x20) come from the layout
+// crate so the two images and the host cannot drift apart:
 //   [0x01, ...]                    -> [0x01, len, version ascii...]
-//   [0x02, 'D','F','U','!']        -> [0x02, 0x01], reboot into ROM DFU
+//   [0x02, 'D','F','U','!']        -> [0x02, 0x01], reset; the BOOTLOADER then
+//                                     jumps into the ST ROM DFU (0483:DF11) —
+//                                     only for reinstalling the bootloader
+//                                     itself with the combined image
 //   [0x03, page]                   -> [0x03, page, count, count*4 slot bytes]
 //   [0x04, page, count, slots...]  -> [0x04, ok] (applies to RAM immediately)
 //   [0x05, 'S','A','V','E']        -> [0x05, ok] (persist keymap to flash)
@@ -190,8 +208,16 @@ const RAW_HID_DESC: &[u8] = &[
 //                                     0 OpenMicro / 1 Codex Micro compat)
 //   [0x11, mode, 'M','O','D','E']  -> [0x11, ok]; a CHANGED mode is persisted
 //                                     and the pad resets to re-enumerate in it
-const CMD_VERSION: u8 = 0x01;
-const CMD_ENTER_DFU: u8 = 0x02;
+//   [0x12, 'B','O','O','T']        -> [0x12, 0x01], then 50 ms later reset into
+//                                     the resident bootloader's HID update
+//                                     mode (1209:0002); wrong key -> [0x12, 0]
+//   [0x20]                         -> [0x20, status, proto, boot maj, min,
+//                                     patch, app_base u32, app_size u32,
+//                                     app_valid, app_version[16]] (31 bytes,
+//                                     openmicro_layout::BootInfoReply; status
+//                                     1 + zeros if no bootloader info block)
+const CMD_VERSION: u8 = openmicro_layout::op::VERSION;
+const CMD_ENTER_DFU: u8 = openmicro_layout::op::ENTER_DFU;
 const CMD_GET_KEYMAP: u8 = 0x03;
 const CMD_SET_KEYMAP: u8 = 0x04;
 const CMD_SAVE: u8 = 0x05;
@@ -207,7 +233,10 @@ const CMD_SET_LEDPATTERN: u8 = 0x0E;
 const CMD_SET_KEY_LED_OVERRIDE: u8 = 0x0F;
 const CMD_GET_MODE: u8 = 0x10;
 const CMD_SET_MODE: u8 = 0x11;
-const ENTER_DFU_KEY: &[u8; 4] = b"DFU!";
+const CMD_ENTER_BOOT: u8 = openmicro_layout::op::ENTER_BOOT;
+const CMD_BOOT_INFO: u8 = openmicro_layout::op::BOOT_INFO;
+const ENTER_DFU_KEY: &[u8; 4] = &openmicro_layout::ENTER_DFU_KEY;
+const ENTER_BOOT_KEY: &[u8; 4] = &openmicro_layout::ENTER_BOOT_KEY;
 const SAVE_KEY: &[u8; 4] = b"SAVE";
 const RESET_KEY: &[u8; 4] = b"RST!";
 const MODE_KEY: &[u8; 4] = b"MODE";
@@ -686,10 +715,6 @@ impl codex::MacroKeys for MacroKeys {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    // First thing, before any clock/peripheral init: divert into the ROM DFU
-    // bootloader if the previous run armed it (dfu.rs).
-    dfu::check_and_enter();
-
     let mut config = Config::default();
     // USB clocking: HSI48 trimmed by CRS from USB SOF. The 8 MHz HSE crystal
     // is fitted (belt-and-braces) but not required for USB.
@@ -699,11 +724,33 @@ async fn main(spawner: Spawner) {
     // 48 MHz core from the same HSI48 (the WS2812 bit-bang cycle counts and
     // the USB peripheral both assume it); USBSW defaults to HSI48 on F0.
     config.rcc.sys = Sysclk::HSI48;
+    // The bootloader started us with our vector table remapped to SRAM
+    // (boot.rs), but init() pulses SYSCFG through its RCC reset, which puts
+    // MEM_MODE back to main flash — the bootloader's table. So PRIMASK stays
+    // set from before init until the remap is back: the TIM15 and EXTI
+    // interrupts init enables cannot fire in between. This is precisely what
+    // `critical_section::with` around init does on this single-core target
+    // (init's own critical section nests fine, and nothing in it waits on an
+    // interrupt) — but the closure form measured ~1.5 KB more flash in this
+    // task's state machine, which the 84 KiB slot cannot spare with logging
+    // compiled in.
+    cortex_m::interrupt::disable();
     let p = embassy_stm32::init(config);
+    boot::remap_vectors_to_sram();
+    // Exceptions are ours from here on: a fault before this point counted
+    // in the bootloader's ladder (and would have parked the pad in update
+    // mode on the next boot); one after it is this image's own business.
+    boot::clear_faults();
+    // SAFETY: restores the state at entry — cortex-m-rt's Reset does not
+    // mask interrupts and the bootloader clears PRIMASK before jumping — and
+    // no critical section is open here.
+    unsafe { cortex_m::interrupt::enable() };
     info!(
         "OpenMicro fw v{}: clocks up (HSI48 -> 48 MHz core, CRS synced from USB SOF)",
         FW_VERSION
     );
+    let reason = boot::reason();
+    info!("boot: reason {=u32} ({=str})", reason, boot::reason_str(reason));
 
     // The configurable keymap: saved copy from the last flash page if one
     // exists, factory defaults otherwise. Loaded before any task can emit.
@@ -804,7 +851,7 @@ async fn main(spawner: Spawner) {
     usb_config.device_release = if codex_mode {
         codex::DEVICE_RELEASE
     } else {
-        version_bcd(FW_VERSION)
+        DEVICE_RELEASE
     };
 
     static CONFIG_DESC: StaticCell<[u8; 256]> = StaticCell::new();
@@ -1037,13 +1084,32 @@ async fn main(spawner: Spawner) {
                             reply[2..2 + FW_VERSION.len()].copy_from_slice(FW_VERSION.as_bytes());
                         }
                         CMD_ENTER_DFU if &buf[1..5] == ENTER_DFU_KEY => {
-                            warn!("app: DFU reboot requested -> ROM bootloader");
+                            warn!("app: ROM DFU requested (via the bootloader)");
                             reply[1] = 0x01;
                             let _ = raw_writer.write(&reply).await;
                             // Let the ack reach the host before dropping off
                             // the bus.
                             Timer::after_millis(50).await;
                             dfu::reboot_into_bootloader();
+                        }
+                        CMD_ENTER_BOOT => {
+                            if &buf[1..5] == ENTER_BOOT_KEY {
+                                warn!("app: bootloader update mode requested");
+                                reply[1] = 0x01;
+                                let _ = raw_writer.write(&reply).await;
+                                // Same courtesy: the host waits for this ack
+                                // before it starts looking for 1209:0002.
+                                Timer::after_millis(50).await;
+                                boot::request(boot::Request::Bootloader);
+                            }
+                            // Wrong key: refused, but answered (unlike the
+                            // older keyed commands) so the host can tell a
+                            // typo from a firmware without the opcode.
+                            reply[1] = 0;
+                        }
+                        CMD_BOOT_INFO => {
+                            // 31 bytes: fits the 32-byte report as-is.
+                            let _ = boot::boot_info_reply(&mut reply);
                         }
                         CMD_GET_KEYMAP => {
                             let page = buf[1] as usize;

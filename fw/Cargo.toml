@@ -1,6 +1,6 @@
 [package]
 name = "openmicro-fw"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 license = "MIT"
 description = "OpenMicro macropad firmware (STM32F072CBT6, embassy)"
@@ -51,6 +51,10 @@ cortex-m-rt = "0.7"
 static_cell = "2"
 portable-atomic = { version = "1", features = ["critical-section"] }
 critical-section = "1"
+
+# The contract with the resident bootloader and the host: flash/RAM map,
+# image header, handoff words, BOOT_INFO reply (../layout, no_std, no deps).
+openmicro-layout = { path = "../layout" }
 
 [profile.release]
 debug = true

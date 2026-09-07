@@ -25,7 +25,12 @@ pub const MANIFEST_URL: &str = match option_env!("OPENMICRO_UPDATE_MANIFEST_URL"
 const MANIFEST_LIMIT: u64 = 128 * 1024;
 const APP_DOWNLOAD_LIMIT: u64 = 512 * 1024 * 1024;
 const FIRMWARE_DOWNLOAD_MIN: u64 = 192;
-const FIRMWARE_DOWNLOAD_LIMIT: u64 = 126 * 1024;
+/// The largest firmware image the app will flash: everything below the
+/// Work Louder file slots and the config page, which no update may touch
+/// (a combined bootloader + application image is at most exactly this
+/// long). Every published release so far is well under it.
+const FIRMWARE_DOWNLOAD_LIMIT: u64 =
+    (openmicro_layout::DATA_BASE - openmicro_layout::FLASH_BASE) as u64;
 
 #[derive(Deserialize)]
 struct BundledFirmwareManifest {
@@ -67,8 +72,24 @@ pub struct FirmwareRelease {
     pub version: String,
     pub board: String,
     pub protocol: u32,
+    /// Version of the bootloader inside the combined image (releases from
+    /// firmware 0.10.0 on). Optional so older manifests, and older apps
+    /// reading newer manifests, keep working: schema and protocol stay 1/2.
+    #[serde(default)]
+    pub bootloader_version: Option<String>,
+    /// Where the bootloader and application sit inside the combined image.
+    /// Informational: the app slices an image by its own info block.
+    #[serde(default)]
+    pub layout: Option<FirmwareLayout>,
     #[serde(flatten)]
     pub asset: ReleaseAsset,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+pub struct FirmwareLayout {
+    pub boot_size: u32,
+    pub app_base: u32,
+    pub app_size: u32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -80,7 +101,14 @@ pub struct ReleaseAsset {
 }
 
 impl ReleaseCatalog {
-    pub fn validate(&self) -> Result<(), String> {
+    /// Reject a manifest this app cannot act on (schema, product, board,
+    /// protocol, versions, asset URLs and hashes). The optional,
+    /// informational fields (`bootloader_version`, `layout`) are checked
+    /// too, but an inconsistent one is dropped with a warning rather than
+    /// costing every installed app its update discovery: the app slices an
+    /// image by the image's own info block, never by the manifest. Returns
+    /// the warnings.
+    pub fn validate(&mut self) -> Result<Vec<String>, String> {
         if self.schema != 1 {
             return Err(format!(
                 "unsupported release manifest schema {}",
@@ -107,6 +135,34 @@ impl ReleaseCatalog {
         }
         validate_version(&self.app.version)?;
         validate_version(&self.firmware.version)?;
+        let mut warnings = Vec::new();
+        if let Some(bootloader) = &self.firmware.bootloader_version {
+            if let Err(e) = validate_version(bootloader) {
+                warnings.push(format!("ignoring firmware.bootloader_version: {e}"));
+                self.firmware.bootloader_version = None;
+            }
+        }
+        if let Some(layout) = self.firmware.layout {
+            // The F072CB has 2 KiB pages; the application follows the
+            // bootloader directly. Anything else is a manifest bug.
+            const PAGE: u32 = openmicro_layout::PAGE_SIZE;
+            if layout.boot_size % PAGE != 0
+                || layout.app_size % PAGE != 0
+                || layout.app_base != openmicro_layout::FLASH_BASE + layout.boot_size
+                || layout
+                    .app_base
+                    .checked_add(layout.app_size)
+                    .is_none_or(|end| {
+                        end > openmicro_layout::FLASH_BASE + openmicro_layout::FLASH_SIZE
+                    })
+            {
+                warnings.push(format!(
+                    "ignoring firmware.layout, which is inconsistent: boot_size 0x{:x}, app_base 0x{:x}, app_size 0x{:x}",
+                    layout.boot_size, layout.app_base, layout.app_size
+                ));
+                self.firmware.layout = None;
+            }
+        }
         validate_https_url(&self.release_url)?;
         let mut assets = vec![
             &self.app.macos.aarch64,
@@ -125,7 +181,7 @@ impl ReleaseCatalog {
                 self.firmware.asset.size, FIRMWARE_DOWNLOAD_MIN, FIRMWARE_DOWNLOAD_LIMIT
             ));
         }
-        Ok(())
+        Ok(warnings)
     }
 
     pub fn app_asset(&self) -> Option<&ReleaseAsset> {
@@ -181,6 +237,9 @@ pub enum DownloadKind {
 pub enum ReleaseMsg {
     Catalog(ReleaseCatalog),
     CatalogUnavailable(String),
+    /// The catalog is usable, but an optional field was dropped (see
+    /// `ReleaseCatalog::validate`); for the log.
+    Warning(String),
     DownloadProgress {
         kind: DownloadKind,
         version: String,
@@ -312,9 +371,11 @@ fn fetch_catalog(url: &str) -> Result<ReleaseCatalog, String> {
     if bytes.len() as u64 > MANIFEST_LIMIT {
         return Err("release manifest is unexpectedly large".into());
     }
-    let catalog: ReleaseCatalog =
+    let mut catalog: ReleaseCatalog =
         serde_json::from_slice(&bytes).map_err(|e| format!("invalid release manifest: {e}"))?;
-    catalog.validate()?;
+    for warning in catalog.validate()? {
+        events::post(ReleaseMsg::Warning(warning));
+    }
     Ok(catalog)
 }
 
@@ -593,14 +654,124 @@ mod tests {
                 "size": 28_000
             }
         });
-        let catalog: ReleaseCatalog = serde_json::from_value(manifest).unwrap();
-        catalog.validate().unwrap();
+        let mut catalog: ReleaseCatalog = serde_json::from_value(manifest.clone()).unwrap();
+        assert_eq!(catalog.validate().unwrap(), Vec::<String>::new());
         assert!(catalog.app.windows.is_some());
+        // A pre-bootloader manifest carries neither optional field.
+        assert_eq!(catalog.firmware.bootloader_version, None);
+        assert_eq!(catalog.firmware.layout, None);
+        assert_eq!(catalog.firmware.asset.name, "openmicro-fw-0.3.1.bin");
         if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
             assert_eq!(
                 catalog.app_asset().expect("Windows asset").name,
                 "OpenMicro-0.3.0-windows-x86_64.zip"
             );
         }
+
+        // A bootloader-era manifest: same schema and protocol, two optional
+        // fields more, which the flattened asset must not swallow.
+        let mut with_bootloader = manifest;
+        with_bootloader["firmware"]["bootloader_version"] = serde_json::json!("1.0.0");
+        with_bootloader["firmware"]["layout"] = serde_json::json!({
+            "boot_size": 0x6000,
+            "app_base": 0x0800_6000u32,
+            "app_size": 0x15000,
+        });
+        let mut catalog: ReleaseCatalog = serde_json::from_value(with_bootloader.clone()).unwrap();
+        assert_eq!(catalog.validate().unwrap(), Vec::<String>::new());
+        assert_eq!(
+            catalog.firmware.bootloader_version.as_deref(),
+            Some("1.0.0")
+        );
+        assert_eq!(
+            catalog.firmware.layout,
+            Some(FirmwareLayout {
+                boot_size: 0x6000,
+                app_base: 0x0800_6000,
+                app_size: 0x15000,
+            })
+        );
+        assert_eq!(catalog.firmware.asset.sha256, "c".repeat(64));
+
+        // The optional fields are informational: an inconsistent one is
+        // dropped with a warning, and the catalog stays usable — otherwise
+        // a manifest typo would switch off updates for every installed app.
+        let mut bad_version = with_bootloader.clone();
+        bad_version["firmware"]["bootloader_version"] = serde_json::json!("latest");
+        let mut catalog: ReleaseCatalog = serde_json::from_value(bad_version).unwrap();
+        let warnings = catalog.validate().unwrap();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("bootloader_version"), "{warnings:?}");
+        assert_eq!(catalog.firmware.bootloader_version, None);
+        assert!(catalog.firmware.layout.is_some());
+        let mut bad_layout = with_bootloader.clone();
+        bad_layout["firmware"]["layout"]["app_base"] = serde_json::json!(0x0800_6100u32);
+        let mut catalog: ReleaseCatalog = serde_json::from_value(bad_layout).unwrap();
+        let warnings = catalog.validate().unwrap();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("layout"), "{warnings:?}");
+        assert_eq!(catalog.firmware.layout, None);
+        assert_eq!(
+            catalog.firmware.bootloader_version.as_deref(),
+            Some("1.0.0")
+        );
+        // A layout that runs past the end of flash is inconsistent too.
+        let mut bad_layout = with_bootloader.clone();
+        bad_layout["firmware"]["layout"]["app_size"] = serde_json::json!(0x2_0000u32);
+        let mut catalog: ReleaseCatalog = serde_json::from_value(bad_layout).unwrap();
+        assert_eq!(catalog.validate().unwrap().len(), 1);
+        assert_eq!(catalog.firmware.layout, None);
+
+        // The fields old apps also check are still hard errors.
+        for (path, value, needle) in [
+            (["schema"].as_slice(), serde_json::json!(2), "schema"),
+            (
+                ["product"].as_slice(),
+                serde_json::json!("other"),
+                "product",
+            ),
+            (
+                ["firmware", "protocol"].as_slice(),
+                serde_json::json!(3),
+                "protocol",
+            ),
+            (
+                ["firmware", "board"].as_slice(),
+                serde_json::json!("openmicro-stm32f103"),
+                "board",
+            ),
+            (
+                ["firmware", "size"].as_slice(),
+                serde_json::json!(0x1B001),
+                "bytes",
+            ),
+            (
+                ["firmware", "sha256"].as_slice(),
+                serde_json::json!("nope"),
+                "SHA-256",
+            ),
+        ] {
+            let mut manifest = with_bootloader.clone();
+            let mut node = &mut manifest;
+            for key in &path[..path.len() - 1] {
+                node = &mut node[*key];
+            }
+            node[path[path.len() - 1]] = value;
+            let mut catalog: ReleaseCatalog = serde_json::from_value(manifest).unwrap();
+            let err = catalog.validate().unwrap_err();
+            assert!(err.contains(needle), "{path:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn firmware_download_limit_is_the_flash_below_the_data_pages() {
+        // Old releases (fw ≤ 0.9.0 at ~69 KB) and combined images (≤ 108 KiB)
+        // both fit; anything longer would erase the file slots.
+        assert_eq!(FIRMWARE_DOWNLOAD_LIMIT, 0x1B000);
+        assert!(FIRMWARE_DOWNLOAD_LIMIT >= 69_128);
+        assert!(
+            FIRMWARE_DOWNLOAD_LIMIT
+                >= u64::from(openmicro_layout::BOOT_SIZE + openmicro_layout::APP_SIZE)
+        );
     }
 }

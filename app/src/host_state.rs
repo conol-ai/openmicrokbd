@@ -11,9 +11,11 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
+use openmicro_layout::BootInfoReply;
+
 use crate::actions;
 use crate::config::{self, Action, AppConfig, LedPattern, Profile, SLOT_COUNT};
-use crate::device::{DeviceCmd, DeviceMode, DeviceMsg, PadEvent, UpdateMsg};
+use crate::device::{BootloaderError, DeviceCmd, DeviceMode, DeviceMsg, PadEvent, UpdateMsg};
 use crate::events::AppEvent;
 use crate::intercept::Intercept;
 use crate::menubar::{Menubar, MenubarMsg};
@@ -82,6 +84,17 @@ pub enum HostEffect {
     },
 }
 
+/// A pad parked in its bootloader's update mode (1209:0002), as reported by
+/// the device worker while no application-mode pad is connected.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BootloaderPad {
+    pub serial: String,
+    /// The bootloader's BOOT_INFO, or why there is none: the interface
+    /// could not be opened (typically a missing udev rule on Linux) or it
+    /// did not answer BOOT_INFO usefully (timeout, another protocol).
+    pub info: Result<BootInfoReply, BootloaderError>,
+}
+
 /// Application model and ownership boundary for all host-side services.
 pub struct HostState {
     pub config: AppConfig,
@@ -94,6 +107,12 @@ pub struct HostState {
     /// The connected pad's boot identity; None while disconnected or on
     /// firmware that predates device modes.
     pub device_mode: Option<DeviceMode>,
+    /// The connected pad's BOOT_INFO: Some when it runs on the resident
+    /// bootloader (firmware 0.10.0+), so updates can take the driverless
+    /// HID path and the firmware sheet offers "Reboot into bootloader".
+    pub boot_info: Option<BootInfoReply>,
+    /// A pad currently sitting in bootloader mode (no application running).
+    pub bootloader: Option<BootloaderPad>,
     /// A SET_MODE is in flight: the pad takes a second or two to save,
     /// reset and reappear, during which the toggle must not fire again.
     pub mode_switch_pending: bool,
@@ -193,6 +212,8 @@ impl HostState {
             connected: false,
             last_conn: None,
             device_mode: None,
+            boot_info: None,
+            bootloader: None,
             mode_switch_pending: false,
             pressed_cells: [false; CELL_COUNT],
             activities: HashMap::new(),
@@ -366,6 +387,24 @@ impl HostState {
         true
     }
 
+    /// True when the connected pad answered BOOT_INFO, i.e. it runs on the
+    /// resident bootloader and can be rebooted into update mode.
+    pub fn pad_has_bootloader(&self) -> bool {
+        self.connected && self.boot_info.is_some()
+    }
+
+    /// Ask the pad in bootloader mode to validate and start its firmware.
+    pub fn boot_firmware(&mut self) -> bool {
+        let Some(tx) = &self.device_tx else {
+            return false;
+        };
+        let sent = tx.send(DeviceCmd::BootRun).is_ok();
+        if sent {
+            self.push_log("asking the bootloader to start the firmware");
+        }
+        sent
+    }
+
     /// Reduce one service event and return effects for the UI/event loop.
     pub fn handle_event(&mut self, event: AppEvent) -> Vec<HostEffect> {
         let mut effects = Vec::new();
@@ -439,10 +478,15 @@ impl HostState {
                 version,
                 serial,
                 mode,
+                boot,
             } => {
                 self.connected = true;
                 self.last_conn = Some((version, serial));
                 self.device_mode = mode;
+                self.boot_info = boot;
+                // An application came up: whichever pad was in bootloader
+                // mode either booted (this one) or is no longer the story.
+                self.bootloader = None;
                 self.mode_switch_pending = false;
                 self.firmware_banner_dismissed = false;
                 self.refresh_menubar();
@@ -452,8 +496,29 @@ impl HostState {
                 self.connected = false;
                 self.last_conn = None;
                 self.device_mode = None;
+                self.boot_info = None;
                 self.pressed_cells.fill(false);
                 self.refresh_menubar();
+            }
+            DeviceMsg::BootloaderPresent { serial, info } => {
+                let summary = match &info {
+                    Ok(info) => format!(
+                        "bootloader {} · firmware {} ({})",
+                        crate::boot::version_string(info.boot_version),
+                        if info.app_version_str().is_empty() {
+                            "-"
+                        } else {
+                            info.app_version_str()
+                        },
+                        crate::boot::describe_app_valid(info.app_valid)
+                    ),
+                    Err(e) => format!("bootloader {e}"),
+                };
+                self.push_log(format!("pad {serial} is in bootloader mode — {summary}"));
+                self.bootloader = Some(BootloaderPad { serial, info });
+            }
+            DeviceMsg::BootloaderGone => {
+                self.bootloader = None;
             }
             DeviceMsg::Event(event) => {
                 if let Some(signal) = cell_signal(event) {
@@ -735,6 +800,9 @@ impl HostState {
                 self.release_error = Some(error.clone());
                 self.push_log(format!("release check failed: {error}"));
             }
+            ReleaseMsg::Warning(warning) => {
+                self.push_log(format!("release manifest: {warning}"));
+            }
             ReleaseMsg::DownloadProgress {
                 kind,
                 version,
@@ -946,6 +1014,8 @@ mod tests {
                 version: firmware_version.into(),
                 board: "openmicro-stm32f072cb".into(),
                 protocol: 2,
+                bootloader_version: None,
+                layout: None,
                 asset: asset("firmware.bin"),
             },
         }
@@ -953,6 +1023,142 @@ mod tests {
 
     fn device_event(event: PadEvent) -> AppEvent {
         AppEvent::Device(DeviceMsg::Event(event))
+    }
+
+    fn boot_info(app_valid: u8) -> BootInfoReply {
+        BootInfoReply {
+            status: 0,
+            protocol: 1,
+            boot_version: [1, 0, 0],
+            app_base: openmicro_layout::APP_BASE,
+            app_size: openmicro_layout::APP_SIZE,
+            app_valid,
+            app_version: openmicro_layout::version_bytes("0.10.0"),
+            page: Some(2048),
+            max_chunk: Some(56),
+        }
+    }
+
+    #[test]
+    fn bootloader_presence_is_tracked_until_it_leaves_or_the_app_boots() {
+        let mut host = state();
+        assert!(host.bootloader.is_none());
+
+        let info = boot_info(openmicro_layout::app_valid::NONE);
+        host.handle_event(AppEvent::Device(DeviceMsg::BootloaderPresent {
+            serial: "ABC".into(),
+            info: Ok(info),
+        }));
+        assert_eq!(
+            host.bootloader,
+            Some(BootloaderPad {
+                serial: "ABC".into(),
+                info: Ok(info),
+            })
+        );
+        assert!(!host.connected);
+        let line = host.logs.back().unwrap();
+        assert!(
+            line.contains("ABC") && line.contains("no valid firmware"),
+            "{line}"
+        );
+
+        host.handle_event(AppEvent::Device(DeviceMsg::BootloaderGone));
+        assert!(host.bootloader.is_none());
+
+        // An un-openable bootloader is still shown, with the reason.
+        host.handle_event(AppEvent::Device(DeviceMsg::BootloaderPresent {
+            serial: "ABC".into(),
+            info: Err(BootloaderError::Open("Permission denied".into())),
+        }));
+        assert!(host
+            .bootloader
+            .as_ref()
+            .is_some_and(|pad| pad.info.is_err()));
+        let line = host.logs.back().unwrap();
+        assert!(line.contains("Permission denied"), "{line}");
+        // So is one that opened but did not answer BOOT_INFO usefully.
+        host.handle_event(AppEvent::Device(DeviceMsg::BootloaderPresent {
+            serial: "ABC".into(),
+            info: Err(BootloaderError::Info("bootloader speaks protocol 2".into())),
+        }));
+        let line = host.logs.back().unwrap();
+        assert!(line.contains("protocol 2"), "{line}");
+
+        // The application coming up replaces the bootloader card.
+        host.handle_event(AppEvent::Device(DeviceMsg::Connected {
+            version: "0.10.0".into(),
+            serial: "ABC".into(),
+            mode: Some(DeviceMode::OpenMicro),
+            boot: Some(boot_info(openmicro_layout::app_valid::VALID)),
+        }));
+        assert!(host.bootloader.is_none());
+        assert!(host.connected);
+        assert!(host.pad_has_bootloader());
+
+        host.handle_event(AppEvent::Device(DeviceMsg::Disconnected));
+        assert!(!host.pad_has_bootloader());
+        assert!(host.boot_info.is_none());
+    }
+
+    #[test]
+    fn a_failed_install_from_bootloader_mode_shows_the_slot_as_it_is_now() {
+        // The worker announces the pad again with fresh BOOT_INFO after an
+        // Install that erased the slot and then failed; the card must follow
+        // that, not keep the "valid" it showed before.
+        let mut host = state();
+        let (tx, rx) = mpsc::channel();
+        host.device_tx = Some(tx);
+        host.handle_event(AppEvent::Device(DeviceMsg::BootloaderPresent {
+            serial: "ABC".into(),
+            info: Ok(boot_info(openmicro_layout::app_valid::VALID)),
+        }));
+        assert!(host.start_firmware_update(PathBuf::from("fw.bin"), Some("0.11.0".into())));
+        assert!(matches!(rx.try_recv(), Ok(DeviceCmd::StartUpdate { .. })));
+        assert!(host.updating);
+        host.handle_event(AppEvent::Update(UpdateMsg::Failed(
+            "UPDATE_END: CRC mismatch".into(),
+        )));
+        assert!(!host.updating);
+        assert!(host
+            .update_error
+            .as_deref()
+            .is_some_and(|e| e.contains("CRC")));
+        host.handle_event(AppEvent::Device(DeviceMsg::BootloaderPresent {
+            serial: "ABC".into(),
+            info: Ok(boot_info(openmicro_layout::app_valid::NONE)),
+        }));
+        let pad = host.bootloader.as_ref().expect("still in bootloader mode");
+        assert_eq!(
+            pad.info.as_ref().map(|info| info.app_valid),
+            Ok(openmicro_layout::app_valid::NONE)
+        );
+        // The error stays visible on the card next to the fresh state.
+        assert!(host.update_error.is_some());
+    }
+
+    #[test]
+    fn pads_without_boot_info_do_not_offer_the_bootloader_actions() {
+        let mut host = state();
+        host.handle_event(AppEvent::Device(DeviceMsg::Connected {
+            version: "0.9.0".into(),
+            serial: "OLD".into(),
+            mode: Some(DeviceMode::OpenMicro),
+            boot: None,
+        }));
+        assert!(host.connected);
+        assert!(!host.pad_has_bootloader());
+    }
+
+    #[test]
+    fn boot_firmware_sends_boot_run_to_the_worker() {
+        let mut host = state();
+        assert!(!host.boot_firmware());
+        let (tx, rx) = mpsc::channel();
+        host.device_tx = Some(tx);
+        assert!(host.boot_firmware());
+        assert!(matches!(rx.try_recv(), Ok(DeviceCmd::BootRun)));
+        assert!(host.logs.back().unwrap().contains("start the firmware"));
     }
 
     #[test]

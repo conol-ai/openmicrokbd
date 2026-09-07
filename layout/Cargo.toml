@@ -1,0 +1,11 @@
+[package]
+name = "openmicro-layout"
+version = "0.1.0"
+edition = "2021"
+description = "Flash/RAM layout, image header, handoff words and bootloader protocol shared by the OpenMicro v1 bootloader, firmware and host app"
+license = "MIT"
+publish = false
+
+[dependencies]
+
+[workspace]

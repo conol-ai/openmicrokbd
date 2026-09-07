@@ -2,13 +2,22 @@
 target = "thumbv6m-none-eabi"
 
 [target.thumbv6m-none-eabi]
-# Flash + run over SWD (J2 header) with probe-rs; alternatively hold BOOTSEL
-# (BOOT0) while plugging USB and use `dfu-util` — see README.md.
+# Flash + run over SWD (J2 socket) with probe-rs. The ELF is linked at
+# 0x08006000, behind the resident bootloader (../boot), which must already
+# be in flash: it boots a debugger-flashed image as-is (no length/CRC stamp
+# needed — see boot.rs). There is NO BOOT0 button on this board: recovery is
+# either SWD on J2 or the ROM DFU (0483:DF11), reached from a running image
+# with opcode 0x02 and fed the combined bootloader+app image — README.md.
 runner = "probe-rs run --chip STM32F072CBTx"
 rustflags = ["-C", "link-arg=-Tlink.x", "-C", "link-arg=-Tdefmt.x"]
 
 [env]
-# Our own crate at debug (joystick raw values, touch charge time, executor
-# heartbeat); embassy stays at info so the stream is readable. `off` strips
-# all logging from the build.
-DEFMT_LOG = "info,openmicro_fw=debug"
+# Default for `cargo build` / `cargo run`: our own crate at info (boot
+# reason, keymap, USB state), embassy at warn. The 84 KiB application slot
+# cannot hold the full debug stream any more (`info,openmicro_fw=debug`
+# links to within ~100 bytes of the slot in 0.10.0), so opt into it per
+# invocation when chasing joystick raw values, touch charge time or the
+# executor heartbeat:
+#   DEFMT_LOG=info,openmicro_fw=debug cargo run --release
+# `off` strips all logging from the build (what releases use).
+DEFMT_LOG = "warn,openmicro_fw=info"

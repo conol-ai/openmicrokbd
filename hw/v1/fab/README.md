@@ -76,16 +76,31 @@ routed board. The open-source CoHDL repository includes
 ## Firmware programming
 
 Program `openmicro-fw-<version>.hex` from the [GitHub release
-assets](../RELEASING.md) over SWD at J2. The hex is Intel HEX with the
-0x08000000 load address embedded — byte-identical to the released `.bin`, so
-any STM32-capable programmer (STM32CubeProgrammer, J-Flash, gang programmers)
-places it correctly with no address entry. Verify the file against the
-release's `SHA256SUMS` before loading it into the fixture.
+assets](../RELEASING.md) over SWD at J2. Since firmware 0.10.0 that file is
+**two programs in one**: the resident bootloader in the first 24 KiB
+(`0x08000000..0x08006000`) and the application behind it (from `0x08006000`).
+At every power-up the bootloader checks the application (length + CRC-32 in a
+header) and starts it; the application is linked for `0x08006000` and cannot
+run without the bootloader in front of it. The debug files
+`openmicro-fw-<version>.elf` (application) and
+`openmicro-boot-<bootloader-version>.elf` (bootloader; the two versions are
+independent, e.g. `openmicro-boot-1.0.0.elf` next to `openmicro-fw-0.10.0.elf`)
+therefore do **not** produce a working board on their own — always program
+the `.hex` (or the `.bin` at `0x08000000`).
 
-Full-chip erase + program + verify is the correct cycle on a fresh board. The
-last 2 KiB flash page (0x0801F800) holds user settings and must simply be
-**left erased** — the firmware detects the blank page and boots with factory
-defaults. Do not program anything there.
+The hex is Intel HEX with the 0x08000000 load address embedded —
+byte-identical to the released `.bin`, so any STM32-capable programmer
+(STM32CubeProgrammer, J-Flash, gang programmers) places it correctly with no
+address entry. Verify the file against the release's `SHA256SUMS` before
+loading it into the fixture; `python3 scripts/fw-image.py verify
+openmicro-fw-<version>.bin` additionally checks the header and CRC the
+bootloader will check on the board.
+
+Full-chip erase + program + verify is the correct cycle on a fresh board.
+Everything from 0x0801B000 up — the two file slots and the user-settings page
+at 0x0801F800 — must simply be **left erased**: the firmware detects blank
+pages and boots with factory defaults, and no released image reaches that
+region. Do not program anything there.
 
 J2 is a 2×3 2.54 mm socket (P1/P2 GND, P3 SWCLK, P5 SWDIO; P4/P6 are the
 serial console). It carries **no 3.3 V pin**: power the board through USB-C
@@ -93,5 +108,10 @@ while programming, and configure the programmer accordingly if it expects a
 target-voltage sense line.
 
 Post-programming check: the board enumerates over USB as `1209:0001`
-(OpenMicro). `scripts/bin2hex.py` regenerates the hex from a released `.bin`
-if needed.
+(OpenMicro) — the bootloader found a valid application and started it. A board
+that shows up as `1209:0002` "OpenMicro Bootloader" instead has a good
+bootloader but no valid application (truncated or corrupt program data); a
+board that does not enumerate at all has no working bootloader. In both cases
+reprogram the `.hex` over SWD: J2 remains the recovery path — there is no
+BOOT0 button and the STM32 ROM bootloader is not reachable from outside.
+`scripts/bin2hex.py` regenerates the hex from a released `.bin` if needed.

@@ -267,17 +267,64 @@ mapping and the provenance and trademark notes.
 
 ## Firmware updates
 
-The product's field-update path (no buttons, no probe): the sheet checks the
-image, sends `ENTER_DFU` over raw HID, speaks DfuSe (AN3156) directly over
-libusb to the ROM bootloader (`0483:df11`), and verifies the reported version
-when the pad returns. Release builds bundle the exact production firmware; a
-newer independent firmware release can also be downloaded from the GitHub
-Release path and is checked for size, SHA-256, board, protocol, and
-Cortex-M0 vectors before flashing. If the app stops while the powered device
-remains in ROM DFU, Install can resume. Do not unplug during flashing: power
-loss can leave recovery requiring SWD on J2. **Profiles and the on-device
-keymap survive updates** — the keymap lives in a reserved flash page updates
-never touch.
+From firmware 0.10.0 the pad carries a resident bootloader (`boot/`, 24 KiB
+at the start of flash) and updates are **driverless**: the sheet checks the
+image, sends `ENTER_BOOT` over raw HID, the pad reboots into the
+bootloader's update mode (`1209:0002` "OpenMicro Bootloader", a plain HID
+interface every OS can open), the app uploads the application slice in
+64-byte HID reports (56 data bytes each), the bootloader verifies the
+header's length and CRC-32 from flash before it will ever start it, and the
+app checks the reported version when the pad returns (about a second).
+Before the pad is rebooted the app has already refused what the bootloader
+would: an unstamped (debugger-style) application, or an image linked for a
+different application base than the one the pad's own `BOOT_INFO` reports.
+If the pad comes back in application mode instead of the bootloader after
+`ENTER_BOOT`, the update fails at once with *the pad restarted into its
+firmware instead of the bootloader (bootloader fault)* — that is the
+bootloader's own fault escalation at work, and the fix is *Advanced →
+Reinstall bootloader via ROM DFU* with the combined image. Release builds bundle the
+exact production firmware; a newer firmware release can also be downloaded
+from the GitHub Release path and is checked for size, SHA-256, board,
+protocol and its image header before anything is sent. The app slices a
+combined image (bootloader + application) at the application base its own
+info block declares, so a release never overwrites the bootloader.
+
+An interrupted update cannot brick the pad: until a complete, verified
+image is in place the bootloader stays in update mode, breathing amber on
+the key LEDs. Replug the pad and it comes back as **PAD IN BOOTLOADER
+MODE**, a card above the device map that shows the bootloader version and
+whether a valid firmware is installed (valid / unstamped development build /
+none), with **Install firmware** (the same catalog-or-bundled logic as the
+sheet — the upload simply starts over), **Boot firmware** (start what is
+installed) and, behind its warning, **Reinstall bootloader via ROM DFU**
+(the bootloader answers `ENTER_DFU` itself, so a bootloader that cannot
+program its slot can still be replaced with a combined image). After an
+Install or Boot firmware from that card the pad is queried again, so the
+card always shows what the slot holds now. The same mode can be entered by
+hand: hold the encoder switch while plugging the pad in, or use *Advanced →
+Reboot into bootloader* in the firmware sheet. If the pad in bootloader mode
+is listed but the app cannot open it, the card says so with the OS error —
+on Linux that is the missing udev rule for `1209:0002`; a bootloader that
+opens but does not answer `BOOT_INFO` (a timeout, another protocol version)
+is reported with that reason instead. Windows gets 30 s instead of 10 s for
+the bootloader to enumerate after `ENTER_BOOT`, because its first-time
+driver setup for `1209:0002` can take that long.
+
+Pads on firmware 0.9.0 or older have no bootloader yet. Their first install
+of a 0.10.0+ release is a **one-time migration** through the chip's ROM DFU
+(`0483:df11`, DfuSe over libusb, the whole combined image written at
+`0x08000000`), exactly the pre-0.10 update path: on Windows it needs the
+WinUSB binding via [Zadig](https://zadig.akeo.ie/) once, and it is the only
+step that cannot resume after a power loss (recovery is then SWD on J2).
+After that the driver is never needed again. The sheet refuses combinations
+that would end badly — an application-only image for a pad without a
+bootloader, a pre-bootloader image for a pad that has one, a pad next to an
+unrelated DFU device, or two pads in bootloader mode — and explains why.
+*Advanced → Reinstall bootloader via ROM DFU* exists only for reinstalling
+the bootloader itself with a combined image and carries the same caveats.
+
+**Profiles and the on-device keymap survive updates** — the keymap lives in
+a reserved flash page neither path touches.
 
 ## App updates
 
@@ -296,10 +343,12 @@ See [`../RELEASING.md`](../RELEASING.md) for packaging and publishing details.
   keystroke/media *synthesis* (actions that type or press media keys for
   you) needs Accessibility, requested with a deep link. macOS has no
   virtual keycodes for F21–F24; the editor marks any code the OS cannot see.
-- **Windows** — DFU needs a WinUSB driver bound to `0483:df11` once. The
-  firmware sheet detects the missing binding, opens the official
-  [Zadig](https://zadig.akeo.ie/) setup page, and shows the exact device/driver
-  selections before a safe retry.
+- **Windows** — firmware updates through the resident bootloader need no
+  driver. Only the one-time migration from firmware 0.9.0 or older (ROM
+  DFU) needs a WinUSB driver bound to `0483:df11`; the firmware sheet
+  detects the missing binding, opens the official
+  [Zadig](https://zadig.akeo.ie/) setup page, and shows the exact
+  device/driver selections before a safe retry.
   Interception uses `RegisterHotKey`; synthesis needs no special permission.
   The app picker scans Start Menu shortcuts and per-user installed programs.
   Cross-platform application presets translate Command to Ctrl, while
@@ -307,8 +356,9 @@ See [`../RELEASING.md`](../RELEASING.md) for packaging and publishing details.
   Task View, Search, Dictation, input-language, lock, sleep, media, and emoji
   actions.
 - **Linux** — udev rules needed for `1209:0001` (hidraw), `303a:8360`
-  (hidraw, Codex Micro compat mode) and `0483:df11`
-  (DFU); interception depends on the session (X11 grabs; Wayland varies).
+  (hidraw, Codex Micro compat mode), `1209:0002` (hidraw, the bootloader's
+  update mode) and `0483:df11` (DFU, one-time migration only); interception
+  depends on the session (X11 grabs; Wayland varies).
 
 ## Known deferrals
 
