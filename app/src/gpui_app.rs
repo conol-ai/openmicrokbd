@@ -11,11 +11,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
-    div, point, prelude::*, px, relative, size, svg, AnyElement, App, Application, Bounds,
-    Context, Corner, Div, Entity, Hsla, InteractiveElement, Interactivity, IntoElement,
-    KeyBinding, KeyDownEvent, Menu, MenuItem, MouseButton, ParentElement, PathPromptOptions,
-    Render, RenderOnce, ScrollHandle, SharedString, Stateful, StyleRefinement, Styled,
-    Subscription, Timer, Window, WindowAppearance, WindowBounds, WindowOptions,
+    div, point, prelude::*, px, relative, size, svg, AnyElement, App, Application, Bounds, Context,
+    Corner, Div, Entity, Hsla, InteractiveElement, Interactivity, IntoElement, KeyBinding,
+    KeyDownEvent, Menu, MenuItem, MouseButton, ParentElement, PathPromptOptions, Render,
+    RenderOnce, ScrollHandle, SharedString, Stateful, StyleRefinement, Styled, Subscription, Timer,
+    Window, WindowAppearance, WindowBounds, WindowOptions,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
@@ -31,8 +31,8 @@ use crate::behaviors::{self, InstalledApp};
 use crate::boot;
 use crate::config::{
     self, Action, ControlBehavior, InputConfig, JoystickMode, LanguageSetting, LedPattern,
-    MacroStep, MacroStepEntry, MediaOp, ProfileTemplate, RotatorPressPreset, RotatorRotationPreset, SlotKind,
-    ThemeSetting, KEY_SLOTS, SLOT_ENC_CCW, SLOT_ENC_CW, SLOT_ENC_PRESS, SLOT_JOY_DOWN,
+    MacroStep, MacroStepEntry, MediaOp, ProfileTemplate, RotatorPressPreset, RotatorRotationPreset,
+    SlotKind, ThemeSetting, KEY_SLOTS, SLOT_ENC_CCW, SLOT_ENC_CW, SLOT_ENC_PRESS, SLOT_JOY_DOWN,
     SLOT_JOY_LEFT, SLOT_JOY_PRESS, SLOT_JOY_RIGHT, SLOT_JOY_UP, SLOT_TOUCH_SWIPE_L,
     SLOT_TOUCH_SWIPE_R, SLOT_TOUCH_TAP,
 };
@@ -515,9 +515,7 @@ fn apply_launch_at_login(enable: bool) -> Result<(), String> {
         .set_app_path(&app_path.display().to_string());
     #[cfg(target_os = "macos")]
     builder.set_args(&["--hidden"]);
-    let auto = builder
-        .build()
-        .map_err(|error| error.to_string())?;
+    let auto = builder.build().map_err(|error| error.to_string())?;
     if enable {
         auto.enable().map_err(|error| error.to_string())
     } else {
@@ -769,8 +767,26 @@ fn profile_template_item(
     view: &Entity<OpenMicro>,
 ) -> PopupMenuItem {
     let view = view.clone();
-    PopupMenuItem::new(label).on_click(move |_, window, cx| {
+    PopupMenuItem::element(move |_, _| div().cursor_pointer().child(label)).on_click(move |_, window, cx| {
         view.update(cx, |this, cx| this.add_profile(template, window, cx));
+    })
+}
+
+fn profile_delete_item(
+    label: &'static str,
+    enabled: bool,
+    view: &Entity<OpenMicro>,
+) -> PopupMenuItem {
+    let view = view.clone();
+    PopupMenuItem::element(move |_, _| {
+        div()
+            .when(enabled, |item| item.cursor_pointer())
+            .when(!enabled, |item| item.cursor_default())
+            .child(label)
+    })
+    .disabled(!enabled)
+    .on_click(move |_, window, cx| {
+        view.update(cx, |this, cx| this.delete_active_profile(window, cx));
     })
 }
 
@@ -895,7 +911,7 @@ pub struct OpenMicro {
     icon_query: String,
     icon_page: usize,
     icon_scroll: ScrollHandle,
-    confirm_delete: bool,
+    editing_profile_name: bool,
     confirm_reset: bool,
     syncing_inputs: bool,
     label_input: Entity<InputState>,
@@ -955,7 +971,7 @@ impl OpenMicro {
             icon_query: String::new(),
             icon_page: 0,
             icon_scroll: ScrollHandle::new(),
-            confirm_delete: false,
+            editing_profile_name: false,
             confirm_reset: false,
             syncing_inputs: false,
             label_input,
@@ -995,13 +1011,24 @@ impl OpenMicro {
         this._subscriptions.push(cx.subscribe(
             &this.profile_input,
             |this, input, event: &InputEvent, cx| {
-                if !matches!(event, InputEvent::Change) || this.syncing_inputs {
+                if this.syncing_inputs || !this.editing_profile_name {
                     return;
                 }
-                let name = input.read(cx).value().trim().to_string();
-                if !name.is_empty() {
-                    this.host.active_profile_mut().name = name;
-                    this.commit(false, cx);
+                match event {
+                    InputEvent::PressEnter { .. } => {
+                        let name = input.read(cx).value().trim().to_string();
+                        if !name.is_empty() {
+                            this.host.active_profile_mut().name = name;
+                            this.commit(false, cx);
+                        }
+                        this.editing_profile_name = false;
+                        cx.notify();
+                    }
+                    InputEvent::Blur => {
+                        this.editing_profile_name = false;
+                        cx.notify();
+                    }
+                    _ => {}
                 }
             },
         ));
@@ -1186,8 +1213,7 @@ impl OpenMicro {
             return;
         };
         let Some(asset) = catalog.app_asset().cloned() else {
-            self.host.app_update_error =
-                Some("no update is available for this platform".into());
+            self.host.app_update_error = Some("no update is available for this platform".into());
             cx.notify();
             return;
         };
@@ -1205,10 +1231,7 @@ impl OpenMicro {
         };
         self.host.app_update_error = None;
         if let Err(error) = open::that(path) {
-            self.host.app_update_error = Some(format!(
-                "cannot open {}: {error}",
-                path.display()
-            ));
+            self.host.app_update_error = Some(format!("cannot open {}: {error}", path.display()));
         }
         cx.notify();
     }
@@ -1257,6 +1280,15 @@ impl OpenMicro {
     }
 
     fn commit(&mut self, sync_device: bool, cx: &mut Context<Self>) {
+        if sync_device && self.host.device_mode == Some(DeviceMode::Codex) {
+            if let Some(slot) = self.host.selected_slot {
+                let overrides = &mut self.host.active_profile_mut().codex_overrides;
+                if !overrides.contains(&slot) {
+                    overrides.push(slot);
+                    overrides.sort_unstable();
+                }
+            }
+        }
         behaviors::normalize_hidden_triggers(self.host.active_profile_mut());
         if let Err(error) = self.host.persist() {
             self.push_log(format!("could not save config: {error}"));
@@ -1343,13 +1375,21 @@ impl OpenMicro {
     }
 
     fn cycle_profile(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let len = self.host.config.profiles.len();
-        if len == 0 {
+        if self.editing_profile_name {
+            self.editing_profile_name = false;
+            self.sync_inputs(window, cx);
+            cx.notify();
+        }
+        let profiles = self.host.visible_profile_indices();
+        if profiles.is_empty() {
             return;
         }
-        let current = self.host.config.active_profile as isize;
-        let next = (current + delta).rem_euclid(len as isize) as usize;
-        self.switch_profile(next, window, cx);
+        let current = profiles
+            .iter()
+            .position(|index| *index == self.host.config.active_profile)
+            .unwrap_or(0) as isize;
+        let next = (current + delta).rem_euclid(profiles.len() as isize) as usize;
+        self.switch_profile(profiles[next], window, cx);
     }
 
     fn handle_key_down(
@@ -1359,7 +1399,11 @@ impl OpenMicro {
         cx: &mut Context<Self>,
     ) {
         if event.keystroke.key.eq_ignore_ascii_case("escape") {
-            if self.recording != RecordTarget::None {
+            if self.editing_profile_name {
+                self.editing_profile_name = false;
+                self.sync_inputs(window, cx);
+                cx.notify();
+            } else if self.recording != RecordTarget::None {
                 self.recording = RecordTarget::None;
                 cx.notify();
             } else if self.sheet != Sheet::None {
@@ -1815,14 +1859,26 @@ impl OpenMicro {
             // Keep the original runtime defaults human-readable even though
             // their tuned RGB values are a little softer than the idle
             // palette presets.
-            LedPattern::Solid { r: 0, g: 96, b: 255 } => tr("pat_blue").to_string(),
+            LedPattern::Solid {
+                r: 0,
+                g: 96,
+                b: 255,
+            } => tr("pat_blue").to_string(),
             LedPattern::Solid {
                 r: 255,
                 g: 150,
                 b: 0,
             } => tr("pat_yellow").to_string(),
-            LedPattern::Solid { r: 0, g: 210, b: 90 } => tr("pat_green").to_string(),
-            LedPattern::Solid { r: 255, g: 30, b: 50 } => tr("pat_red").to_string(),
+            LedPattern::Solid {
+                r: 0,
+                g: 210,
+                b: 90,
+            } => tr("pat_green").to_string(),
+            LedPattern::Solid {
+                r: 255,
+                g: 30,
+                b: 50,
+            } => tr("pat_red").to_string(),
             other => Self::pattern_label(other),
         }
     }
@@ -1870,12 +1926,7 @@ impl OpenMicro {
         self.commit(true, cx);
     }
 
-    fn cycle_status_color(
-        &mut self,
-        status: ActivityStatus,
-        delta: isize,
-        cx: &mut Context<Self>,
-    ) {
+    fn cycle_status_color(&mut self, status: ActivityStatus, delta: isize, cx: &mut Context<Self>) {
         let current = self.host.config.activity_status_colors.get(status);
         let current_index = PATTERN_PALETTE
             .iter()
@@ -1904,10 +1955,10 @@ impl OpenMicro {
             });
         let next = wrapped_index(current_index, PATTERN_PALETTE.len(), delta);
         let (_, r, g, b) = PATTERN_PALETTE[next];
-        self.host.config.activity_status_colors.set(
-            status,
-            LedPattern::Solid { r, g, b },
-        );
+        self.host
+            .config
+            .activity_status_colors
+            .set(status, LedPattern::Solid { r, g, b });
         self.host.refresh_activity_led();
         self.commit(false, cx);
     }
@@ -1937,11 +1988,7 @@ impl OpenMicro {
         }
     }
 
-    fn install_agent_integration(
-        &mut self,
-        kind: IntegrationKind,
-        cx: &mut Context<Self>,
-    ) {
+    fn install_agent_integration(&mut self, kind: IntegrationKind, cx: &mut Context<Self>) {
         let name = kind.display_name();
         match agent_integrations::install_system(kind) {
             Ok(receipt) => {
@@ -2005,9 +2052,11 @@ impl OpenMicro {
                     .child(tr("agent_integrations_note")),
             );
 
-        if self.agent_integrations.iter().all(|report| {
-            report.state == InstallState::Unavailable
-        }) {
+        if self
+            .agent_integrations
+            .iter()
+            .all(|report| report.state == InstallState::Unavailable)
+        {
             if let Some(detail) = self
                 .agent_integrations
                 .first()
@@ -2055,9 +2104,7 @@ impl OpenMicro {
                             })),
                     );
                 }
-                InstallState::Installed
-                | InstallState::Conflict
-                | InstallState::Unavailable => {}
+                InstallState::Installed | InstallState::Conflict | InstallState::Unavailable => {}
             }
 
             let row = div()
@@ -2086,11 +2133,7 @@ impl OpenMicro {
                 .child(actions);
             let mut control = div().w_full().flex().flex_col().gap(px(4.)).child(row);
             if let Some(detail) = report.detail.clone() {
-                control = control.child(controls::status_rail(
-                    state_label,
-                    detail,
-                    state_tone,
-                ));
+                control = control.child(controls::status_rail(state_label, detail, state_tone));
             }
             integrations = integrations.child(inspector_field(
                 kind.display_name(),
@@ -2168,9 +2211,9 @@ impl OpenMicro {
                         .text_size(px(10.))
                         .text_color(pixel::text_color())
                         .id(("picker-key", row_index * 32 + col_index))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.apply_picked_key(pick, cx)
-                        }))
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.apply_picked_key(pick, cx)),
+                        )
                         .child(SharedString::from(*label)),
                 );
             }
@@ -2183,14 +2226,18 @@ impl OpenMicro {
             ))
             .child(div().w_full().p(px(16.)).child(body))
             .child(
-                div().w_full().px(px(16.)).pb(px(14.)).flex().justify_end().child(
-                    tiny_button(tr("cancel"))
-                        .id("key-picker-cancel")
-                        .on_click(cx.listener(|this, _, _, cx| {
+                div()
+                    .w_full()
+                    .px(px(16.))
+                    .pb(px(14.))
+                    .flex()
+                    .justify_end()
+                    .child(tiny_button(tr("cancel")).id("key-picker-cancel").on_click(
+                        cx.listener(|this, _, _, cx| {
                             this.sheet = Sheet::None;
                             cx.notify();
-                        })),
-                ),
+                        }),
+                    )),
             )
     }
 
@@ -2297,8 +2344,14 @@ impl OpenMicro {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        Self::pick_file(window, cx, move |this, path, window, cx| {
-            match config::import_from(&path, mode, &mut this.host.config) {
+        Self::pick_file(
+            window,
+            cx,
+            move |this, path, window, cx| match config::import_from(
+                &path,
+                mode,
+                &mut this.host.config,
+            ) {
                 Ok(detail) => {
                     this.push_log(detail);
                     let _ = this.host.persist();
@@ -2307,8 +2360,8 @@ impl OpenMicro {
                     this.apply_configured_theme(window, cx);
                 }
                 Err(error) => this.push_log(format!("import failed: {error}")),
-            }
-        });
+            },
+        );
     }
 
     fn export_config(&mut self, cx: &mut Context<Self>) {
@@ -2332,18 +2385,24 @@ impl OpenMicro {
     }
 
     fn delete_active_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.host.config.profiles.len() <= 1 {
+        if self.host.visible_profile_indices().len() <= 1 {
             return;
         }
-        if !self.confirm_delete {
-            self.confirm_delete = true;
-            cx.notify();
-            return;
-        }
-        self.confirm_delete = false;
         let index = self.host.config.active_profile;
         self.host.config.profiles.remove(index);
-        self.host.config.active_profile = index.min(self.host.config.profiles.len() - 1);
+        for remembered in [
+            &mut self.host.config.active_openmicro_profile,
+            &mut self.host.config.active_codex_profile,
+        ] {
+            if let Some(saved) = remembered {
+                if *saved > index {
+                    *saved -= 1;
+                } else if *saved == index {
+                    *remembered = None;
+                }
+            }
+        }
+        self.host.config.active_profile = self.host.visible_profile_indices()[0];
         let _ = self.host.persist();
         let _ = self.host.sync_device();
         self.sync_inputs(window, cx);
@@ -2528,7 +2587,20 @@ impl OpenMicro {
 
     fn render_header(&self, cx: &mut Context<Self>) -> AnyElement {
         let profile = self.host.active_profile().name.clone();
+        let device_mode = if self.host.mode_switch_pending {
+            tr("mode_switching_short")
+        } else {
+            match self.host.device_mode {
+                Some(DeviceMode::OpenMicro) => tr("openmicro_mode"),
+                Some(DeviceMode::Codex) => tr("codex_micro_mode"),
+                None => "—",
+            }
+        };
+        let show_profile_templates = self.host.device_mode != Some(DeviceMode::Codex);
+        let can_delete_profile = self.host.visible_profile_indices().len() > 1;
+        let delete_profile_label = tr("delete_active_profile");
         let view = cx.entity();
+        let codex_view = view.clone();
         let (connection, connection_color) = if self.host.connected {
             (tr("connected"), pixel::success_color())
         } else {
@@ -2536,48 +2608,121 @@ impl OpenMicro {
         };
 
         let content = div()
-                    .w_full()
-                    .h_full()
+            .w_full()
+            .h_full()
+            .flex()
+            .items_center()
+            .gap(px(9.))
+            .child(
+                div()
+                    .font_family("Monaco")
+                    .font_semibold()
+                    .text_size(px(12.))
+                    .text_color(pixel::text_color())
+                    .child("OPENMICRO"),
+            )
+            .child(div().flex_1())
+            .child(
+                div()
+                    .h(px(22.))
+                    .px(px(7.))
                     .flex()
                     .items_center()
-                    .gap(px(9.))
+                    .gap(px(6.))
+                    .child(div().w(px(6.)).h(px(6.)).bg(connection_color))
                     .child(
                         div()
-                            .font_family("Monaco")
-                            .font_semibold()
-                            .text_size(px(12.))
-                            .text_color(pixel::text_color())
-                            .child("OPENMICRO"),
-                    )
-                    .child(div().flex_1())
-                    .child(
+                            .text_size(px(10.))
+                            .text_color(pixel::muted_text_color())
+                            .child(connection),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(9.))
+                    .font_semibold()
+                    .text_color(pixel::dim_text_color())
+                    .child(tr("device_mode")),
+            )
+            .child(
+                chrome_icon_button("chevron-left")
+                    .id("mode-previous")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if !this.host.mode_switch_pending {
+                            if let Some(mode) = this.host.device_mode {
+                                let next = match mode {
+                                    DeviceMode::OpenMicro => DeviceMode::Codex,
+                                    DeviceMode::Codex => DeviceMode::OpenMicro,
+                                };
+                                this.host.set_device_mode(next);
+                                cx.notify();
+                            }
+                        }
+                    })),
+            )
+            .child(
+                div()
+                    .w(px(88.))
+                    .h(px(26.))
+                    .min_w(px(0.))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .truncate()
+                    .text_size(px(12.))
+                    .font_semibold()
+                    .text_color(pixel::text_color())
+                    .child(device_mode),
+            )
+            .child(
+                chrome_icon_button("chevron-right")
+                    .id("mode-next")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if !this.host.mode_switch_pending {
+                            if let Some(mode) = this.host.device_mode {
+                                let next = match mode {
+                                    DeviceMode::OpenMicro => DeviceMode::Codex,
+                                    DeviceMode::Codex => DeviceMode::OpenMicro,
+                                };
+                                this.host.set_device_mode(next);
+                                cx.notify();
+                            }
+                        }
+                    })),
+            )
+            .child(div().w(px(1.)).h(px(18.)).bg(pixel::border_color()))
+            .child(
+                div()
+                    .text_size(px(9.))
+                    .font_semibold()
+                    .text_color(pixel::dim_text_color())
+                    .child(tr("profile")),
+            )
+            .child(
+                chrome_icon_button("chevron-left")
+                    .id("profile-previous")
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.cycle_profile(-1, window, cx)),
+                    ),
+            )
+            .child(
+                div()
+                    .w(px(88.))
+                    .h(px(26.))
+                    .min_w(px(0.))
+                    .occlude()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(if self.editing_profile_name {
+                        Input::new(&self.profile_input)
+                            .w_full()
+                            .h_full()
+                            .into_any_element()
+                    } else {
                         div()
-                            .h(px(22.))
-                            .px(px(7.))
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .child(div().w(px(6.)).h(px(6.)).bg(connection_color))
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(pixel::muted_text_color())
-                                    .child(connection),
-                            ),
-                    )
-                    .child(
-                        chrome_icon_button("chevron-left")
-                            .id("profile-previous")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.cycle_profile(-1, window, cx)
-                            })),
-                    )
-                    .child(
-                        div()
-                            .w(px(154.))
-                            .h(px(26.))
-                            .min_w(px(0.))
-                            .px(px(10.))
+                            .id("profile-name")
+                            .size_full()
+                            .px(px(8.))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -2585,69 +2730,109 @@ impl OpenMicro {
                             .text_size(px(12.))
                             .font_semibold()
                             .text_color(pixel::text_color())
-                            .child(profile),
-                    )
-                    .child(
-                        chrome_icon_button("chevron-right")
-                            .id("profile-next")
-                            .on_click(
-                                cx.listener(|this, _, window, cx| {
-                                    this.cycle_profile(1, window, cx)
-                                }),
-                            ),
-                    )
-                    .child(chrome_menu_button_slot(
-                        ChromeMenuButton::new("profile-add", "plus").dropdown_menu_with_anchor(
-                            Corner::TopRight,
-                            move |menu, window, cx| {
-                                let templates = view.clone();
-                                menu.item(profile_template_item(
-                                    tr("profile_menu_empty"),
-                                    ProfileTemplate::Empty,
-                                    &view,
-                                ))
-                                .submenu(
-                                    tr("profile_menu_templates"),
-                                    window,
-                                    cx,
-                                    move |menu, _, _| {
-                                        ProfileTemplate::AGENTS.iter().fold(menu, |menu, template| {
+                            .cursor_text()
+                            .child(profile)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.sync_inputs(window, cx);
+                                this.editing_profile_name = true;
+                                this.profile_input.update(cx, |input, cx| {
+                                    input.focus(window, cx);
+                                });
+                                cx.notify();
+                            }))
+                            .into_any_element()
+                    }),
+            )
+            .child(
+                chrome_icon_button("chevron-right")
+                    .id("profile-next")
+                    .on_click(cx.listener(|this, _, window, cx| this.cycle_profile(1, window, cx))),
+            )
+            .child(if show_profile_templates {
+                chrome_menu_button_slot(
+                    ChromeMenuButton::new("profile-actions", "ellipsis").dropdown_menu_with_anchor(
+                        Corner::TopRight,
+                        move |menu, window, cx| {
+                            let templates = view.clone();
+                            let delete_view = view.clone();
+                            menu.item(profile_template_item(
+                                tr("new_profile"),
+                                ProfileTemplate::Empty,
+                                &view,
+                            ))
+                            .submenu(
+                                tr("profile_menu_templates"),
+                                window,
+                                cx,
+                                move |menu, _, _| {
+                                    ProfileTemplate::AGENTS.iter().fold(
+                                        menu,
+                                        |menu, template| {
                                             menu.item(profile_template_item(
                                                 template.name(),
                                                 *template,
                                                 &templates,
                                             ))
-                                        })
-                                    },
-                                )
-                            },
-                        ),
-                    ))
-                    .child(chrome_icon_button("settings").id("open-settings").on_click(
-                        cx.listener(|this, _, _, cx| {
-                            this.agent_integration_feedback = None;
-                            this.refresh_agent_integrations();
-                            this.sheet = Sheet::Settings;
-                            cx.notify();
+                                        },
+                                    )
+                                },
+                            )
+                            .item(profile_delete_item(
+                                delete_profile_label,
+                                can_delete_profile,
+                                &delete_view,
+                            ))
+                        },
+                    ),
+                )
+                .into_any_element()
+            } else {
+                chrome_menu_button_slot(
+                    ChromeMenuButton::new("profile-actions", "ellipsis")
+                        .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+                            let new_view = codex_view.clone();
+                            let delete_view = codex_view.clone();
+                            menu.item(profile_template_item(
+                                tr("new_profile"),
+                                ProfileTemplate::Empty,
+                                &new_view,
+                            ))
+                            .item(profile_delete_item(
+                                delete_profile_label,
+                                can_delete_profile,
+                                &delete_view,
+                            ))
                         }),
-                    ))
-                    .when(cfg!(target_os = "linux"), |header| {
-                        header.child(
-                            tiny_button(tr("hide_dashboard"))
-                                .id("hide-dashboard")
-                                .h(px(26.))
-                                .text_color(pixel::text_color())
-                                .on_mouse_down(MouseButton::Left, |_, window, cx| {
-                                    window.prevent_default();
-                                    cx.stop_propagation();
-                                })
-                                .on_click(|_, _window, cx| {
-                                    cx.stop_propagation();
-                                    #[cfg(target_os = "linux")]
-                                    hide_linux_window(_window);
-                                }),
-                        )
-                    });
+                )
+                .into_any_element()
+            })
+            .child(
+                chrome_icon_button("settings")
+                    .id("open-settings")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.agent_integration_feedback = None;
+                        this.refresh_agent_integrations();
+                        this.sheet = Sheet::Settings;
+                        cx.notify();
+                    })),
+            )
+            .when(cfg!(target_os = "linux"), |header| {
+                header.child(
+                    tiny_button(tr("hide_dashboard"))
+                        .id("hide-dashboard")
+                        .h(px(26.))
+                        .text_color(pixel::text_color())
+                        .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        })
+                        .on_click(|_, _window, cx| {
+                            cx.stop_propagation();
+                            #[cfg(target_os = "linux")]
+                            hide_linux_window(_window);
+                        }),
+                )
+            });
 
         #[cfg(target_os = "linux")]
         return div()
@@ -2717,11 +2902,7 @@ impl OpenMicro {
             } else {
                 BadgeTone::Danger
             };
-            let mut actions = div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .gap(px(6.));
+            let mut actions = div().flex().flex_shrink_0().items_center().gap(px(6.));
             actions = actions.child(if busy {
                 let label = if self.host.updating {
                     tr("installing")
@@ -2783,8 +2964,7 @@ impl OpenMicro {
                     self.host.app_download.is_some(),
                     self.host.app_update_error.is_some(),
                 );
-                let progress =
-                    (self.host.app_download_progress * 100.0).round() as u32;
+                let progress = (self.host.app_download_progress * 100.0).round() as u32;
                 let detail = match controls.detail {
                     AppUpdateDetailState::Error => format!(
                         "{} · {}",
@@ -2814,18 +2994,12 @@ impl OpenMicro {
                     ),
                 };
 
-                let mut actions = div()
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap(px(6.));
+                let mut actions = div().flex().flex_shrink_0().items_center().gap(px(6.));
                 if let Some(sparkle) = controls.sparkle {
                     actions = actions.child(match sparkle {
                         AppUpdateButtonState::StartSparkle => tiny_button(tr("app_update_action"))
                             .id("start-app-self-update")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.begin_sparkle_update(cx)
-                            }))
+                            .on_click(cx.listener(|this, _, _, cx| this.begin_sparkle_update(cx)))
                             .into_any_element(),
                         AppUpdateButtonState::SparkleBusy => {
                             paging_button(tr("app_update_in_progress"), false).into_any_element()
@@ -2834,38 +3008,40 @@ impl OpenMicro {
                     });
                 }
                 if let Some(manual) = controls.manual {
-                    actions = actions.child(match manual {
-                        AppUpdateButtonState::DownloadPackage => {
-                            tiny_button(tr("app_update_download_package"))
-                                .id("download-app-update")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.begin_manual_app_download(cx)
-                                }))
-                                .into_any_element()
-                        }
-                        AppUpdateButtonState::DownloadingPackage => paging_button(
-                            format!("{} {}%", tr("app_update_downloading_package"), progress),
-                            false,
-                        )
-                        .into_any_element(),
-                        AppUpdateButtonState::OpenPackage => tiny_button(tr("app_update_open_package"))
-                            .id("open-app-update")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.open_manual_app_download(cx)
-                            }))
+                    actions =
+                        actions.child(match manual {
+                            AppUpdateButtonState::DownloadPackage => {
+                                tiny_button(tr("app_update_download_package"))
+                                    .id("download-app-update")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.begin_manual_app_download(cx)
+                                    }))
+                                    .into_any_element()
+                            }
+                            AppUpdateButtonState::DownloadingPackage => paging_button(
+                                format!("{} {}%", tr("app_update_downloading_package"), progress),
+                                false,
+                            )
                             .into_any_element(),
-                        _ => unreachable!("invalid manual update control"),
-                    });
+                            AppUpdateButtonState::OpenPackage => {
+                                tiny_button(tr("app_update_open_package"))
+                                    .id("open-app-update")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.open_manual_app_download(cx)
+                                    }))
+                                    .into_any_element()
+                            }
+                            _ => unreachable!("invalid manual update control"),
+                        });
                 }
                 if controls.dismissible {
-                    actions = actions.child(
-                        tiny_button(tr("later"))
-                            .id("dismiss-app-update")
-                            .on_click(cx.listener(|this, _, _, cx| {
+                    actions =
+                        actions.child(tiny_button(tr("later")).id("dismiss-app-update").on_click(
+                            cx.listener(|this, _, _, cx| {
                                 this.host.app_banner_dismissed = true;
                                 cx.notify();
-                            })),
-                    );
+                            }),
+                        ));
                 }
                 banners = banners.child(
                     div()
@@ -2973,25 +3149,30 @@ impl OpenMicro {
         let slots = slots_for_cell(cell);
         let primary = slots[0];
         let input = &self.host.active_profile().inputs[primary];
+        let native_codex = self.host.device_mode == Some(DeviceMode::Codex)
+            && slots
+                .iter()
+                .all(|slot| !self.host.active_profile().codex_overrides.contains(slot));
         let selected = self
             .host
             .selected_slot
             .is_some_and(|slot| slots.contains(&slot));
-        let warning = self.host.intercept.as_ref().is_some_and(|intercept| {
-            use crate::intercept::SlotStatus;
-            slots.iter().any(|slot| {
-                matches!(
-                    intercept.status[*slot],
-                    SlotStatus::DeadOnThisOs
-                        | SlotStatus::NothingEmitted
-                        | SlotStatus::Failed
-                        | SlotStatus::Unavailable
-                )
-            })
-        });
+        let warning = !native_codex
+            && self.host.intercept.as_ref().is_some_and(|intercept| {
+                use crate::intercept::SlotStatus;
+                slots.iter().any(|slot| {
+                    matches!(
+                        intercept.status[*slot],
+                        SlotStatus::DeadOnThisOs
+                            | SlotStatus::NothingEmitted
+                            | SlotStatus::Failed
+                            | SlotStatus::Unavailable
+                    )
+                })
+            });
         let live = self.host.pressed_cells[cell];
         let icon = configured_icon_visual(
-            &input.icon,
+            if native_codex { "" } else { &input.icon },
             15.,
             if selected {
                 pixel::accent_color()
@@ -3001,7 +3182,7 @@ impl OpenMicro {
         );
         let label = match cell {
             0..=12 => {
-                if input.label.trim().is_empty() {
+                if native_codex || input.label.trim().is_empty() {
                     format!("KEY {:02}", cell + 1)
                 } else {
                     short_text(&input.label, 12)
@@ -3011,25 +3192,29 @@ impl OpenMicro {
             CELL_JOYSTICK => tr("dial_joystick").to_string(),
             _ => tr("dial_touch").to_string(),
         };
-        let detail = match cell {
-            0..=12 => {
-                if input.action == Action::None {
-                    keycodes::slot_label(&input.emitted)
-                } else {
-                    actions::describe(&input.action)
+        let detail = if native_codex {
+            tr("codex_native_action").to_string()
+        } else {
+            match cell {
+                0..=12 => {
+                    if input.action == Action::None {
+                        keycodes::slot_label(&input.emitted)
+                    } else {
+                        actions::describe(&input.action)
+                    }
                 }
-            }
-            CELL_ENCODER => RotatorRotationPreset::infer(self.host.active_profile())
-                .map(|preset| preset.label().to_string())
-                .unwrap_or_else(|| "Custom rotation".into()),
-            CELL_JOYSTICK => JoystickMode::infer(self.host.active_profile())
-                .label()
-                .to_string(),
-            _ => {
-                if input.action == Action::None {
-                    keycodes::slot_label(&input.emitted)
-                } else {
-                    actions::describe(&input.action)
+                CELL_ENCODER => RotatorRotationPreset::infer(self.host.active_profile())
+                    .map(|preset| preset.label().to_string())
+                    .unwrap_or_else(|| "Custom rotation".into()),
+                CELL_JOYSTICK => JoystickMode::infer(self.host.active_profile())
+                    .label()
+                    .to_string(),
+                _ => {
+                    if input.action == Action::None {
+                        keycodes::slot_label(&input.emitted)
+                    } else {
+                        actions::describe(&input.action)
+                    }
                 }
             }
         };
@@ -3283,38 +3468,39 @@ impl OpenMicro {
             }) => {
                 // A stale/foreign id renders as unknown with the slot's real
                 // chord rather than masquerading as the catalog's first entry.
-                let field = match behaviors::shortcut_preset(application, shortcut) {
-                    Some(preset) => {
-                        let app = behaviors::shortcut_application(application)
-                            .expect("shortcut preset belongs to its application catalog");
-                        inspector_field(
+                let field =
+                    match behaviors::shortcut_preset(application, shortcut) {
+                        Some(preset) => {
+                            let app = behaviors::shortcut_application(application)
+                                .expect("shortcut preset belongs to its application catalog");
+                            inspector_field(
+                                tr("shortcut"),
+                                behaviors::shortcut_chord_label(preset),
+                                selection_card(
+                                    shortcut_app_icon(app, 17., pixel::accent_color()),
+                                    preset.label(),
+                                    Some(app.label.into()),
+                                )
+                                .id("open-shortcut-picker")
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| this.open_shortcut_picker(window, cx),
+                                )),
+                            )
+                        }
+                        None => inspector_field(
                             tr("shortcut"),
-                            behaviors::shortcut_chord_label(preset),
+                            keycodes::emitted_key_label(input.emitted.mods, input.emitted.code),
                             selection_card(
-                                shortcut_app_icon(app, 17., pixel::accent_color()),
-                                preset.label(),
-                                Some(app.label.into()),
+                                lucide_icon_visual("circle-help", 17., pixel::dim_text_color()),
+                                tr("unknown_shortcut"),
+                                Some(SharedString::from(application.clone())),
                             )
                             .id("open-shortcut-picker")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_shortcut_picker(window, cx)
-                            })),
-                        )
-                    }
-                    None => inspector_field(
-                        tr("shortcut"),
-                        keycodes::emitted_key_label(input.emitted.mods, input.emitted.code),
-                        selection_card(
-                            lucide_icon_visual("circle-help", 17., pixel::dim_text_color()),
-                            tr("unknown_shortcut"),
-                            Some(SharedString::from(application.clone())),
-                        )
-                        .id("open-shortcut-picker")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_shortcut_picker(window, cx)
-                        })),
-                    ),
-                };
+                            .on_click(cx.listener(
+                                |this, _, window, cx| this.open_shortcut_picker(window, cx),
+                            )),
+                        ),
+                    };
                 editor = editor.child(field);
             }
             Some(ControlBehavior::MacOs { command }) => {
@@ -3418,12 +3604,9 @@ impl OpenMicro {
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.advanced = !this.advanced;
                         if !this.advanced
-                            && this
-                                .host
-                                .selected_slot
-                                .is_some_and(|slot| {
-                                    cell_for_slot(slot) == CELL_TOUCH && slot != SLOT_TOUCH_TAP
-                                })
+                            && this.host.selected_slot.is_some_and(|slot| {
+                                cell_for_slot(slot) == CELL_TOUCH && slot != SLOT_TOUCH_TAP
+                            })
                         {
                             this.select_slot(SLOT_TOUCH_TAP, window, cx);
                         } else {
@@ -3944,22 +4127,6 @@ impl OpenMicro {
         // things: the profile being edited, the app itself, the pad's own
         // settings, the coding-agent features, data and permissions, and
         // the community link last.
-        let profile = settings_section(tr("settings_section_profile"))
-            .child(inspector_field(
-                tr("profile"),
-                "Rename the active profile or remove it",
-                Input::new(&self.profile_input).w_full(),
-            ))
-            .child(
-                tiny_button(if self.confirm_delete {
-                    "CONFIRM DELETE PROFILE"
-                } else {
-                    "DELETE ACTIVE PROFILE"
-                })
-                .id("delete-active-profile")
-                .on_click(cx.listener(|this, _, window, cx| this.delete_active_profile(window, cx))),
-            );
-
         let app = settings_section(tr("settings_section_app"))
             .child(inspector_field(
                 tr("language_eyebrow"),
@@ -4026,42 +4193,6 @@ impl OpenMicro {
             });
 
         let pad = settings_section(tr("settings_section_pad"))
-            .child(
-                // Lives on the pad, not in the config: the toggle shows
-                // what the connected pad booted as and asks it to restart
-                // the other way. Greyed out until a pad on firmware 0.8.0+
-                // is connected.
-                controls::toggle_face(
-                    tr("codex_compat_mode"),
-                    self.host.device_mode == Some(DeviceMode::Codex),
-                    self.host.device_mode.is_some() && !self.host.mode_switch_pending,
-                )
-                .id("toggle-codex-mode")
-                .on_click(cx.listener(|this, _, _, cx| {
-                    if this.host.mode_switch_pending {
-                        return;
-                    }
-                    let next = match this.host.device_mode {
-                        Some(DeviceMode::Codex) => DeviceMode::OpenMicro,
-                        Some(DeviceMode::OpenMicro) => DeviceMode::Codex,
-                        None => return,
-                    };
-                    this.host.set_device_mode(next);
-                    cx.notify();
-                })),
-            )
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(pixel::muted_text_color())
-                    .child(if self.host.mode_switch_pending {
-                        tr("codex_compat_restarting")
-                    } else if self.host.device_mode.is_some() {
-                        tr("codex_compat_note")
-                    } else {
-                        tr("codex_compat_unsupported")
-                    }),
-            )
             .child(inspector_field(
                 tr("backlight_brightness").to_uppercase(),
                 tr("dims_the_per_key_backlight_and"),
@@ -4277,8 +4408,7 @@ impl OpenMicro {
         // one scrolling column. The rail is not a tab bar — all options stay
         // on one page — and it highlights whichever section is at the top of
         // the view, so scrolling by hand keeps it in step.
-        let sections: [(Div, &str); 6] = [
-            (profile, "settings_section_profile"),
+        let sections: [(Div, &str); 5] = [
             (app, "settings_section_app"),
             (pad, "settings_section_pad"),
             (agents, "settings_section_agents"),
@@ -4403,7 +4533,6 @@ impl OpenMicro {
                     tiny_button(tr("done"))
                         .id("close-settings")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.confirm_delete = false;
                             this.confirm_reset = false;
                             this.sheet = Sheet::None;
                             cx.notify();
@@ -4610,9 +4739,9 @@ impl OpenMicro {
                     .text_color(pixel::accent_highlight_color())
                     .child(behaviors::shortcut_chord_label(preset)),
             )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.apply_shortcut_pick(app_id, preset_id, cx)
-            }))
+            .on_click(
+                cx.listener(move |this, _, _, cx| this.apply_shortcut_pick(app_id, preset_id, cx)),
+            )
     }
 
     fn render_shortcut_picker_sheet(&self, cx: &mut Context<Self>) -> Div {
@@ -5185,32 +5314,32 @@ impl OpenMicro {
                     .when(
                         cfg!(target_os = "windows") && windows_driver_required,
                         |body| {
-                        body.child(controls::status_rail(
-                            tr("windows_dfu_driver"),
-                            tr("dfu_driver_required"),
-                            BadgeTone::Danger,
-                        ))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(10.))
-                                .child(
-                                    tiny_button(tr("open_dfu_driver_setup"))
-                                        .id("open-dfu-driver-setup")
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.open_windows_dfu_driver_setup(cx)
-                                        })),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .text_size(px(11.))
-                                        .text_color(pixel::muted_text_color())
-                                        .child(tr("dfu_driver_steps")),
-                                ),
-                        )
-                    },
+                            body.child(controls::status_rail(
+                                tr("windows_dfu_driver"),
+                                tr("dfu_driver_required"),
+                                BadgeTone::Danger,
+                            ))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(10.))
+                                    .child(
+                                        tiny_button(tr("open_dfu_driver_setup"))
+                                            .id("open-dfu-driver-setup")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.open_windows_dfu_driver_setup(cx)
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .text_size(px(11.))
+                                            .text_color(pixel::muted_text_color())
+                                            .child(tr("dfu_driver_steps")),
+                                    ),
+                            )
+                        },
                     )
                     .child(pixel::divider())
                     .child(inspector_field(
@@ -5225,11 +5354,9 @@ impl OpenMicro {
                             .child(
                                 tiny_button(tr("choose_bin"))
                                     .id("choose-firmware-bin")
-                                    .on_click(
-                                        cx.listener(|this, _, window, cx| {
-                                            this.choose_firmware_image(window, cx)
-                                        }),
-                                    ),
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.choose_firmware_image(window, cx)
+                                    })),
                             )
                             .child(
                                 tiny_button(if self.host.updating {
@@ -5650,6 +5777,16 @@ impl Render for OpenMicro {
             .capture_key_down(
                 cx.listener(|this, event, window, cx| this.handle_key_down(event, window, cx)),
             )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    if this.editing_profile_name {
+                        this.editing_profile_name = false;
+                        this.sync_inputs(window, cx);
+                        cx.notify();
+                    }
+                }),
+            )
             .child(self.render_header(cx))
             .child(self.render_banners(cx))
             .child(
@@ -5736,8 +5873,7 @@ fn set_dock_icon_visible(visible: bool) {
 }
 
 #[cfg(target_os = "macos")]
-static DOCK_ICON_VISIBLE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(true);
+static DOCK_ICON_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 #[cfg(target_os = "macos")]
 static MAIN_PANEL_VISIBLE: std::sync::atomic::AtomicBool =
