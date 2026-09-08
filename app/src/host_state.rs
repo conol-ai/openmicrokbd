@@ -14,7 +14,8 @@ use std::time::Duration;
 use openmicro_layout::BootInfoReply;
 
 use crate::actions;
-use crate::config::{self, Action, AppConfig, LedPattern, Profile, SLOT_COUNT};
+use crate::behaviors;
+use crate::config::{self, Action, AppConfig, LedPattern, Profile, ProfileMode, SLOT_COUNT};
 use crate::device::{BootloaderError, DeviceCmd, DeviceMode, DeviceMsg, PadEvent, UpdateMsg};
 use crate::events::AppEvent;
 use crate::intercept::Intercept;
@@ -50,7 +51,9 @@ fn pattern_rgb(pattern: LedPattern) -> (u8, u8, u8) {
 }
 
 fn supports_agent_leds(version: &str) -> bool {
-    let mut parts = version.split('.').filter_map(|part| part.parse::<u32>().ok());
+    let mut parts = version
+        .split('.')
+        .filter_map(|part| part.parse::<u32>().ok());
     match (parts.next(), parts.next(), parts.next()) {
         (Some(major), Some(minor), Some(_)) => major > 0 || minor >= 7,
         _ => false,
@@ -252,6 +255,73 @@ impl HostState {
         &mut self.config.profiles[self.config.active_profile]
     }
 
+    fn current_profile_mode(&self) -> ProfileMode {
+        match self.device_mode {
+            Some(DeviceMode::Codex) => ProfileMode::CodexMicro,
+            _ => ProfileMode::OpenMicro,
+        }
+    }
+
+    pub fn visible_profile_indices(&self) -> Vec<usize> {
+        let mode = self.current_profile_mode();
+        self.config
+            .profiles
+            .iter()
+            .enumerate()
+            .filter_map(|(index, profile)| (profile.mode == mode).then_some(index))
+            .collect()
+    }
+
+    fn select_profile_for_current_mode(&mut self) {
+        let mode = self.current_profile_mode();
+        let original = self.config.active_profile;
+        let original_len = self.config.profiles.len();
+        if let Some(profile) = self.config.profiles.get(original) {
+            match profile.mode {
+                ProfileMode::OpenMicro => self.config.active_openmicro_profile = Some(original),
+                ProfileMode::CodexMicro => self.config.active_codex_profile = Some(original),
+            }
+        }
+        let remembered = match mode {
+            ProfileMode::OpenMicro => self.config.active_openmicro_profile,
+            ProfileMode::CodexMicro => self.config.active_codex_profile,
+        };
+        if let Some(index) = remembered.filter(|index| {
+            self.config
+                .profiles
+                .get(*index)
+                .is_some_and(|profile| profile.mode == mode)
+        }) {
+            self.config.active_profile = index;
+        } else if let Some(index) = self
+            .config
+            .profiles
+            .iter()
+            .position(|profile| profile.mode == mode)
+        {
+            self.config.active_profile = index;
+        } else if mode == ProfileMode::CodexMicro {
+            self.config
+                .profiles
+                .push(config::default_codex_micro_profile());
+            self.config.active_profile = self.config.profiles.len() - 1;
+        }
+        match mode {
+            ProfileMode::OpenMicro => {
+                self.config.active_openmicro_profile = Some(self.config.active_profile)
+            }
+            ProfileMode::CodexMicro => {
+                self.config.active_codex_profile = Some(self.config.active_profile)
+            }
+        }
+        if self.persist_to_disk
+            && (self.config.active_profile != original
+                || self.config.profiles.len() != original_len)
+        {
+            let _ = config::save(&self.config);
+        }
+    }
+
     /// Re-run the hidden-trigger allocator over every profile. Returns true
     /// if any binding moved, so startup knows whether the config needs
     /// rewriting; the allocator is idempotent, so a healthy config is a
@@ -259,7 +329,6 @@ impl HostState {
     pub fn rehome_stale_triggers(&mut self) -> bool {
         let mut moved = false;
         for profile in &mut self.config.profiles {
-
             let before: Vec<_> = profile.inputs.iter().map(|input| input.emitted).collect();
             crate::behaviors::normalize_hidden_triggers(profile);
             moved |= profile
@@ -288,7 +357,7 @@ impl HostState {
 
     /// Re-register active-profile hotkeys and refresh the native menu.
     pub fn apply_active_profile(&mut self) {
-        let profile = self.active_profile().clone();
+        let profile = self.active_device_profile();
         if let Some(interception) = &mut self.intercept {
             interception.apply(&profile);
         }
@@ -302,7 +371,7 @@ impl HostState {
         let Some(tx) = &self.device_tx else {
             return false;
         };
-        let profile = self.active_profile();
+        let profile = self.active_device_profile();
         tx.send(DeviceCmd::SyncKeymap {
             slots: profile.slots(),
             joy_threshold: profile.analog.joy_threshold,
@@ -314,6 +383,15 @@ impl HostState {
         })
         .is_ok()
             && self.refresh_activity_led()
+    }
+
+    fn active_device_profile(&self) -> Profile {
+        let profile = self.active_profile();
+        if self.device_mode == Some(DeviceMode::Codex) {
+            behaviors::with_codex_overrides(profile)
+        } else {
+            profile.clone()
+        }
     }
 
     pub fn select_slot(&mut self, slot: usize) -> bool {
@@ -328,7 +406,8 @@ impl HostState {
     /// with the existing ones, and return its index. Nothing is persisted or
     /// activated here; `switch_profile` does both.
     pub fn add_profile(&mut self, template: config::ProfileTemplate) -> usize {
-        let profile = template.profile(&self.config.profiles);
+        let mut profile = template.profile(&self.config.profiles);
+        profile.mode = self.current_profile_mode();
         self.config.profiles.push(profile);
         self.config.profiles.len() - 1
     }
@@ -339,10 +418,17 @@ impl HostState {
         if index >= self.config.profiles.len() {
             return false;
         }
+        if self.config.profiles[index].mode != self.current_profile_mode() {
+            return false;
+        }
         if self.config.active_profile == index {
             return true;
         }
         self.config.active_profile = index;
+        match self.current_profile_mode() {
+            ProfileMode::OpenMicro => self.config.active_openmicro_profile = Some(index),
+            ProfileMode::CodexMicro => self.config.active_codex_profile = Some(index),
+        }
         let _ = self.persist();
         self.sync_device();
         true
@@ -446,15 +532,18 @@ impl HostState {
     }
 
     fn refresh_menubar(&mut self) {
+        let indices = self.visible_profile_indices();
+        let names: Vec<String> = indices
+            .iter()
+            .map(|index| self.config.profiles[*index].name.clone())
+            .collect();
+        let active = indices
+            .iter()
+            .position(|index| *index == self.config.active_profile)
+            .unwrap_or(0);
         let Some(menubar) = &mut self.menubar else {
             return;
         };
-        let names: Vec<String> = self
-            .config
-            .profiles
-            .iter()
-            .map(|profile| profile.name.clone())
-            .collect();
         let (version, serial) = self
             .last_conn
             .clone()
@@ -463,13 +552,7 @@ impl HostState {
             Some(DeviceMode::Codex) => format!("{version} · Codex Micro mode"),
             _ => version,
         };
-        menubar.update(
-            self.connected,
-            &version,
-            &serial,
-            &names,
-            self.config.active_profile,
-        );
+        menubar.update(self.connected, &version, &serial, &names, active);
     }
 
     fn handle_device(&mut self, message: DeviceMsg, effects: &mut Vec<HostEffect>) {
@@ -483,12 +566,14 @@ impl HostState {
                 self.connected = true;
                 self.last_conn = Some((version, serial));
                 self.device_mode = mode;
+                self.select_profile_for_current_mode();
                 self.boot_info = boot;
                 // An application came up: whichever pad was in bootloader
                 // mode either booted (this one) or is no longer the story.
                 self.bootloader = None;
                 self.mode_switch_pending = false;
                 self.firmware_banner_dismissed = false;
+                self.apply_active_profile();
                 self.refresh_menubar();
                 self.refresh_activity_led();
             }
@@ -540,7 +625,7 @@ impl HostState {
                 led_key_pattern,
                 led_ambient_pattern,
             } => {
-                let profile = self.active_profile();
+                let profile = self.active_device_profile();
                 let differs = slots != profile.slots()
                     || joy_threshold != profile.analog.joy_threshold
                     || joy_mode != profile.analog.joy_mode
@@ -655,22 +740,22 @@ impl HostState {
             .last_conn
             .as_ref()
             .is_some_and(|(version, _)| supports_agent_leds(version))
-            && self.activities.keys().any(|id| {
-                AGENT_NAMESPACES
-                    .iter()
-                    .any(|prefix| id.starts_with(prefix))
-            });
-        let mut sent = tx.send(DeviceCmd::SetTransientLedPattern {
-            // Legacy/generic integrations keep the original whole-keyboard
-            // status behavior. The four mapped agents use dedicated keys.
-            key_pattern: if mapped_active {
-                self.config.led_key_pattern
-            } else {
-                status_key_pattern
-            },
-            ambient_pattern,
-        })
-        .is_ok();
+            && self
+                .activities
+                .keys()
+                .any(|id| AGENT_NAMESPACES.iter().any(|prefix| id.starts_with(prefix)));
+        let mut sent = tx
+            .send(DeviceCmd::SetTransientLedPattern {
+                // Legacy/generic integrations keep the original whole-keyboard
+                // status behavior. The four mapped agents use dedicated keys.
+                key_pattern: if mapped_active {
+                    self.config.led_key_pattern
+                } else {
+                    status_key_pattern
+                },
+                ambient_pattern,
+            })
+            .is_ok();
         if mapped_active || self.agent_leds_dirty {
             for (agent, index) in AGENT_LED_INDICES.into_iter().enumerate() {
                 let color = self.agent_led_color(agent).map(pattern_rgb);
@@ -908,9 +993,11 @@ impl HostState {
         if let Some(index) = message
             .id
             .strip_prefix("profile:")
-            .and_then(|index| index.parse().ok())
+            .and_then(|index| index.parse::<usize>().ok())
         {
-            self.switch_profile(index);
+            if let Some(profile_index) = self.visible_profile_indices().get(index).copied() {
+                self.switch_profile(profile_index);
+            }
         } else if message.id == "open" {
             effects.push(HostEffect::ShowWindow);
         } else if message.id == "quit" {
@@ -989,6 +1076,48 @@ mod tests {
 
     fn state() -> HostState {
         HostState::detached(AppConfig::default())
+    }
+
+    #[test]
+    fn device_modes_keep_separate_active_profiles() {
+        let mut host = state();
+        let openmicro_profile = host.config.active_profile;
+
+        host.handle_event(AppEvent::Device(DeviceMsg::Connected {
+            version: "0.10.1".into(),
+            serial: "TEST".into(),
+            mode: Some(DeviceMode::Codex),
+            boot: None,
+        }));
+        let codex_profile = host.config.active_profile;
+        assert_ne!(codex_profile, openmicro_profile);
+        assert_eq!(host.active_profile().mode, ProfileMode::CodexMicro);
+
+        host.handle_event(AppEvent::Device(DeviceMsg::Connected {
+            version: "0.10.1".into(),
+            serial: "TEST".into(),
+            mode: Some(DeviceMode::OpenMicro),
+            boot: None,
+        }));
+        assert_eq!(host.config.active_profile, openmicro_profile);
+        assert_eq!(host.active_profile().mode, ProfileMode::OpenMicro);
+    }
+
+    #[test]
+    fn profiles_cannot_be_switched_across_device_modes() {
+        let mut host = state();
+        let openmicro_profile = host.add_profile(config::ProfileTemplate::Empty);
+        assert_eq!(host.config.profiles[openmicro_profile].mode, ProfileMode::OpenMicro);
+
+        host.device_mode = Some(DeviceMode::Codex);
+        host.select_profile_for_current_mode();
+        let codex_profile = host.add_profile(config::ProfileTemplate::Empty);
+        assert_eq!(host.config.profiles[codex_profile].mode, ProfileMode::CodexMicro);
+        assert!(!host.switch_profile(openmicro_profile));
+
+        host.device_mode = Some(DeviceMode::OpenMicro);
+        host.select_profile_for_current_mode();
+        assert!(!host.switch_profile(codex_profile));
     }
 
     fn catalog(app_version: &str, firmware_version: &str) -> ReleaseCatalog {
@@ -1442,7 +1571,10 @@ mod tests {
         assert_eq!(frames[0], Some(host.config.activity_status_colors.working));
         assert_eq!(frames[1], Some(host.config.activity_status_colors.working));
         assert_eq!(frames[2], None);
-        assert_eq!(frames[3], Some(host.config.activity_status_colors.attention));
+        assert_eq!(
+            frames[3],
+            Some(host.config.activity_status_colors.attention)
+        );
         assert_eq!(frames[6], None);
     }
 
@@ -1546,13 +1678,19 @@ mod tests {
             error: "network unavailable".into(),
         }));
 
-        assert_eq!(host.app_update_error.as_deref(), Some("network unavailable"));
+        assert_eq!(
+            host.app_update_error.as_deref(),
+            Some("network unavailable")
+        );
         assert!(host.release_error.is_none());
 
         host.handle_event(AppEvent::Release(ReleaseMsg::Catalog(catalog(
             "1.2.3", "4.5.7",
         ))));
-        assert_eq!(host.app_update_error.as_deref(), Some("network unavailable"));
+        assert_eq!(
+            host.app_update_error.as_deref(),
+            Some("network unavailable")
+        );
 
         host.handle_event(AppEvent::Release(ReleaseMsg::Catalog(catalog(
             "1.2.4", "4.5.7",

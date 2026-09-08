@@ -9,7 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::config::{Action, ControlBehavior, InputConfig, MacOsControl, Profile, Slot, SlotKind};
+use crate::config::{
+    default_codex_profile, Action, ControlBehavior, InputConfig, MacOsControl, Profile, Slot,
+    SlotKind,
+};
 use crate::keycodes::{keyboard_name, mods_label};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1057,6 +1060,45 @@ pub fn normalize_hidden_triggers(profile: &mut Profile) {
     }
 }
 
+/// Build the profile actually used while the pad has the Codex USB identity.
+/// Slots that still match the stock Codex profile remain the firmware's native
+/// Codex controls. Explicitly customized slots keep their emitted HID value;
+/// a host-side action that still occupies its stock sentinel is moved to a
+/// unique hidden trigger so the firmware can recognize it as an override.
+pub fn with_codex_overrides(profile: &Profile) -> Profile {
+    let defaults = default_codex_profile();
+    let mut effective = profile.clone();
+
+    for slot_index in 0..effective.inputs.len().min(defaults.inputs.len()) {
+        if !profile.codex_overrides.contains(&slot_index) {
+            effective.inputs[slot_index].emitted = defaults.inputs[slot_index].emitted;
+            effective.inputs[slot_index].action = Action::None;
+            effective.inputs[slot_index].behavior = None;
+            continue;
+        }
+
+        let input = &effective.inputs[slot_index];
+        let default = &defaults.inputs[slot_index];
+        if input.emitted != default.emitted {
+            continue;
+        }
+
+        if let Some(candidate) = hidden_trigger_candidates().find(|candidate| {
+            *candidate != default.emitted
+                && effective
+                    .inputs
+                    .iter()
+                    .enumerate()
+                    .all(|(other, input)| other == slot_index || input.emitted != *candidate)
+        }) {
+            effective.inputs[slot_index].emitted = candidate;
+        }
+    }
+
+    normalize_hidden_triggers(&mut effective);
+    effective
+}
+
 fn is_host_assisted(input: &InputConfig) -> bool {
     matches!(
         input.behavior.as_ref(),
@@ -1582,6 +1624,35 @@ mod tests {
                 seen.insert((slot.mods, slot.code)),
                 "slot {slot_index} reuses another slot's trigger"
             );
+        }
+    }
+
+    #[test]
+    fn codex_mode_only_overrides_explicitly_customized_slots() {
+        let mut profile = default_codex_profile();
+        let defaults = profile.clone();
+        profile.inputs[3].action = Action::Open {
+            target: "https://example.com".into(),
+        };
+        profile.codex_overrides.push(3);
+
+        let effective = with_codex_overrides(&profile);
+
+        for slot in 0..effective.inputs.len() {
+            if slot == 3 {
+                assert_ne!(
+                    effective.inputs[slot].emitted,
+                    defaults.inputs[slot].emitted
+                );
+                assert_eq!(effective.inputs[slot].action, profile.inputs[slot].action);
+            } else {
+                assert_eq!(
+                    effective.inputs[slot].emitted,
+                    defaults.inputs[slot].emitted
+                );
+                assert_eq!(effective.inputs[slot].action, Action::None);
+                assert_eq!(effective.inputs[slot].behavior, None);
+            }
         }
     }
 

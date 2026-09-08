@@ -208,6 +208,14 @@ pub fn slot(i: usize) -> Slot {
     KEYMAP.lock(|k| k.borrow().slots[i])
 }
 
+/// In Codex compatibility mode, an untouched OpenMicro slot leaves the
+/// native Codex/Work Louder binding in charge. A slot changed through the
+/// companion app explicitly overrides that one control with ordinary HID.
+pub fn codex_override(i: usize) -> Option<Slot> {
+    let configured = slot(i);
+    (configured != DEFAULT_SLOTS[i]).then_some(configured)
+}
+
 pub fn joy_threshold() -> u16 {
     KEYMAP.lock(|k| k.borrow().joy_threshold)
 }

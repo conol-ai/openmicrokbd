@@ -110,6 +110,13 @@ pub const ANON_KEYS: &[&str] = &[
 pub const STRINGS: &[(&str, &str, &str, &str, &str)] = &[
     // ---- static chrome (anon live_design labels, id = tr_<key>) ----
     ("profile", "PROFILE", "配置", "設定檔", "プロファイル"),
+    ("device_mode", "MODE", "模式", "模式", "モード"),
+    ("openmicro_mode", "OpenMicro", "OpenMicro", "OpenMicro", "OpenMicro"),
+    ("codex_micro_mode", "Codex Micro", "Codex Micro", "Codex Micro", "Codex Micro"),
+    ("codex_native_action", "—", "—", "—", "—"),
+    ("delete_active_profile", "DELETE ACTIVE PROFILE", "删除当前配置", "刪除目前設定檔", "現在のプロファイルを削除"),
+    ("new_profile", "New profile", "新建配置", "新增設定檔", "新規プロファイル"),
+    ("mode_switching_short", "Switching…", "切换中……", "切換中……", "切り替え中…"),
     ("device_map", "Device map", "设备视图", "裝置視圖", "デバイスマップ"),
     ("13_keys_3_controls", "13 keys · 3 controls", "13 键 · 3 个控件", "13 鍵 · 3 個控制項", "13キー · 3コントロール"),
     ("select_a_control_to_edit_presses", "Select a control to edit · presses light up live", "点击控件进行编辑 · 按键实时亮起", "點選控制項進行編輯 · 按鍵即時亮起", "コントロールを選択して編集 · 押すとライブで光ります"),
@@ -244,6 +251,7 @@ pub const STRINGS: &[(&str, &str, &str, &str, &str)] = &[
     ("deflection", "Deflection", "触发偏移", "觸發偏移", "しきい値"),
     ("backlight_brightness", "Backlight brightness", "背光亮度", "背光亮度", "バックライトの明るさ"),
     ("done", "Done", "完成", "完成", "完了"),
+    ("application_settings", "APPLICATION", "应用", "應用", "アプリ"),
     ("launch_at_login", "Launch at login", "登录时启动", "登入時啟動", "ログイン時に起動"),
     ("show_menubar_icon", "Show menu bar icon", "显示菜单栏图标", "顯示選單列圖示", "メニューバーにアイコンを表示"),
     ("show_dock_icon", "Show Dock icon", "显示 Dock 栏图标", "顯示 Dock 圖示", "Dockにアイコンを表示"),

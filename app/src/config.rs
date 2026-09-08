@@ -209,6 +209,14 @@ pub struct InputConfig {
     pub action: Action,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileMode {
+    #[default]
+    OpenMicro,
+    CodexMicro,
+}
+
 /// What the firmware does with joystick deflection: hold the direction key
 /// slots, move the HID mouse pointer (push switch = left click), or drag —
 /// grade mode moves the pointer on a squared speed curve with the left
@@ -270,8 +278,14 @@ impl Default for AnalogTuning {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Profile {
     pub name: String,
+    #[serde(default)]
+    pub mode: ProfileMode,
     pub inputs: Vec<InputConfig>,
     pub analog: AnalogTuning,
+    /// Physical inputs that explicitly replace their native binding while
+    /// the device is running with the Codex Micro identity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub codex_overrides: Vec<usize>,
 }
 // invariant: inputs.len() == SLOT_COUNT, index = slot index
 
@@ -771,6 +785,10 @@ pub enum ThemeSetting {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppConfig {
     pub active_profile: usize,
+    #[serde(default)]
+    pub active_openmicro_profile: Option<usize>,
+    #[serde(default)]
+    pub active_codex_profile: Option<usize>,
     pub profiles: Vec<Profile>,
     pub launch_at_login: bool, // default true
     pub show_menubar: bool,    // default true
@@ -801,6 +819,8 @@ impl Default for AppConfig {
     fn default() -> Self {
         AppConfig {
             active_profile: 0,
+            active_openmicro_profile: Some(0),
+            active_codex_profile: None,
             profiles: vec![default_codex_profile()],
             launch_at_login: true,
             show_menubar: true,
@@ -904,9 +924,23 @@ pub fn default_codex_profile() -> Profile {
     debug_assert_eq!(inputs.len(), SLOT_COUNT);
     Profile {
         name: "Codex".to_string(),
+        mode: ProfileMode::OpenMicro,
         inputs,
         analog: AnalogTuning::default(),
+        codex_overrides: Vec::new(),
     }
+}
+
+pub fn default_codex_micro_profile() -> Profile {
+    let mut profile = default_codex_profile();
+    profile.name = "Codex Default".to_string();
+    profile.mode = ProfileMode::CodexMicro;
+    profile.codex_overrides.clear();
+    for input in &mut profile.inputs {
+        input.behavior = None;
+        input.action = Action::None;
+    }
+    profile
 }
 
 /// The OS-level controls every template starts from: encoder = system
@@ -1000,8 +1034,10 @@ fn fresh_name(existing: &[Profile], base: &str) -> String {
 pub fn empty_profile() -> Profile {
     Profile {
         name: ProfileTemplate::Empty.name().to_string(),
+        mode: ProfileMode::OpenMicro,
         inputs: (0..SLOT_COUNT).map(|_| unbound_input()).collect(),
         analog: AnalogTuning::default(),
+        codex_overrides: Vec::new(),
     }
 }
 
@@ -1098,8 +1134,10 @@ fn stock_keycap_profile(name: &str, keys: &[TemplateKey; KEY_SLOTS]) -> Profile 
     debug_assert_eq!(inputs.len(), SLOT_COUNT);
     Profile {
         name: name.to_string(),
+        mode: ProfileMode::OpenMicro,
         inputs,
         analog: AnalogTuning::default(),
+        codex_overrides: Vec::new(),
     }
 }
 
@@ -1114,17 +1152,17 @@ fn stock_keycap_profile(name: &str, keys: &[TemplateKey; KEY_SLOTS]) -> Profile 
 /// are not here.
 const CODEX_KEYS: [TemplateKey; KEY_SLOTS] = [
     primary_key("ATTN", "star", MOD_ALT, letter(b'a')), // next chat needing attention
-    primary_key("NEW", "crown", 0, letter(b'n')),      // new chat
+    primary_key("NEW", "crown", 0, letter(b'n')),       // new chat
     primary_key("CHAT 1", "message-square", MOD_ALT, digit(b'1')), // recent chat 1
     primary_key("CHAT 2", "message-square", MOD_ALT, digit(b'2')), // recent chat 2
     primary_key("CHAT 3", "message-square", MOD_ALT, digit(b'3')), // recent chat 3
     primary_key("CHAT 4", "message-square", MOD_ALT, digit(b'4')), // recent chat 4
-    primary_key("MENU", "grid-2x2", 0, letter(b'k')),  // command menu
-    template_key("APPR", "check", 0, KEY_ENTER),       // approve request
-    template_key("REJ", "x", 0, KEY_ESCAPE),           // decline request
+    primary_key("MENU", "grid-2x2", 0, letter(b'k')),   // command menu
+    template_key("APPR", "check", 0, KEY_ENTER),        // approve request
+    template_key("REJ", "x", 0, KEY_ESCAPE),            // decline request
     template_key("TERM", "square-terminal", MOD_CTRL, KEY_GRAVE), // open terminal (Ctrl on every OS)
     template_key("MIC", "mic", MOD_CTRL | MOD_SHIFT, letter(b'd')), // start dictation (Ctrl on every OS)
-    primary_key("SIDE", "party-popper", MOD_ALT, letter(b's')),    // open side chat
+    primary_key("SIDE", "party-popper", MOD_ALT, letter(b's')),     // open side chat
     template_key("MODEL", "bot", MOD_CTRL | MOD_SHIFT, letter(b'm')), // model picker (Ctrl on every OS)
 ];
 
@@ -1137,15 +1175,15 @@ const CLAUDE_CODE_KEYS: [TemplateKey; KEY_SLOTS] = [
     template_key("MODE", "crown", MOD_SHIFT, KEY_TAB),    // cycle permission modes
     template_key("BG", "layers", MOD_CTRL, letter(b'b')), // background the running task
     template_key("STASH", "archive", MOD_CTRL, letter(b's')), // stash / restore the prompt
-    template_key("HIST", "history", MOD_CTRL, letter(b'r')),  // reverse-search history
+    template_key("HIST", "history", MOD_CTRL, letter(b'r')), // reverse-search history
     template_key("EDIT", "square-pen", MOD_CTRL, letter(b'g')), // prompt in external editor
-    template_key("TASKS", "grid-2x2", MOD_CTRL, letter(b't')),  // toggle the task checklist
-    template_key("YES", "check", 0, KEY_ENTER), // confirm a prompt (Enter also sends)
-    template_key("STOP", "x", 0, KEY_ESCAPE),   // interrupt, or decline a prompt
+    template_key("TASKS", "grid-2x2", MOD_CTRL, letter(b't')), // toggle the task checklist
+    template_key("YES", "check", 0, KEY_ENTER),           // confirm a prompt (Enter also sends)
+    template_key("STOP", "x", 0, KEY_ESCAPE),             // interrupt, or decline a prompt
     template_key("LOG", "square-terminal", MOD_CTRL, letter(b'o')), // transcript viewer
-    template_key("VOICE", "mic", 0, KEY_SPACE), // push-to-talk once /voice is on
+    template_key("VOICE", "mic", 0, KEY_SPACE),           // push-to-talk once /voice is on
     template_key("FAST", "party-popper", MOD_ALT, letter(b'o')), // toggle fast mode
-    template_key("MODEL", "bot", MOD_ALT, letter(b'p')),         // switch model
+    template_key("MODEL", "bot", MOD_ALT, letter(b'p')),  // switch model
 ];
 
 // ---------------------------------------------------------------------------
@@ -1160,6 +1198,9 @@ fn sanitize(cfg: &mut AppConfig) {
         cfg.profiles.push(default_codex_profile());
     }
     for profile in &mut cfg.profiles {
+        profile.codex_overrides.retain(|slot| *slot < SLOT_COUNT);
+        profile.codex_overrides.sort_unstable();
+        profile.codex_overrides.dedup();
         profile.inputs.truncate(SLOT_COUNT);
         if profile.inputs.len() < SLOT_COUNT {
             let defaults = default_codex_profile();
@@ -1287,6 +1328,8 @@ fn migrate_legacy(legacy: LegacyConfig) -> AppConfig {
     }
     AppConfig {
         active_profile: 0,
+        active_openmicro_profile: Some(0),
+        active_codex_profile: None,
         profiles: vec![profile],
         launch_at_login: true,
         show_menubar: true,
@@ -1483,12 +1526,19 @@ mod tests {
                 }
                 // Bound keys are pad-side keystrokes with a legend: nothing
                 // host-side to depend on.
-                assert_eq!(input.emitted.kind, SlotKind::Keyboard, "{template:?} key {i}");
+                assert_eq!(
+                    input.emitted.kind,
+                    SlotKind::Keyboard,
+                    "{template:?} key {i}"
+                );
                 assert_eq!(input.behavior, Some(ControlBehavior::Keystroke));
                 assert!(!input.label.is_empty(), "{template:?} key {i} label");
                 bound.push(input.emitted);
             }
-            assert!(bound.len() >= KEY_SLOTS - 1, "{template:?} leaves too many keys free");
+            assert!(
+                bound.len() >= KEY_SLOTS - 1,
+                "{template:?} leaves too many keys free"
+            );
             // Distinct chords, so one press never means two things.
             for a in 0..bound.len() {
                 for b in a + 1..bound.len() {
@@ -1508,11 +1558,22 @@ mod tests {
         let p = ProfileTemplate::Codex.profile(&[]);
         let primary = primary_modifier(cfg!(target_os = "macos"));
         // NEW = CmdOrCtrl+N; the second row = CmdOrCtrl+Alt+1..4.
-        assert_eq!(p.inputs[1].emitted, Slot { kind: SlotKind::Keyboard, mods: primary, code: 0x11 });
+        assert_eq!(
+            p.inputs[1].emitted,
+            Slot {
+                kind: SlotKind::Keyboard,
+                mods: primary,
+                code: 0x11
+            }
+        );
         for (i, slot) in (2..6).enumerate() {
             assert_eq!(
                 p.inputs[slot].emitted,
-                Slot { kind: SlotKind::Keyboard, mods: primary | MOD_ALT, code: 0x1E + i as u16 },
+                Slot {
+                    kind: SlotKind::Keyboard,
+                    mods: primary | MOD_ALT,
+                    code: 0x1E + i as u16
+                },
                 "session key {slot}"
             );
         }
@@ -1538,7 +1599,10 @@ mod tests {
         let mut clash = ProfileTemplate::Empty.profile(&existing);
         clash.name = "Profile 7".into();
         existing.push(clash);
-        assert_eq!(ProfileTemplate::Empty.profile(&existing).name, "Profile 7 2");
+        assert_eq!(
+            ProfileTemplate::Empty.profile(&existing).name,
+            "Profile 7 2"
+        );
     }
 
     #[test]
@@ -2000,13 +2064,50 @@ mod tests {
     }
 
     #[test]
+    fn pre_mode_profiles_are_preserved_and_migrate_to_openmicro() {
+        let mut original = AppConfig::default();
+        original.profiles[0].name = "My existing profile".into();
+        original.profiles[0].inputs[0].label = "KEEP".into();
+        original.profiles[0].inputs[0].action = Action::Open {
+            target: "https://example.com".into(),
+        };
+        let expected_inputs = original.profiles[0].inputs.clone();
+
+        let mut json = serde_json::to_value(original).expect("serialize old config");
+        let root = json.as_object_mut().expect("config object");
+        root.remove("active_openmicro_profile");
+        root.remove("active_codex_profile");
+        for profile in root["profiles"].as_array_mut().expect("profiles") {
+            let profile = profile.as_object_mut().expect("profile object");
+            profile.remove("mode");
+            profile.remove("codex_overrides");
+        }
+
+        let mut migrated: AppConfig = serde_json::from_value(json).expect("deserialize old config");
+        sanitize(&mut migrated);
+
+        assert_eq!(migrated.profiles.len(), 1);
+        assert_eq!(migrated.profiles[0].name, "My existing profile");
+        assert_eq!(migrated.profiles[0].inputs, expected_inputs);
+        assert_eq!(migrated.profiles[0].mode, ProfileMode::OpenMicro);
+        assert!(migrated.profiles[0].codex_overrides.is_empty());
+        assert_eq!(migrated.active_profile, 0);
+        assert_eq!(migrated.active_openmicro_profile, None);
+        assert_eq!(migrated.active_codex_profile, None);
+    }
+
+    #[test]
     fn sanitize_clamps_and_pads() {
         let mut cfg = AppConfig {
             active_profile: 7,
+            active_openmicro_profile: None,
+            active_codex_profile: None,
             profiles: vec![Profile {
                 name: "short".into(),
+                mode: ProfileMode::OpenMicro,
                 inputs: vec![],
                 analog: AnalogTuning::default(),
+                codex_overrides: Vec::new(),
             }],
             launch_at_login: false,
             show_menubar: false,

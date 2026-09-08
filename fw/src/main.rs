@@ -1392,7 +1392,11 @@ async fn scan_task(
                                 ci
                             );
                             if codex_mode() {
-                                act(codex::key_binding(pos as u8), raw, pos);
+                                if let Some(slot) = keymap::codex_override(pos) {
+                                    apply_slot(pos, raw.then_some(slot));
+                                } else {
+                                    act(codex::key_binding(pos as u8), raw, pos);
+                                }
                             } else {
                                 set_held(pos, raw);
                             }
@@ -1420,11 +1424,15 @@ async fn scan_task(
         } else if e != enc_sw_last {
             info!("encoder switch {}", if e { "UP" } else { "DOWN" });
             if codex_mode() {
-                act(
-                    codex::encoder_binding(codex::layout::ENCODER_PRESS),
-                    !e,
-                    keymap::SLOT_ENC_PRESS,
-                );
+                if let Some(slot) = keymap::codex_override(keymap::SLOT_ENC_PRESS) {
+                    apply_slot(keymap::SLOT_ENC_PRESS, (!e).then_some(slot));
+                } else {
+                    act(
+                        codex::encoder_binding(codex::layout::ENCODER_PRESS),
+                        !e,
+                        keymap::SLOT_ENC_PRESS,
+                    );
+                }
             } else {
                 set_held(keymap::SLOT_ENC_PRESS, !e);
             }
@@ -1528,9 +1536,13 @@ async fn encoder_task(mut enc_a: ExtiInput<'static>, mut enc_b: ExtiInput<'stati
             accum -= ENC_COUNTS_PER_DETENT;
             info!("encoder CW");
             if codex_mode() {
-                let b = codex::encoder_binding(codex::layout::ENCODER_CW);
-                act(b, true, keymap::SLOT_ENC_CW);
-                act(b, false, keymap::SLOT_ENC_CW);
+                if keymap::codex_override(keymap::SLOT_ENC_CW).is_some() {
+                    tap_slot(keymap::SLOT_ENC_CW);
+                } else {
+                    let b = codex::encoder_binding(codex::layout::ENCODER_CW);
+                    act(b, true, keymap::SLOT_ENC_CW);
+                    act(b, false, keymap::SLOT_ENC_CW);
+                }
             } else {
                 tap_slot(keymap::SLOT_ENC_CW);
             }
@@ -1540,9 +1552,13 @@ async fn encoder_task(mut enc_a: ExtiInput<'static>, mut enc_b: ExtiInput<'stati
             accum += ENC_COUNTS_PER_DETENT;
             info!("encoder CCW");
             if codex_mode() {
-                let b = codex::encoder_binding(codex::layout::ENCODER_CCW);
-                act(b, true, keymap::SLOT_ENC_CCW);
-                act(b, false, keymap::SLOT_ENC_CCW);
+                if keymap::codex_override(keymap::SLOT_ENC_CCW).is_some() {
+                    tap_slot(keymap::SLOT_ENC_CCW);
+                } else {
+                    let b = codex::encoder_binding(codex::layout::ENCODER_CCW);
+                    act(b, true, keymap::SLOT_ENC_CCW);
+                    act(b, false, keymap::SLOT_ENC_CCW);
+                }
             } else {
                 tap_slot(keymap::SLOT_ENC_CCW);
             }
@@ -1874,9 +1890,13 @@ async fn touch_task(mut pad: Flex<'static>) {
             armed = false;
             // Codex mode: the touch pad is the keymap's first "button".
             if codex_mode() {
-                let b = codex::touch_binding();
-                act(b, true, keymap::SLOT_TOUCH_TAP);
-                act(b, false, keymap::SLOT_TOUCH_TAP);
+                if keymap::codex_override(keymap::SLOT_TOUCH_TAP).is_some() {
+                    tap_slot(keymap::SLOT_TOUCH_TAP);
+                } else {
+                    let b = codex::touch_binding();
+                    act(b, true, keymap::SLOT_TOUCH_TAP);
+                    act(b, false, keymap::SLOT_TOUCH_TAP);
+                }
             } else {
                 tap_slot(keymap::SLOT_TOUCH_TAP);
             }
