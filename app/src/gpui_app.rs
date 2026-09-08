@@ -876,6 +876,9 @@ pub struct OpenMicro {
     /// Application highlighted in the shortcut picker's left rail.
     shortcut_picker_app: String,
     shortcut_rail_scroll: ScrollHandle,
+    /// The settings sheet's option column; the rail on its left jumps
+    /// to a section by child index and highlights the one scrolled to.
+    settings_scroll: ScrollHandle,
     shortcut_list_scroll: ScrollHandle,
     inspector_scroll: ScrollHandle,
     recording: RecordTarget,
@@ -935,6 +938,7 @@ impl OpenMicro {
             key_picker_target: KeyTarget::SimpleKey,
             shortcut_picker_app: String::new(),
             shortcut_rail_scroll: ScrollHandle::new(),
+            settings_scroll: ScrollHandle::new(),
             shortcut_list_scroll: ScrollHandle::new(),
             inspector_scroll: ScrollHandle::new(),
             recording: RecordTarget::None,
@@ -3929,7 +3933,447 @@ impl OpenMicro {
 
     fn render_settings_sheet(&self, cx: &mut Context<Self>) -> Div {
         let brightness = ((self.host.config.led_brightness as f32 / 255.0) * 100.0).round() as u32;
+        let installed_firmware = self
+            .host
+            .last_conn
+            .as_ref()
+            .map(|(version, _)| format!("{} {}", tr("installed"), version))
+            .unwrap_or_else(|| tr("no_pad_connected").to_string());
+
+        // One titled section per concern, in the order people look for
+        // things: the profile being edited, the app itself, the pad's own
+        // settings, the coding-agent features, data and permissions, and
+        // the community link last.
+        let profile = settings_section(tr("settings_section_profile"))
+            .child(inspector_field(
+                tr("profile"),
+                "Rename the active profile or remove it",
+                Input::new(&self.profile_input).w_full(),
+            ))
+            .child(
+                tiny_button(if self.confirm_delete {
+                    "CONFIRM DELETE PROFILE"
+                } else {
+                    "DELETE ACTIVE PROFILE"
+                })
+                .id("delete-active-profile")
+                .on_click(cx.listener(|this, _, window, cx| this.delete_active_profile(window, cx))),
+            );
+
+        let app = settings_section(tr("settings_section_app"))
+            .child(inspector_field(
+                tr("language_eyebrow"),
+                tr("language_applies"),
+                controls::cycle_control(
+                    self.language_label(),
+                    ("settings-language", 0usize).into(),
+                    ("settings-language", 1usize).into(),
+                    cx.listener(|this, _, window, cx| this.cycle_language(-1, window, cx)),
+                    cx.listener(|this, _, window, cx| this.cycle_language(1, window, cx)),
+                ),
+            ))
+            .child(inspector_field(
+                tr("appearance_eyebrow"),
+                tr("theme_applies"),
+                controls::cycle_control(
+                    self.theme_label(),
+                    ("settings-theme", 0usize).into(),
+                    ("settings-theme", 1usize).into(),
+                    cx.listener(|this, _, window, cx| this.cycle_theme(-1, window, cx)),
+                    cx.listener(|this, _, window, cx| this.cycle_theme(1, window, cx)),
+                ),
+            ))
+            .child(
+                controls::toggle_face(
+                    tr("launch_at_login"),
+                    self.host.config.launch_at_login,
+                    true,
+                )
+                .id("toggle-launch-login")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.host.config.launch_at_login = !this.host.config.launch_at_login;
+                    if let Err(error) = apply_launch_at_login(this.host.config.launch_at_login) {
+                        this.push_log(format!("launch at login: {error}"));
+                    }
+                    this.commit(false, cx);
+                })),
+            )
+            .child(
+                controls::toggle_face(
+                    tr("show_menubar_icon"),
+                    self.host.config.show_menubar,
+                    true,
+                )
+                .id("toggle-menubar")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.host.config.show_menubar = !this.host.config.show_menubar;
+                    if let Some(menubar) = &mut this.host.menubar {
+                        menubar.set_visible(this.host.config.show_menubar);
+                    }
+                    this.commit(false, cx);
+                })),
+            )
+            .when(cfg!(target_os = "macos"), |section| {
+                section.child(
+                    controls::toggle_face(tr("show_dock_icon"), self.host.config.show_dock, true)
+                        .id("toggle-dock")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.host.config.show_dock = !this.host.config.show_dock;
+                            set_dock_icon_visible(this.host.config.show_dock);
+                            this.commit(false, cx);
+                        })),
+                )
+            });
+
+        let pad = settings_section(tr("settings_section_pad"))
+            .child(
+                // Lives on the pad, not in the config: the toggle shows
+                // what the connected pad booted as and asks it to restart
+                // the other way. Greyed out until a pad on firmware 0.8.0+
+                // is connected.
+                controls::toggle_face(
+                    tr("codex_compat_mode"),
+                    self.host.device_mode == Some(DeviceMode::Codex),
+                    self.host.device_mode.is_some() && !self.host.mode_switch_pending,
+                )
+                .id("toggle-codex-mode")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if this.host.mode_switch_pending {
+                        return;
+                    }
+                    let next = match this.host.device_mode {
+                        Some(DeviceMode::Codex) => DeviceMode::OpenMicro,
+                        Some(DeviceMode::OpenMicro) => DeviceMode::Codex,
+                        None => return,
+                    };
+                    this.host.set_device_mode(next);
+                    cx.notify();
+                })),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(pixel::muted_text_color())
+                    .child(if self.host.mode_switch_pending {
+                        tr("codex_compat_restarting")
+                    } else if self.host.device_mode.is_some() {
+                        tr("codex_compat_note")
+                    } else {
+                        tr("codex_compat_unsupported")
+                    }),
+            )
+            .child(inspector_field(
+                tr("backlight_brightness").to_uppercase(),
+                tr("dims_the_per_key_backlight_and"),
+                controls::cycle_control(
+                    format!("{brightness}%"),
+                    ("settings-brightness", 0usize).into(),
+                    ("settings-brightness", 1usize).into(),
+                    cx.listener(|this, _, _, cx| this.adjust_brightness(-13, cx)),
+                    cx.listener(|this, _, _, cx| this.adjust_brightness(13, cx)),
+                ),
+            ))
+            .child(inspector_field(
+                tr("backlight_pattern").to_uppercase(),
+                tr("pattern_key_note"),
+                controls::cycle_control(
+                    Self::pattern_label(self.host.config.led_key_pattern),
+                    ("settings-key-pattern", 0usize).into(),
+                    ("settings-key-pattern", 1usize).into(),
+                    cx.listener(|this, _, _, cx| this.cycle_pattern(true, -1, cx)),
+                    cx.listener(|this, _, _, cx| this.cycle_pattern(true, 1, cx)),
+                ),
+            ))
+            .child(inspector_field(
+                tr("ambient_pattern").to_uppercase(),
+                tr("pattern_ambient_note"),
+                controls::cycle_control(
+                    Self::pattern_label(self.host.config.led_ambient_pattern),
+                    ("settings-ambient-pattern", 0usize).into(),
+                    ("settings-ambient-pattern", 1usize).into(),
+                    cx.listener(|this, _, _, cx| this.cycle_pattern(false, -1, cx)),
+                    cx.listener(|this, _, _, cx| this.cycle_pattern(false, 1, cx)),
+                ),
+            ))
+            .child(inspector_field(
+                tr("firmware").to_uppercase(),
+                installed_firmware,
+                tiny_button(tr("open_firmware_sheet"))
+                    .id("settings-firmware")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.sheet = Sheet::Firmware;
+                        cx.notify();
+                    })),
+            ));
+
+        let agents = settings_section(tr("settings_section_agents"))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(pixel::muted_text_color())
+                    .child(tr("agent_status_colors")),
+            )
+            .child(inspector_field(
+                tr("agent_working_color"),
+                tr("agent_working_color_note"),
+                controls::cycle_control(
+                    Self::status_color_value(self.host.config.activity_status_colors.working),
+                    ("settings-agent-working", 0usize).into(),
+                    ("settings-agent-working", 1usize).into(),
+                    cx.listener(|this, _, _, cx| {
+                        this.cycle_status_color(ActivityStatus::Working, -1, cx)
+                    }),
+                    cx.listener(|this, _, _, cx| {
+                        this.cycle_status_color(ActivityStatus::Working, 1, cx)
+                    }),
+                ),
+            ))
+            .child(inspector_field(
+                tr("agent_attention_color"),
+                tr("agent_attention_color_note"),
+                controls::cycle_control(
+                    Self::status_color_value(self.host.config.activity_status_colors.attention),
+                    ("settings-agent-attention", 0usize).into(),
+                    ("settings-agent-attention", 1usize).into(),
+                    cx.listener(|this, _, _, cx| {
+                        this.cycle_status_color(ActivityStatus::Attention, -1, cx)
+                    }),
+                    cx.listener(|this, _, _, cx| {
+                        this.cycle_status_color(ActivityStatus::Attention, 1, cx)
+                    }),
+                ),
+            ))
+            .child(inspector_field(
+                tr("agent_success_color"),
+                tr("agent_success_color_note"),
+                controls::cycle_control(
+                    Self::status_color_value(self.host.config.activity_status_colors.success),
+                    ("settings-agent-success", 0usize).into(),
+                    ("settings-agent-success", 1usize).into(),
+                    cx.listener(|this, _, _, cx| {
+                        this.cycle_status_color(ActivityStatus::Success, -1, cx)
+                    }),
+                    cx.listener(|this, _, _, cx| {
+                        this.cycle_status_color(ActivityStatus::Success, 1, cx)
+                    }),
+                ),
+            ))
+            .child(inspector_field(
+                tr("agent_error_color"),
+                tr("agent_error_color_note"),
+                controls::cycle_control(
+                    Self::status_color_value(self.host.config.activity_status_colors.error),
+                    ("settings-agent-error", 0usize).into(),
+                    ("settings-agent-error", 1usize).into(),
+                    cx.listener(|this, _, _, cx| {
+                        this.cycle_status_color(ActivityStatus::Error, -1, cx)
+                    }),
+                    cx.listener(|this, _, _, cx| {
+                        this.cycle_status_color(ActivityStatus::Error, 1, cx)
+                    }),
+                ),
+            ))
+            .child(self.render_agent_integrations(cx));
+
+        let data = settings_section(tr("settings_section_data"))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(pixel::muted_text_color())
+                    .child(tr("your_human_readable_json_config")),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(8.))
+                    .child(
+                        tiny_button(tr("export"))
+                            .id("export-config")
+                            .on_click(cx.listener(|this, _, _, cx| this.export_config(cx))),
+                    )
+                    .child(
+                        tiny_button(tr("import_replace"))
+                            .id("import-replace")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.import_config(config::ImportMode::Replace, window, cx)
+                            })),
+                    )
+                    .child(tiny_button(tr("import_merge")).id("import-merge").on_click(
+                        cx.listener(|this, _, window, cx| {
+                            this.import_config(config::ImportMode::Merge, window, cx)
+                        }),
+                    )),
+            )
+            .child(controls::status_rail(
+                tr("accessibility"),
+                if actions::accessibility_trusted() {
+                    tr("perm_granted")
+                } else {
+                    tr("perm_missing")
+                },
+                if actions::accessibility_trusted() {
+                    BadgeTone::Success
+                } else {
+                    BadgeTone::Danger
+                },
+            ))
+            .child(
+                tiny_button(tr("open_system_settings"))
+                    .id("settings-permission")
+                    .on_click(|_, _, _| actions::open_permission_settings()),
+            )
+            .child(
+                tiny_button(if self.confirm_reset {
+                    tr("reset_confirm")
+                } else {
+                    tr("reset_factory")
+                })
+                .id("factory-reset")
+                .on_click(cx.listener(|this, _, window, cx| this.reset_factory(window, cx))),
+            );
+
+        let community = settings_section(tr("settings_section_community"))
+            .child(inspector_field(
+                tr("community"),
+                tr("community_note"),
+                selection_card(
+                    configured_icon_visual("simple:discord", 20., pixel::accent_color())
+                        .unwrap_or_else(|| {
+                            lucide_icon_visual("messages-square", 20., pixel::accent_color())
+                        }),
+                    tr("join_discord"),
+                    Some(DISCORD_INVITE_URL.into()),
+                )
+                .id("join-discord")
+                .tab_index(0)
+                .focus(|style| {
+                    style
+                        .border_2()
+                        .border_color(pixel::focus_color())
+                        .bg(pixel::key_color())
+                })
+                .on_click(cx.listener(|this, _, _, cx| {
+                    match open::that(DISCORD_INVITE_URL) {
+                        Ok(()) => this.discord_open_error = None,
+                        Err(error) => {
+                            eprintln!("app: cannot open Discord invite: {error}");
+                            this.push_log(format!("cannot open Discord invite: {error}"));
+                            this.discord_open_error = Some(error.to_string());
+                        }
+                    }
+                    cx.notify();
+                })),
+            ))
+            .when_some(self.discord_open_error.clone(), |section, error| {
+                section.child(controls::status_rail(
+                    tr("discord_open_failed"),
+                    error,
+                    BadgeTone::Danger,
+                ))
+            });
+
+        // Left: the section names as jump links; right: every section in
+        // one scrolling column. The rail is not a tab bar — all options stay
+        // on one page — and it highlights whichever section is at the top of
+        // the view, so scrolling by hand keeps it in step.
+        let sections: [(Div, &str); 6] = [
+            (profile, "settings_section_profile"),
+            (app, "settings_section_app"),
+            (pad, "settings_section_pad"),
+            (agents, "settings_section_agents"),
+            (data, "settings_section_data"),
+            (community, "settings_section_community"),
+        ];
+        let active = self.settings_scroll.top_item().min(sections.len() - 1);
+        // The rail's viewport indicator: a slim track beside the labels whose
+        // thumb marks the slice of ALL settings currently in view (position
+        // and length both proportional). Measurements come from the last
+        // painted frame, the same way `top_item` above does.
+        let viewport = self.settings_scroll.bounds().size.height;
+        let scrollable = self.settings_scroll.max_offset().height;
+        let content = viewport + scrollable;
+        let (thumb_top, thumb_len) = if content > px(0.) && viewport > px(0.) {
+            let top = (-self.settings_scroll.offset().y).clamp(px(0.), scrollable);
+            (top / content, viewport / content)
+        } else {
+            (0., 1.)
+        };
+        let indicator = div()
+            .w(px(3.))
+            .flex_shrink_0()
+            .rounded(px(1.5))
+            .bg(pixel::raised_color())
+            .relative()
+            .child(
+                div()
+                    .absolute()
+                    .left(px(0.))
+                    .w_full()
+                    .top(relative(thumb_top))
+                    .h(relative(thumb_len))
+                    .rounded(px(1.5))
+                    .bg(pixel::key_color()),
+            );
+        let mut labels = div().flex_1().flex().flex_col().gap(px(2.));
+        let mut column = div()
+            .id("settings-scroll")
+            .size_full()
+            .track_scroll(&self.settings_scroll)
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap(px(18.));
+        let last = sections.len() - 1;
+        for (index, (section, key)) in sections.into_iter().enumerate() {
+            let is_active = index == active;
+            // Plain text jump links, not buttons — the active one carries the
+            // accent, everything else stays muted until hovered.
+            labels = labels.child(
+                div()
+                    .id(("settings-rail", index))
+                    .w_full()
+                    .px(px(4.))
+                    .py(px(4.))
+                    .cursor_pointer()
+                    .text_size(px(10.))
+                    .font_family("Monaco")
+                    .text_color(if is_active {
+                        pixel::accent_highlight_color()
+                    } else {
+                        pixel::muted_text_color()
+                    })
+                    .when(is_active, |label| label.font_semibold())
+                    .hover(|style| style.text_color(pixel::text_color()))
+                    .child(tr(key))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.settings_scroll.scroll_to_top_of_item(index);
+                        cx.notify();
+                    })),
+            );
+            // One child per section so the scroll handle's item indices are
+            // the section indices; the divider rides along inside.
+            column = column.child(
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(18.))
+                    .child(section)
+                    .when(index < last, |wrapper| wrapper.child(pixel::divider())),
+            );
+        }
+
+        let rail = div()
+            .w(px(140.))
+            .flex_shrink_0()
+            .flex()
+            .gap(px(8.))
+            .child(labels)
+            .child(indicator);
+
         controls::modal_frame()
+            .w(px(660.))
             .max_h(relative(0.9))
             .child(controls::modal_header(
                 tr("settings_2"),
@@ -3941,365 +4385,17 @@ impl OpenMicro {
                     .flex_1()
                     .min_h(px(0.))
                     .p(px(16.))
-                    .overflow_y_scrollbar()
                     .flex()
-                    .flex_col()
-                    .gap(px(14.))
-                    .child(inspector_field(
-                        tr("profile"),
-                        "Rename the active profile or remove it",
-                        Input::new(&self.profile_input).w_full(),
-                    ))
-                    .child(
-                        tiny_button(if self.confirm_delete {
-                            "CONFIRM DELETE PROFILE"
-                        } else {
-                            "DELETE ACTIVE PROFILE"
-                        })
-                        .id("delete-active-profile")
-                        .on_click(
-                            cx.listener(|this, _, window, cx| {
-                                this.delete_active_profile(window, cx)
-                            }),
-                        ),
-                    )
-                    .child(pixel::divider())
-                    .child(
-                        controls::toggle_face(
-                            tr("launch_at_login"),
-                            self.host.config.launch_at_login,
-                            true,
-                        )
-                        .id("toggle-launch-login")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.host.config.launch_at_login = !this.host.config.launch_at_login;
-                            if let Err(error) =
-                                apply_launch_at_login(this.host.config.launch_at_login)
-                            {
-                                this.push_log(format!("launch at login: {error}"));
-                            }
-                            this.commit(false, cx);
-                        })),
-                    )
-                    .child(
-                        controls::toggle_face(
-                            tr("show_menubar_icon"),
-                            self.host.config.show_menubar,
-                            true,
-                        )
-                        .id("toggle-menubar")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.host.config.show_menubar = !this.host.config.show_menubar;
-                            if let Some(menubar) = &mut this.host.menubar {
-                                menubar.set_visible(this.host.config.show_menubar);
-                            }
-                            this.commit(false, cx);
-                        })),
-                    )
-                    .when(cfg!(target_os = "macos"), |settings| {
-                        settings.child(
-                            controls::toggle_face(
-                                tr("show_dock_icon"),
-                                self.host.config.show_dock,
-                                true,
-                            )
-                            .id("toggle-dock")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.host.config.show_dock = !this.host.config.show_dock;
-                                set_dock_icon_visible(this.host.config.show_dock);
-                                this.commit(false, cx);
-                            })),
-                        )
-                    })
-                    .child(pixel::divider())
-                    .child(
-                        // Lives on the pad, not in the config: the toggle
-                        // shows what the connected pad booted as and asks
-                        // it to restart the other way. Greyed out until a
-                        // pad on firmware 0.8.0+ is connected.
-                        controls::toggle_face(
-                            tr("codex_compat_mode"),
-                            self.host.device_mode == Some(DeviceMode::Codex),
-                            self.host.device_mode.is_some() && !self.host.mode_switch_pending,
-                        )
-                        .id("toggle-codex-mode")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if this.host.mode_switch_pending {
-                                return;
-                            }
-                            let next = match this.host.device_mode {
-                                Some(DeviceMode::Codex) => DeviceMode::OpenMicro,
-                                Some(DeviceMode::OpenMicro) => DeviceMode::Codex,
-                                None => return,
-                            };
-                            this.host.set_device_mode(next);
-                            cx.notify();
-                        })),
-                    )
+                    .gap(px(12.))
+                    .child(rail)
                     .child(
                         div()
-                            .text_size(px(12.))
-                            .text_color(pixel::muted_text_color())
-                            .child(if self.host.mode_switch_pending {
-                                tr("codex_compat_restarting")
-                            } else if self.host.device_mode.is_some() {
-                                tr("codex_compat_note")
-                            } else {
-                                tr("codex_compat_unsupported")
-                            }),
-                    )
-                    .child(inspector_field(
-                        tr("language_eyebrow"),
-                        tr("language_applies"),
-                        controls::cycle_control(
-                            self.language_label(),
-                            ("settings-language", 0usize).into(),
-                            ("settings-language", 1usize).into(),
-                            cx.listener(|this, _, window, cx| this.cycle_language(-1, window, cx)),
-                            cx.listener(|this, _, window, cx| this.cycle_language(1, window, cx)),
-                        ),
-                    ))
-                    .child(inspector_field(
-                        tr("appearance_eyebrow"),
-                        tr("theme_applies"),
-                        controls::cycle_control(
-                            self.theme_label(),
-                            ("settings-theme", 0usize).into(),
-                            ("settings-theme", 1usize).into(),
-                            cx.listener(|this, _, window, cx| this.cycle_theme(-1, window, cx)),
-                            cx.listener(|this, _, window, cx| this.cycle_theme(1, window, cx)),
-                        ),
-                    ))
-                    .child(pixel::divider())
-                    .child(inspector_field(
-                        tr("backlight_brightness").to_uppercase(),
-                        tr("dims_the_per_key_backlight_and"),
-                        controls::cycle_control(
-                            format!("{brightness}%"),
-                            ("settings-brightness", 0usize).into(),
-                            ("settings-brightness", 1usize).into(),
-                            cx.listener(|this, _, _, cx| this.adjust_brightness(-13, cx)),
-                            cx.listener(|this, _, _, cx| this.adjust_brightness(13, cx)),
-                        ),
-                    ))
-                    .child(inspector_field(
-                        tr("backlight_pattern").to_uppercase(),
-                        tr("pattern_key_note"),
-                        controls::cycle_control(
-                            Self::pattern_label(self.host.config.led_key_pattern),
-                            ("settings-key-pattern", 0usize).into(),
-                            ("settings-key-pattern", 1usize).into(),
-                            cx.listener(|this, _, _, cx| this.cycle_pattern(true, -1, cx)),
-                            cx.listener(|this, _, _, cx| this.cycle_pattern(true, 1, cx)),
-                        ),
-                    ))
-                    .child(inspector_field(
-                        tr("ambient_pattern").to_uppercase(),
-                        tr("pattern_ambient_note"),
-                        controls::cycle_control(
-                            Self::pattern_label(self.host.config.led_ambient_pattern),
-                            ("settings-ambient-pattern", 0usize).into(),
-                            ("settings-ambient-pattern", 1usize).into(),
-                            cx.listener(|this, _, _, cx| this.cycle_pattern(false, -1, cx)),
-                            cx.listener(|this, _, _, cx| this.cycle_pattern(false, 1, cx)),
-                        ),
-                    ))
-                    .child(pixel::divider())
-                    .child(
-                        div()
-                            .font_family("Monaco")
-                            .text_size(px(11.))
-                            .font_semibold()
-                            .text_color(pixel::accent_highlight_color())
-                            .child(tr("agent_status_colors")),
-                    )
-                    .child(inspector_field(
-                        tr("agent_working_color"),
-                        tr("agent_working_color_note"),
-                        controls::cycle_control(
-                            Self::status_color_value(
-                                self.host.config.activity_status_colors.working,
-                            ),
-                            ("settings-agent-working", 0usize).into(),
-                            ("settings-agent-working", 1usize).into(),
-                            cx.listener(|this, _, _, cx| {
-                                this.cycle_status_color(ActivityStatus::Working, -1, cx)
-                            }),
-                            cx.listener(|this, _, _, cx| {
-                                this.cycle_status_color(ActivityStatus::Working, 1, cx)
-                            }),
-                        ),
-                    ))
-                    .child(inspector_field(
-                        tr("agent_attention_color"),
-                        tr("agent_attention_color_note"),
-                        controls::cycle_control(
-                            Self::status_color_value(
-                                self.host.config.activity_status_colors.attention,
-                            ),
-                            ("settings-agent-attention", 0usize).into(),
-                            ("settings-agent-attention", 1usize).into(),
-                            cx.listener(|this, _, _, cx| {
-                                this.cycle_status_color(ActivityStatus::Attention, -1, cx)
-                            }),
-                            cx.listener(|this, _, _, cx| {
-                                this.cycle_status_color(ActivityStatus::Attention, 1, cx)
-                            }),
-                        ),
-                    ))
-                    .child(inspector_field(
-                        tr("agent_success_color"),
-                        tr("agent_success_color_note"),
-                        controls::cycle_control(
-                            Self::status_color_value(
-                                self.host.config.activity_status_colors.success,
-                            ),
-                            ("settings-agent-success", 0usize).into(),
-                            ("settings-agent-success", 1usize).into(),
-                            cx.listener(|this, _, _, cx| {
-                                this.cycle_status_color(ActivityStatus::Success, -1, cx)
-                            }),
-                            cx.listener(|this, _, _, cx| {
-                                this.cycle_status_color(ActivityStatus::Success, 1, cx)
-                            }),
-                        ),
-                    ))
-                    .child(inspector_field(
-                        tr("agent_error_color"),
-                        tr("agent_error_color_note"),
-                        controls::cycle_control(
-                            Self::status_color_value(self.host.config.activity_status_colors.error),
-                            ("settings-agent-error", 0usize).into(),
-                            ("settings-agent-error", 1usize).into(),
-                            cx.listener(|this, _, _, cx| {
-                                this.cycle_status_color(ActivityStatus::Error, -1, cx)
-                            }),
-                            cx.listener(|this, _, _, cx| {
-                                this.cycle_status_color(ActivityStatus::Error, 1, cx)
-                            }),
-                        ),
-                    ))
-                    .child(pixel::divider())
-                    .child(self.render_agent_integrations(cx))
-                    .child(pixel::divider())
-                    .child(
-                        tiny_button(tr("firmware"))
-                            .id("settings-firmware")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.sheet = Sheet::Firmware;
-                                cx.notify();
-                            })),
-                    )
-                    .child(pixel::divider())
-                    .child(
-                        div()
-                            .font_family("Monaco")
-                            .text_size(px(11.))
-                            .font_semibold()
-                            .text_color(pixel::accent_highlight_color())
-                            .child(tr("profile_data")),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(pixel::muted_text_color())
-                            .child(tr("your_human_readable_json_config")),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .gap(px(8.))
-                            .child(
-                                tiny_button(tr("export"))
-                                    .id("export-config")
-                                    .on_click(cx.listener(|this, _, _, cx| this.export_config(cx))),
-                            )
-                            .child(
-                                tiny_button(tr("import_replace"))
-                                    .id("import-replace")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.import_config(config::ImportMode::Replace, window, cx)
-                                    })),
-                            )
-                            .child(tiny_button(tr("import_merge")).id("import-merge").on_click(
-                                cx.listener(|this, _, window, cx| {
-                                    this.import_config(config::ImportMode::Merge, window, cx)
-                                }),
-                            )),
-                    )
-                    .child(controls::status_rail(
-                        tr("accessibility"),
-                        if actions::accessibility_trusted() {
-                            tr("perm_granted")
-                        } else {
-                            tr("perm_missing")
-                        },
-                        if actions::accessibility_trusted() {
-                            BadgeTone::Success
-                        } else {
-                            BadgeTone::Danger
-                        },
-                    ))
-                    .child(
-                        tiny_button(tr("open_system_settings"))
-                            .id("settings-permission")
-                            .on_click(|_, _, _| actions::open_permission_settings()),
-                    )
-                    .child(pixel::divider())
-                    .child(inspector_field(
-                        tr("community"),
-                        tr("community_note"),
-                        selection_card(
-                            configured_icon_visual("simple:discord", 20., pixel::accent_color())
-                                .unwrap_or_else(|| {
-                                    lucide_icon_visual(
-                                        "messages-square",
-                                        20.,
-                                        pixel::accent_color(),
-                                    )
-                                }),
-                            tr("join_discord"),
-                            Some(DISCORD_INVITE_URL.into()),
-                        )
-                        .id("join-discord")
-                        .tab_index(0)
-                        .focus(|style| {
-                            style
-                                .border_2()
-                                .border_color(pixel::focus_color())
-                                .bg(pixel::key_color())
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            match open::that(DISCORD_INVITE_URL) {
-                                Ok(()) => this.discord_open_error = None,
-                                Err(error) => {
-                                    eprintln!("app: cannot open Discord invite: {error}");
-                                    this.push_log(format!("cannot open Discord invite: {error}"));
-                                    this.discord_open_error = Some(error.to_string());
-                                }
-                            }
-                            cx.notify();
-                        })),
-                    ))
-                    .when_some(self.discord_open_error.clone(), |content, error| {
-                        content.child(controls::status_rail(
-                            tr("discord_open_failed"),
-                            error,
-                            BadgeTone::Danger,
-                        ))
-                    })
-                    .child(pixel::divider())
-                    .child(
-                        tiny_button(if self.confirm_reset {
-                            tr("reset_confirm")
-                        } else {
-                            tr("reset_factory")
-                        })
-                        .id("factory-reset")
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.reset_factory(window, cx)),
-                        ),
+                            .flex_1()
+                            .min_w(px(0.))
+                            .h_full()
+                            .relative()
+                            .child(column)
+                            .vertical_scrollbar(&self.settings_scroll),
                     ),
             )
             .child(
@@ -6021,4 +6117,15 @@ mod tests {
     fn discord_invite_uses_the_canonical_https_url() {
         assert_eq!(DISCORD_INVITE_URL, "https://discord.gg/x7DXPvK66");
     }
+}
+
+/// A titled block of the settings sheet: the accent section header the
+/// editor already uses, then its rows in a tight column.
+fn settings_section(title: impl Into<SharedString>) -> Div {
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(10.))
+        .child(pixel::section_header(0, title))
 }
